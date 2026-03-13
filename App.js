@@ -43,7 +43,8 @@ export default function App() {
           screenOptions={{
             headerShown: false,
             tabBarStyle: { 
-              backgroundColor: 'rgba(255, 255, 255, 0.9)',
+              backgroundColor: 'rgba(3, 2, 2, 0.4)',
+              backdropFilter: 'blur(20px)',
               position: 'absolute',
               borderTopWidth: 0,
               elevation: 5,
@@ -52,7 +53,7 @@ export default function App() {
               margin: 15,
               paddingBottom: 5,
             },
-            tabBarActiveTintColor: '#007AFF',
+            tabBarActiveTintColor: '#26be5b',
             tabBarInactiveTintColor: 'gray',
           }}
         >

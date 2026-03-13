@@ -1,112 +1,220 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput } from 'react-native';
-import { BlurView } from 'expo-blur';
-import { Plus, Dumbbell, ChevronRight, Play } from 'lucide-react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { 
+  View, Text, StyleSheet, FlatList, TouchableOpacity, 
+  Modal, SafeAreaView, TextInput, ScrollView, KeyboardAvoidingView, Platform 
+} from 'react-native';
+import { 
+  Plus, Dumbbell, Play, Trash2, X, 
+  ChevronLeft, Zap, Layout, MoreVertical 
+} from 'lucide-react-native';
 
-const BUILT_IN = [
-  { id: '1', name: 'Back + Chest', type: 'built-in' },
-  { id: '2', name: 'Arms Day', type: 'built-in' },
-  { id: '3', name: 'Ab + Legs', type: 'built-in' },
-  { id: '4', name: 'Cardio', type: 'built-in' },
-  { id: '5', name: 'Full Body', type: 'built-in' },
+const PRESET_WORKOUTS = [
+  { 
+    id: 'p1', name: 'Full Body Blast', 
+    exercises: [
+      { id: 'e1', name: 'Dumbbell Bench Press', sets: [{ id: 's1', weight: '', reps: '', prev: '20kg x 12' }, { id: 's2', weight: '', reps: '', prev: '-' }] },
+      { id: 'e2', name: 'Squats', sets: [{ id: 's1', weight: '', reps: '', prev: '60kg x 10' }] }
+    ] 
+  },
+  { id: 'p2', name: 'Upper Body Power', exercises: [] },
 ];
 
-export default function TrainingScreen({ navigation }) {
-  const [workouts, setWorkouts] = useState(BUILT_IN);
-  const [modalVisible, setModalVisible] = useState(false);
-  const [newWorkoutName, setNewWorkoutName] = useState('');
+export default function TrainingScreen() {
+  const [myWorkouts, setMyWorkouts] = useState([
+    { id: '1', name: 'Pept', exercises: [] }
+  ]);
+  
+  // States pentru UI
+  const [selectedWorkout, setSelectedWorkout] = useState(null);
+  const [isDetailVisible, setIsDetailVisible] = useState(false);
+  const [mainMenuVisible, setMainMenuVisible] = useState(false);
+  const [presetsVisible, setPresetsVisible] = useState(false);
 
-  const addCustomWorkout = () => {
-    if (newWorkoutName.trim()) {
-      const newEntry = { id: Date.now().toString(), name: newWorkoutName, type: 'custom' };
-      setWorkouts([newEntry, ...workouts]);
-      setNewWorkoutName('');
-      setModalVisible(false);
-    }
+  // --- LOGICA ---
+  const deleteWorkout = (id) => {
+    setMyWorkouts(myWorkouts.filter(w => w.id !== id));
   };
 
-  return (
-    <LinearGradient colors={['#0f172a', '#1e293b']} style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Workouts</Text>
-        <TouchableOpacity style={styles.addBtn} onPress={() => setModalVisible(true)}>
-          <Plus color="#000" size={20} strokeWidth={3} />
-          <Text style={styles.addBtnText}>ADD WORKOUT</Text>
+  const addCustomWorkout = () => {
+    const newW = { id: Math.random().toString(), name: 'Custom Session', exercises: [] };
+    setMyWorkouts([newW, ...myWorkouts]);
+    setMainMenuVisible(false);
+  };
+
+  const addPreset = (item) => {
+    const newW = { ...item, id: Math.random().toString() };
+    setMyWorkouts([newW, ...myWorkouts]);
+    setPresetsVisible(false);
+    setMainMenuVisible(false);
+  };
+
+  const updateSetData = (exerciseId, setId, field, value) => {
+    const updatedExercises = selectedWorkout.exercises.map(ex => {
+      if (ex.id === exerciseId) {
+        return {
+          ...ex,
+          sets: ex.sets.map(s => s.id === setId ? { ...s, [field]: value } : s)
+        };
+      }
+      return ex;
+    });
+    setSelectedWorkout({ ...selectedWorkout, exercises: updatedExercises });
+  };
+
+  // --- RENDERING ---
+  const renderWorkoutItem = ({ item }) => (
+    <View style={styles.glassCard}>
+      <TouchableOpacity 
+        style={styles.workoutMain} 
+        onPress={() => { setSelectedWorkout(item); setIsDetailVisible(true); }}
+      >
+        <View style={styles.iconCircle}><Dumbbell color="#1DB954" size={20} /></View>
+        <Text style={styles.workoutName}>{item.name}</Text>
+      </TouchableOpacity>
+      
+      <View style={styles.actionButtons}>
+        <TouchableOpacity onPress={() => deleteWorkout(item.id)} style={styles.deleteBtn}>
+          <Trash2 color="#ff4444" size={18} />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.playBtn} onPress={() => { setSelectedWorkout(item); setIsDetailVisible(true); }}>
+          <Play color="#000" size={16} fill="#000" />
         </TouchableOpacity>
       </View>
+    </View>
+  );
 
-      <ScrollView contentContainerStyle={styles.scroll}>
-        {workouts.map((item) => (
-          <TouchableOpacity 
-            key={item.id} 
-            onPress={() => navigation.navigate('WorkoutDetail', { workoutName: item.name })}
-          >
-            <BlurView intensity={20} tint="light" style={styles.workoutCard}>
-              <View style={[styles.iconBox, { backgroundColor: item.type === 'built-in' ? '#3b82f6' : '#a855f7' }]}>
-                <Dumbbell color="#fff" size={20} />
-              </View>
-              <Text style={styles.workoutName}>{item.name}</Text>
-              <Play color="#475569" size={18} fill="#475569" />
-            </BlurView>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.header}><Text style={styles.title}>Workouts</Text></View>
 
-      {/* Modal pentru New Workout Name */}
-      <Modal visible={modalVisible} transparent animationType="fade">
-        <BlurView intensity={90} tint="dark" style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Nume Antrenament</Text>
-            <TextInput 
-              style={styles.input} 
-              placeholder="Ex: Push Day..." 
-              placeholderTextColor="#94a3b8"
-              value={newWorkoutName}
-              onChangeText={setNewWorkoutName}
-              autoFocus
-            />
-            <View style={styles.modalButtons}>
-              <TouchableOpacity onPress={() => setModalVisible(false)} style={styles.cancelBtn}>
-                <Text style={{color: '#fff'}}>Anulează</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={addCustomWorkout} style={styles.saveBtn}>
-                <Text style={{fontWeight: 'bold'}}>Salvează</Text>
-              </TouchableOpacity>
-            </View>
+      <FlatList
+        data={myWorkouts}
+        renderItem={renderWorkoutItem}
+        keyExtractor={item => item.id}
+        contentContainerStyle={styles.listContent}
+        ListEmptyComponent={<Text style={styles.emptyText}>No workouts yet</Text>}
+      />
+
+      {/* FAB - BUTONUL "+" DREAPTA JOS */}
+      <TouchableOpacity style={styles.fab} onPress={() => setMainMenuVisible(true)}>
+        <Plus color="#000" size={30} />
+      </TouchableOpacity>
+
+      {/* MODAL 1: MENIU FAB (Custom vs Suggested) */}
+      <Modal visible={mainMenuVisible} transparent animationType="fade">
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setMainMenuVisible(false)}>
+          <View style={styles.glassMenu}>
+            <Text style={styles.menuTitle}>New Workout</Text>
+            <TouchableOpacity style={styles.menuOption} onPress={addCustomWorkout}>
+              <Zap color="#1DB954" size={22} /><Text style={styles.menuOptionText}>Custom Workout</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.menuOption} onPress={() => setPresetsVisible(true)}>
+              <Layout color="#1DB954" size={22} /><Text style={styles.menuOptionText}>Suggested Workout</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setMainMenuVisible(false)}><Text style={styles.closeText}>Cancel</Text></TouchableOpacity>
           </View>
-        </BlurView>
+        </TouchableOpacity>
       </Modal>
-    </LinearGradient>
+
+      {/* MODAL 2: LISTA DE PRESETURI */}
+      <Modal visible={presetsVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.glassMenu, { height: '60%' }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.menuTitle}>Suggestions</Text>
+              <TouchableOpacity onPress={() => setPresetsVisible(false)}><X color="#fff" size={24} /></TouchableOpacity>
+            </View>
+            <FlatList
+              data={PRESET_WORKOUTS}
+              renderItem={({ item }) => (
+                <TouchableOpacity style={styles.presetCard} onPress={() => addPreset(item)}>
+                  <Text style={styles.presetName}>{item.name}</Text>
+                  <Plus color="#1DB954" size={20} />
+                </TouchableOpacity>
+              )}
+            />
+          </View>
+        </View>
+      </Modal>
+
+      {/* MODAL 3: ECRANUL DE EDITARE (CEL DIN POZA) */}
+      <Modal visible={isDetailVisible} animationType="slide">
+        <View style={styles.detailContainer}>
+          <SafeAreaView style={{ flex: 1 }}>
+            <View style={styles.detailHeader}>
+              <TouchableOpacity onPress={() => setIsDetailVisible(false)}><ChevronLeft color="#fff" size={30} /></TouchableOpacity>
+              <Text style={styles.detailTitle}>{selectedWorkout?.name}</Text>
+              <MoreVertical color="#fff" size={24} />
+            </View>
+
+            <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
+              <ScrollView contentContainerStyle={{ padding: 15 }}>
+                {selectedWorkout?.exercises?.map((exercise) => (
+                  <View key={exercise.id} style={styles.exerciseCard}>
+                    <Text style={styles.exerciseName}>{exercise.name}</Text>
+                    <View style={styles.tableHeader}>
+                      <Text style={[styles.tableHeaderText, { flex: 0.5 }]}>SET</Text>
+                      <Text style={[styles.tableHeaderText, { flex: 1 }]}>PREV</Text>
+                      <Text style={[styles.tableHeaderText, { flex: 1 }]}>KG</Text>
+                      <Text style={[styles.tableHeaderText, { flex: 1 }]}>REPS</Text>
+                    </View>
+                    {exercise.sets.map((set, index) => (
+                      <View key={set.id} style={styles.setRow}>
+                        <Text style={[styles.setText, { flex: 0.5 }]}>{index + 1}</Text>
+                        <Text style={[styles.setText, { flex: 1, color: '#555' }]}>{set.prev}</Text>
+                        <TextInput style={styles.setInput} keyboardType="numeric" value={set.weight} onChangeText={(v) => updateSetData(exercise.id, set.id, 'weight', v)} placeholder="0" placeholderTextColor="#444"/>
+                        <TextInput style={styles.setInput} keyboardType="numeric" value={set.reps} onChangeText={(v) => updateSetData(exercise.id, set.id, 'reps', v)} placeholder="0" placeholderTextColor="#444"/>
+                      </View>
+                    ))}
+                  </View>
+                ))}
+              </ScrollView>
+            </KeyboardAvoidingView>
+            <TouchableOpacity style={styles.finishBtn} onPress={() => setIsDetailVisible(false)}><Text style={styles.finishBtnText}>Finish Workout</Text></TouchableOpacity>
+          </SafeAreaView>
+        </View>
+      </Modal>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  header: { paddingTop: 60, paddingHorizontal: 20, marginBottom: 20 },
-  title: { fontSize: 34, fontWeight: 'bold', color: '#fff', marginBottom: 20 },
-  addBtn: { 
-    backgroundColor: '#fff', 
-    flexDirection: 'row', 
-    padding: 16, 
-    borderRadius: 20, 
-    alignItems: 'center', 
-    justifyContent: 'center',
-    shadowColor: '#3b82f6', shadowRadius: 15, shadowOpacity: 0.4
+  container: { flex: 1, backgroundColor: '#000' },
+  header: { padding: 25, paddingTop: 40 },
+  title: { fontSize: 28, fontWeight: 'bold', color: '#fff' },
+  listContent: { padding: 20, paddingBottom: 100 },
+  glassCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.07)',
+    borderRadius: 20, padding: 15, marginBottom: 15,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.1)',
   },
-  addBtnText: { fontWeight: '900', marginLeft: 8, letterSpacing: 1 },
-  scroll: { paddingHorizontal: 20, paddingBottom: 100 },
-  workoutCard: { 
-    flexDirection: 'row', alignItems: 'center', padding: 18, 
-    borderRadius: 25, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' 
-  },
-  iconBox: { padding: 12, borderRadius: 15 },
-  workoutName: { flex: 1, color: '#fff', fontSize: 18, fontWeight: '600', marginLeft: 15 },
-  modalOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  modalContent: { width: '85%', backgroundColor: '#1e293b', padding: 25, borderRadius: 30, borderWidth: 1, borderColor: '#334155' },
-  modalTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 15 },
-  input: { backgroundColor: '#0f172a', color: '#fff', padding: 15, borderRadius: 15, marginBottom: 20 },
-  modalButtons: { flexDirection: 'row', justifyContent: 'flex-end' },
-  cancelBtn: { padding: 10, marginRight: 15 },
-  saveBtn: { backgroundColor: '#fff', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 12 }
+  workoutMain: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  iconCircle: { backgroundColor: 'rgba(29, 185, 84, 0.1)', padding: 10, borderRadius: 12, marginRight: 15 },
+  workoutName: { color: '#fff', fontSize: 18, fontWeight: '600' },
+  actionButtons: { flexDirection: 'row', alignItems: 'center' },
+  playBtn: { backgroundColor: '#1DB954', width: 35, height: 35, borderRadius: 18, justifyContent: 'center', alignItems: 'center', marginLeft: 15 },
+  deleteBtn: { padding: 8 },
+  fab: { position: 'absolute', bottom: 90, right: 25, backgroundColor: '#1DB954', width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', elevation: 8 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  glassMenu: { backgroundColor: '#1c1c1e', width: '100%', borderRadius: 30, padding: 25, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  menuTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 20, textAlign: 'center' },
+  menuOption: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.05)', padding: 18, borderRadius: 15, marginBottom: 12 },
+  menuOptionText: { color: '#fff', fontSize: 16, fontWeight: '600', marginLeft: 15 },
+  closeText: { color: '#b3b3b3', textAlign: 'center', marginTop: 10 },
+  presetCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 15, marginBottom: 10 },
+  presetName: { color: '#fff', fontWeight: '600' },
+  detailContainer: { flex: 1, backgroundColor: '#121212' },
+  detailHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15 },
+  detailTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
+  exerciseCard: { backgroundColor: '#1c1c1e', borderRadius: 15, padding: 15, marginBottom: 20 },
+  exerciseName: { color: '#1DB954', fontSize: 16, fontWeight: '700', marginBottom: 15 },
+  tableHeader: { flexDirection: 'row', marginBottom: 10 },
+  tableHeaderText: { color: '#666', fontSize: 12, textAlign: 'center' },
+  setRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: '#333' },
+  setText: { color: '#fff', textAlign: 'center' },
+  setInput: { flex: 1, backgroundColor: '#2c2c2e', color: '#fff', borderRadius: 8, padding: 6, marginHorizontal: 5, textAlign: 'center' },
+  finishBtn: { backgroundColor: '#1DB954', margin: 20, padding: 18, borderRadius: 30, alignItems: 'center' },
+  finishBtnText: { color: '#000', fontWeight: 'bold' },
+  emptyText: { color: '#555', textAlign: 'center', marginTop: 50 }
 });
