@@ -6,7 +6,7 @@ import { X, Zap, Image as ImageIcon, RefreshCcw, Scan, ClipboardList, ChefHat, U
 
 const { width } = Dimensions.get('window');
 
-const OPENAI_API_KEY = 'API_KEY';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 export default function ScannerScreen() {
   const [permission, requestPermission] = useCameraPermissions();
