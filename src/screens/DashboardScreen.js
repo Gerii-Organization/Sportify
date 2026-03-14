@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  StyleSheet, View, Text, ScrollView, SafeAreaView, 
-  Dimensions, Platform, TouchableOpacity, Modal 
+import React, { useState, useCallback } from 'react';
+import {
+  StyleSheet, View, Text, ScrollView, SafeAreaView,
+  Dimensions, TouchableOpacity, Modal
 } from 'react-native';
-import { 
-  Flame, User, Settings, LogIn, X, Bell, ShieldCheck, 
-  HelpCircle, Ruler, ChevronRight, Edit3, Footprints, Droplets, Clock, Moon, CheckCircle2 
+import { useFocusEffect } from '@react-navigation/native';
+import {
+  Flame, User, Settings, LogIn, X, Bell, ShieldCheck,
+  HelpCircle, Ruler, ChevronRight, Edit3, Footprints, Droplets, Clock, Moon
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Circle, G } from 'react-native-svg';
@@ -21,7 +22,7 @@ export default function DashboardScreen() {
   const [isMenuVisible, setMenuVisible] = useState(false);
   const [isProfileModalVisible, setProfileModalVisible] = useState(false);
   const [isWaterModalVisible, setWaterModalVisible] = useState(false);
-  
+
   const [userProfile, setUserProfile] = useState(null);
   const [dailyStats, setDailyStats] = useState({
     steps: 0,
@@ -31,12 +32,14 @@ export default function DashboardScreen() {
     water: 0
   });
 
-  const WATER_GOAL = 3000; 
+  const WATER_GOAL = 3000;
   const STEPS_GOAL = 10000;
 
-  useEffect(() => {
-    fetchProfileAndStats();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      fetchProfileAndStats();
+    }, [])
+  );
 
   const fetchProfileAndStats = async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -44,14 +47,26 @@ export default function DashboardScreen() {
       const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
       if (profile) setUserProfile(profile);
 
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const isoToday = today.toISOString();
 
-      setDailyStats({
-        steps: 0,
-        calories: 0,
-        activity: 0,
-        sleep: 0,
-        water: 0
-      });
+      const { data: foodLogs, error } = await supabase
+        .from('scanned_foods')
+        .select('calories')
+        .eq('user_id', user.id)
+        .gte('scanned_at', isoToday);
+
+      if (error) {
+        console.error("Eroare preluare calorii:", error);
+      }
+
+      const totalCalories = foodLogs ? foodLogs.reduce((sum, log) => sum + (Number(log.calories) || 0), 0) : 0;
+
+      setDailyStats(prev => ({
+        ...prev,
+        calories: totalCalories
+      }));
     }
   };
 

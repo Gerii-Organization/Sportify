@@ -1,9 +1,11 @@
 import React, { useState, useRef } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, Dimensions, Alert } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, Dimensions, Alert, Modal, FlatList } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { BlurView } from 'expo-blur';
-import { X, Zap, Image as ImageIcon, RefreshCcw, Scan, ClipboardList, ChefHat, User, Plus } from 'lucide-react-native';
+import { X, Zap, Image as ImageIcon, RefreshCcw, Scan, ClipboardList, ChefHat, User, Plus, Clock } from 'lucide-react-native';
 import * as ImageManipulator from 'expo-image-manipulator';
+import * as ImagePicker from 'expo-image-picker';
+import { supabase } from '../lib/supabase';
 
 const { width } = Dimensions.get('window');
 
@@ -16,6 +18,10 @@ export default function ScannerScreen() {
   const [isScanning, setIsScanning] = useState(false);
   const [scannedFood, setScannedFood] = useState(null);
   const [foodList, setFoodList] = useState([]);
+
+  const [isHistoryVisible, setIsHistoryVisible] = useState(false);
+  const [historyList, setHistoryList] = useState([]);
+
   const cameraRef = useRef(null);
 
   if (!permission) return <View />;
@@ -35,108 +41,162 @@ export default function ScannerScreen() {
     setFacing(current => (current === 'back' ? 'front' : 'back'));
   };
 
+  const fetchHistory = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data, error } = await supabase
+          .from('scanned_foods')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('scanned_at', { ascending: false });
+
+        if (error) throw error;
+        setHistoryList(data || []);
+      }
+    } catch (error) {
+      Alert.alert("Eroare", "Nu s-a putut încărca istoricul.");
+    }
+  };
+
+  const openHistory = () => {
+    setIsHistoryVisible(true);
+    fetchHistory();
+  };
+
+  const processImage = async (imageUri) => {
+    try {
+      const manipulatedImage = await ImageManipulator.manipulateAsync(
+        imageUri,
+        [{ resize: { width: 600 } }],
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+      );
+
+      const cleanBase64 = manipulatedImage.base64.replace(/[\r\n\t\s]+/gm, "");
+
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: "gpt-4o",
+          messages: [
+            {
+              role: "system",
+              content: "Return only a strict JSON object. No prose, no markdown formatting. Estimate the weight of the food from the image and send the exact calories for that weight. Keys: name (string), calories (number), protein (number), fats (number), emoji (string, single emoji), match (number, 1-100)."
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "Identify this food and give nutrition info in JSON format."
+                },
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: `data:image/jpeg;base64,${cleanBase64}`
+                  }
+                }
+              ]
+            }
+          ],
+          max_tokens: 500
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        Alert.alert("Eroare OpenAI", data.error?.message || "Eroare necunoscută");
+        return;
+      }
+
+      const aiMessage = data.choices[0].message.content;
+      const jsonMatch = aiMessage.match(/\{[\s\S]*\}/);
+
+      if (jsonMatch) {
+        const foodData = JSON.parse(jsonMatch[0]);
+        setScannedFood({
+          id: Date.now(),
+          ...foodData
+        });
+      } else {
+        throw new Error("AI-ul nu a returnat un format JSON valid.");
+      }
+
+    } catch (error) {
+      Alert.alert("Eroare", "Nu s-a putut analiza imaginea: " + error.message);
+    }
+  };
+
   const takePictureAndAnalyze = async () => {
     if (cameraRef.current && !isScanning) {
       setIsScanning(true);
       setScannedFood(null);
 
       try {
-        console.log("START SCANARE");
-
         const photo = await cameraRef.current.takePictureAsync({
           quality: 0.5
         });
-
-        console.log("POZA CAPTURATA");
-
-        const manipulatedImage = await ImageManipulator.manipulateAsync(
-          photo.uri,
-          [{ resize: { width: 600 } }],
-          { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
-        );
-
-        console.log("POZA REDIMENSIONATA");
-
-        const cleanBase64 = manipulatedImage.base64.replace(/[\r\n\t\s]+/gm, "");
-
-        console.log("BASE64 CURATAT, LUNGIME:", cleanBase64.length);
-
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${OPENAI_API_KEY}`
-          },
-          body: JSON.stringify({
-            model: "gpt-4o",
-            messages: [
-              {
-                role: "system",
-                content: "Return only a strict JSON object. No prose, no markdown formatting. Keys: name (string), calories (number), protein (number), fats (number), emoji (string, single emoji), match (number, 1-100)."
-              },
-              {
-                role: "user",
-                content: [
-                  {
-                    type: "text",
-                    text: "Identify this food and give nutrition info in JSON format."
-                  },
-                  {
-                    type: "image_url",
-                    image_url: {
-                      url: `data:image/jpeg;base64,${cleanBase64}`
-                    }
-                  }
-                ]
-              }
-            ],
-            max_tokens: 500
-          })
-        });
-
-        console.log("RASPUNS PRIMIT, STATUS:", response.status);
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          console.log("EROARE OPENAI:", JSON.stringify(data));
-          Alert.alert("Eroare OpenAI", data.error?.message || "Eroare necunoscută");
-          setIsScanning(false);
-          return;
-        }
-
-        const aiMessage = data.choices[0].message.content;
-        console.log("MESAJ AI:", aiMessage);
-
-        const jsonMatch = aiMessage.match(/\{[\s\S]*\}/);
-
-        if (jsonMatch) {
-          const foodData = JSON.parse(jsonMatch[0]);
-          console.log("DATE PARSATE CU SUCCES:", foodData);
-          setScannedFood({
-            id: Date.now(),
-            ...foodData
-          });
-        } else {
-          console.log("NU S-A GASIT JSON IN MESAJ");
-          throw new Error("AI-ul nu a returnat un format JSON valid.");
-        }
-
+        await processImage(photo.uri);
       } catch (error) {
-        console.error("EROARE IN CATCH:", error);
-        Alert.alert("Eroare", "Nu s-a putut analiza imaginea: " + error.message);
+        Alert.alert("Eroare", "Nu am putut capta imaginea.");
       } finally {
         setIsScanning(false);
-        console.log("SCANARE FINALIZATA");
       }
     }
   };
 
-  const addFoodToList = () => {
+  const pickImageAndAnalyze = async () => {
+    if (isScanning) return;
+
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.5,
+      });
+
+      if (!result.canceled) {
+        setIsScanning(true);
+        setScannedFood(null);
+        await processImage(result.assets[0].uri);
+      }
+    } catch (error) {
+      Alert.alert("Eroare", "Nu am putut deschide galeria.");
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
+  const addFoodToList = async () => {
     if (scannedFood) {
-      setFoodList([...foodList, scannedFood]);
-      setScannedFood(null);
-      Alert.alert("Succes", `${scannedFood.name} a fost adăugat în listă!`);
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+
+        if (user) {
+          const { error } = await supabase.from('scanned_foods').insert({
+            user_id: user.id,
+            food_name: scannedFood.name,
+            calories: scannedFood.calories,
+            protein: scannedFood.protein,
+            fats: scannedFood.fats
+          });
+
+          if (error) {
+            throw error;
+          }
+        }
+
+        setFoodList([...foodList, scannedFood]);
+        setScannedFood(null);
+        Alert.alert("Succes", `${scannedFood.name} a fost salvat în baza de date!`);
+      } catch (error) {
+        Alert.alert("Eroare", "Nu s-a putut salva alimentul în baza de date.");
+      }
     }
   };
 
@@ -145,17 +205,17 @@ export default function ScannerScreen() {
       <CameraView style={styles.camera} facing={facing} ref={cameraRef}>
 
         <View style={styles.header}>
-          <TouchableOpacity style={styles.iconButton}>
-            <X color="#fff" size={24} />
+          <TouchableOpacity style={styles.iconButton} onPress={openHistory}>
+            <Clock color={NEON_GREEN} size={22} />
           </TouchableOpacity>
 
           <BlurView intensity={40} tint="dark" style={styles.liveAnalysis}>
             <View style={styles.liveDot} />
-            <Text style={styles.liveText}>SCANATE: {foodList.length}</Text>
+            <Text style={styles.liveText}>FOOD SCANNER</Text>
           </BlurView>
 
           <TouchableOpacity style={styles.iconButton}>
-            <Zap color="#fff" size={24} />
+            <Zap color={NEON_GREEN} size={22} />
           </TouchableOpacity>
         </View>
 
@@ -223,8 +283,8 @@ export default function ScannerScreen() {
         )}
 
         <View style={styles.cameraControls}>
-          <TouchableOpacity style={styles.controlBtn}>
-            <ImageIcon color="#fff" size={24} />
+          <TouchableOpacity style={styles.controlBtn} onPress={pickImageAndAnalyze}>
+            <ImageIcon color={NEON_GREEN} size={26} />
             <Text style={styles.controlText}>Gallery</Text>
           </TouchableOpacity>
 
@@ -233,29 +293,41 @@ export default function ScannerScreen() {
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.controlBtn} onPress={toggleCameraFacing}>
-            <RefreshCcw color="#fff" size={24} />
+            <RefreshCcw color={NEON_GREEN} size={26} />
             <Text style={styles.controlText}>Flip</Text>
           </TouchableOpacity>
         </View>
 
-        <BlurView intensity={80} tint="dark" style={styles.footer}>
-          <TouchableOpacity style={styles.navItem}>
-            <Scan color={NEON_GREEN} size={24} style={styles.iconGlow} />
-            <Text style={[styles.navText, styles.navTextActive]}>Scan</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem}>
-            <ClipboardList color="#aaa" size={24} />
-            <Text style={styles.navText}>Log</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem}>
-            <ChefHat color="#aaa" size={24} />
-            <Text style={styles.navText}>Recipes</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.navItem}>
-            <User color="#aaa" size={24} />
-            <Text style={styles.navText}>Profile</Text>
-          </TouchableOpacity>
-        </BlurView>
+        <Modal visible={isHistoryVisible} animationType="slide" transparent>
+          <View style={styles.modalOverlayFull}>
+            <View style={styles.historyContainer}>
+              <View style={styles.historyHeader}>
+                <Text style={styles.historyTitle}>Istoric Scanări</Text>
+                <TouchableOpacity onPress={() => setIsHistoryVisible(false)}>
+                  <X color={NEON_GREEN} size={28} />
+                </TouchableOpacity>
+              </View>
+              <FlatList
+                data={historyList}
+                keyExtractor={item => item.id.toString()}
+                renderItem={({item}) => (
+                  <View style={styles.historyItem}>
+                    <View style={styles.historyItemLeft}>
+                      <Text style={styles.historyEmoji}>🍽️</Text>
+                      <View>
+                        <Text style={styles.historyItemName}>{item.food_name}</Text>
+                        <Text style={styles.historyItemDate}>{new Date(item.scanned_at).toLocaleString()}</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.historyItemCals}>{item.calories} kcal</Text>
+                  </View>
+                )}
+                ListEmptyComponent={<Text style={styles.emptyText}>Nu ai nicio scanare încă.</Text>}
+                showsVerticalScrollIndicator={false}
+              />
+            </View>
+          </View>
+        </Modal>
 
       </CameraView>
     </View>
@@ -283,9 +355,15 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: '#121212',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 255, 102, 0.3)',
     justifyContent: 'center',
     alignItems: 'center',
+    shadowColor: NEON_GREEN,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
   },
   liveAnalysis: {
     flexDirection: 'row',
@@ -424,21 +502,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   controlBtn: { alignItems: 'center' },
-  controlText: { color: '#fff', fontSize: 12, marginTop: 8 },
+  controlText: { color: NEON_GREEN, fontSize: 12, marginTop: 8, fontWeight: '600' },
   shutterBtn: {
     width: 70,
     height: 70,
     borderRadius: 35,
     borderWidth: 3,
-    borderColor: 'rgba(0, 255, 102, 0.5)',
+    borderColor: NEON_GREEN,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
   shutterInner: {
     width: 54,
     height: 54,
     borderRadius: 27,
-    backgroundColor: '#fff',
+    backgroundColor: '#121212',
+    borderWidth: 2,
+    borderColor: NEON_GREEN,
   },
   shutterScanning: {
     backgroundColor: NEON_GREEN,
@@ -448,29 +529,69 @@ const styles = StyleSheet.create({
     shadowOpacity: 1,
     shadowRadius: 15,
   },
-  footer: {
-    position: 'absolute',
-    bottom: 0,
-    width: '100%',
+  modalOverlayFull: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    justifyContent: 'flex-end'
+  },
+  historyContainer: {
+    backgroundColor: '#121212',
+    height: '80%',
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+    padding: 25,
+    borderWidth: 1,
+    borderColor: '#222'
+  },
+  historyHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingBottom: 30,
-    paddingTop: 15,
-    borderTopWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20
   },
-  navItem: { alignItems: 'center' },
-  navText: { color: '#aaa', fontSize: 10, marginTop: 5 },
-  navTextActive: {
+  historyTitle: {
+    color: '#fff',
+    fontSize: 24,
+    fontWeight: 'bold'
+  },
+  historyItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#1c1c1e',
+    padding: 15,
+    borderRadius: 15,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 255, 102, 0.2)'
+  },
+  historyItemLeft: {
+    flexDirection: 'row',
+    alignItems: 'center'
+  },
+  historyEmoji: {
+    fontSize: 24,
+    marginRight: 15
+  },
+  historyItemName: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold'
+  },
+  historyItemDate: {
+    color: '#888',
+    fontSize: 12,
+    marginTop: 4
+  },
+  historyItemCals: {
     color: NEON_GREEN,
-    textShadowColor: 'rgba(0, 255, 102, 0.5)',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 8,
+    fontSize: 16,
+    fontWeight: 'bold'
   },
-  iconGlow: {
-    shadowColor: NEON_GREEN,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 8,
+  emptyText: {
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 30,
+    fontSize: 16
   }
 });
