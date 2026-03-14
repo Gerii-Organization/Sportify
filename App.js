@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { StyleSheet } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { LayoutDashboard, ScanLine, Dumbbell, Activity } from 'lucide-react-native';
 import { BlurView } from 'expo-blur';
 import { supabase } from './src/lib/supabase';
 
@@ -11,6 +10,9 @@ import DashboardScreen from './src/screens/DashboardScreen';
 import ScannerScreen from './src/screens/ScannerScreen';
 import TrainingScreen from './src/screens/TrainingScreen';
 import StatsScreen from './src/screens/StatsScreen';
+import ShopScreen from './src/screens/ShopScreen';
+
+import { LayoutDashboard, ScanLine, Dumbbell, Activity, ShoppingBag } from 'lucide-react-native';
 
 const Tab = createBottomTabNavigator();
 
@@ -71,7 +73,7 @@ export default function App() {
             options={{ tabBarIcon: ({color}) => <LayoutDashboard color={color} size={24} /> }}
           />
           <Tab.Screen
-            name="Scanner"
+            name="Food"
             component={ScannerScreen}
             options={{ tabBarIcon: ({color}) => <ScanLine color={color} size={24} /> }}
           />
@@ -84,6 +86,11 @@ export default function App() {
             name="Stats"
             component={StatsScreen}
             options={{ tabBarIcon: ({color}) => <Activity color={color} size={24} /> }}
+          />
+          <Tab.Screen
+            name="Shop"
+            component={ShopScreen}
+            options={{ tabBarIcon: ({color}) => <ShoppingBag color={color} size={24} /> }}
           />
         </Tab.Navigator>
       </NavigationContainer>
