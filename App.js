@@ -2,26 +2,23 @@ import React, { useState, useEffect } from 'react';
 import { StyleSheet } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { createNativeStackNavigator } from '@react-navigation/native-stack'; // NOU IMPORT
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { BlurView } from 'expo-blur';
 import { supabase } from './src/lib/supabase';
 
-// Screens
 import AuthScreen from './src/screens/AuthScreen';
 import DashboardScreen from './src/screens/DashboardScreen';
 import ScannerScreen from './src/screens/ScannerScreen';
 import TrainingScreen from './src/screens/TrainingScreen';
-import WorkoutDetailScreen from './src/screens/WorkoutDetailScreen'; // NOU IMPORT
+import WorkoutDetailScreen from './src/screens/WorkoutDetailScreen';
 import StatsScreen from './src/screens/StatsScreen';
 import ShopScreen from './src/screens/ShopScreen';
 
-// Icons
 import { LayoutDashboard, ScanLine, Dumbbell, Activity, ShoppingBag } from 'lucide-react-native';
 
 const Tab = createBottomTabNavigator();
-const Stack = createNativeStackNavigator(); // NOU STACK
+const Stack = createNativeStackNavigator();
 
-// Am mutat Tab-urile tale intr-o componenta separata
 function MainTabs() {
   return (
     <Tab.Navigator
@@ -104,16 +101,12 @@ export default function App() {
   if (session || isManualAuth) {
     return (
       <NavigationContainer>
-        {/* AICI ESTE MAGIA: Stack Navigator-ul care cuprinde Tab-urile si Ecranele de Detaliu */}
         <Stack.Navigator screenOptions={{ headerShown: false }}>
-          {/* Ecranul principal este reprezentat de Tab-uri */}
           <Stack.Screen name="MainTabs" component={MainTabs} />
-          
-          {/* Ecranul de detalii se va deschide peste Tab-uri */}
           <Stack.Screen 
             name="WorkoutDetailScreen" 
             component={WorkoutDetailScreen} 
-            options={{ presentation: 'fullScreenModal' }} // Opțional, face o animație fină gen Apple
+            options={{ presentation: 'fullScreenModal' }}
           />
         </Stack.Navigator>
       </NavigationContainer>

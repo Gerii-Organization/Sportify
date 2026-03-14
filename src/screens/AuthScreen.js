@@ -27,7 +27,7 @@ export default function AuthScreen() {
   const [weight, setWeight] = useState('');
   const [height, setHeight] = useState('');
   const [workouts, setWorkouts] = useState('');
-  const [goal, setGoal] = useState(''); // Noul state pentru obiectiv
+  const [goal, setGoal] = useState('');
 
   const toggleAuthMode = () => {
     setEmail(''); setPassword(''); setConfirmPassword('');
@@ -57,7 +57,7 @@ export default function AuthScreen() {
           weight: parseFloat(weight),
           height: parseFloat(height),
           workouts_per_week: parseInt(workouts),
-          goal: goal, // Salvăm scopul
+          goal: goal,
         });
         if (profileError) Alert.alert('Eroare Profil', profileError.message);
         else Alert.alert('Succes', 'Cont creat! Acum te poți loga.');
@@ -85,7 +85,6 @@ export default function AuthScreen() {
                 <View style={styles.divider} />
                 <Text style={styles.sectionTitle}>Obiectivul Tău</Text>
                 
-                {/* Selectorul de Goal */}
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.goalContainer}>
                   {GOALS.map(g => (
                     <TouchableOpacity 

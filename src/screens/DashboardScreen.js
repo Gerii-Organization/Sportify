@@ -7,7 +7,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import {
   Flame, User, LogIn, X, Bell, ShieldCheck,
   HelpCircle, Ruler, ChevronRight, Edit3, Footprints, Droplets, Clock, Moon,
-  Trophy, TrendingUp, Target, Award, Activity, Crown,
+  Trophy, TrendingUp, Target, Award, Activity, Crown, Dumbbell,
   CheckCircle2, Plus, Trash2, ChevronDown, ChevronUp, Edit2, Check, Zap
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -105,10 +105,21 @@ export default function DashboardScreen() {
         totalSteps = stepsLog.step_count;
       }
 
+      const { data: trainingSessions } = await supabase
+        .from('training_sessions')
+        .select('minutes, performed_at')
+        .eq('user_id', user.id)
+        .gte('performed_at', isoToday);
+
+      const totalActivityMinutes = trainingSessions
+        ? trainingSessions.reduce((sum, session) => sum + (Number(session.minutes) || 0), 0)
+        : 0;
+
       setDailyStats(prev => ({
         ...prev,
         calories: totalCalories,
-        steps: totalSteps
+        steps: totalSteps,
+        activity: totalActivityMinutes
       }));
 
       const { data: tasksData } = await supabase.from('tasks').select('*').order('created_at', { ascending: true });
@@ -134,9 +145,9 @@ export default function DashboardScreen() {
     } else if (type === 'water') {
       if (!finalGoal) return;
       finalTitle = `Drink ${finalGoal}L Water`;
-    } else if (type === 'steps') {
+    } else if (type === 'gym') {
       if (!finalGoal) return;
-      finalTitle = `Walk ${finalGoal.toLocaleString()} steps`;
+      finalTitle = `GYM for ${finalGoal.toLocaleString()} min`;
     }
 
     const tempId = Date.now().toString();
@@ -189,6 +200,7 @@ export default function DashboardScreen() {
   const isTaskAutoCompleted = (task) => {
     if (task.type === 'water') return (dailyStats.water / 1000) >= task.goal;
     if (task.type === 'steps') return dailyStats.steps >= task.goal;
+    if (task.type === 'gym') return dailyStats.activity >= task.goal;
     return task.completed;
   };
 
@@ -321,7 +333,16 @@ export default function DashboardScreen() {
                       {completed ? <CheckCircle2 size={24} color={NEON_GREEN} /> : <View style={styles.circleOutline} />}
                       <View style={{ marginLeft: 15 }}>
                         <Text style={styles.taskTitleText}>{item.title}</Text>
-                        {item.type === 'water' && <Text style={styles.taskSub}>{(dailyStats.water / 1000).toFixed(2)}L / {item.goal}L</Text>}
+                        {item.type === 'water' && (
+                          <Text style={styles.taskSub}>
+                            {(dailyStats.water / 1000).toFixed(2)}L / {item.goal}L
+                          </Text>
+                        )}
+                        {item.type === 'gym' && (
+                          <Text style={styles.taskSub}>
+                            {dailyStats.activity} min / {item.goal} min
+                          </Text>
+                        )}
                       </View>
                     </TouchableOpacity>
                     {isEditMode && <TouchableOpacity onPress={() => deleteTask(item.id)}><Trash2 color="#FF4444" size={20} /></TouchableOpacity>}
@@ -390,9 +411,14 @@ export default function DashboardScreen() {
                 <View style={styles.divider} />
 
                 <View style={styles.suggestedGridTasks}>
-                  <TouchableOpacity style={[styles.suggestedItem, taskType === 'steps' && styles.selectedItem]} onPress={() => setTaskType('steps')}>
-                    <Footprints color={taskType === 'steps' ? NEON_GREEN : "#666"} size={32} />
-                    <Text style={[styles.suggestedText, taskType === 'steps' && {color: NEON_GREEN}]}>Steps</Text>
+                  <TouchableOpacity
+                    style={[styles.suggestedItem, taskType === 'gym' && styles.selectedItem]}
+                    onPress={() => setTaskType('gym')}
+                  >
+                    <Dumbbell color={taskType === 'gym' ? NEON_GREEN : "#666"} size={32} />
+                    <Text style={[styles.suggestedText, taskType === 'gym' && { color: NEON_GREEN }]}>
+                      GYM
+                    </Text>
                   </TouchableOpacity>
                   <TouchableOpacity style={[styles.suggestedItem, taskType === 'water' && styles.selectedItem]} onPress={() => setTaskType('water')}>
                     <Droplets color={taskType === 'water' ? WATER_BLUE : "#666"} size={32} />
@@ -400,11 +426,11 @@ export default function DashboardScreen() {
                   </TouchableOpacity>
                 </View>
 
-                {(taskType === 'steps' || taskType === 'water') && (
+                {(taskType === 'gym' || taskType === 'water') && (
                   <View style={{ width: '100%', marginTop: 20 }}>
                     <TextInput
                       style={styles.modalInput}
-                      placeholder={taskType === 'steps' ? "Goal: 10000 steps" : "Goal: 2.5 liters"}
+                      placeholder={taskType === 'gym' ? "Goal: 45 min" : "Goal: 2.5 liters"}
                       placeholderTextColor="#444"
                       keyboardType="numeric"
                       value={newTaskGoal}
