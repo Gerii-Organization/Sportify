@@ -21,16 +21,14 @@ const PRESET_WORKOUTS = [
 
 export default function TrainingScreen() {
   const [myWorkouts, setMyWorkouts] = useState([
-    { id: '1', name: 'Pept', exercises: [] }
+    { id: '1', name: 'Piept', exercises: [] }
   ]);
   
-  // States pentru UI
   const [selectedWorkout, setSelectedWorkout] = useState(null);
   const [isDetailVisible, setIsDetailVisible] = useState(false);
   const [mainMenuVisible, setMainMenuVisible] = useState(false);
   const [presetsVisible, setPresetsVisible] = useState(false);
 
-  // --- LOGICA ---
   const deleteWorkout = (id) => {
     setMyWorkouts(myWorkouts.filter(w => w.id !== id));
   };
@@ -61,7 +59,6 @@ export default function TrainingScreen() {
     setSelectedWorkout({ ...selectedWorkout, exercises: updatedExercises });
   };
 
-  // --- RENDERING ---
   const renderWorkoutItem = ({ item }) => (
     <View style={styles.glassCard}>
       <TouchableOpacity 
@@ -95,12 +92,10 @@ export default function TrainingScreen() {
         ListEmptyComponent={<Text style={styles.emptyText}>No workouts yet</Text>}
       />
 
-      {/* FAB - BUTONUL "+" DREAPTA JOS */}
       <TouchableOpacity style={styles.fab} onPress={() => setMainMenuVisible(true)}>
         <Plus color="#000" size={30} />
       </TouchableOpacity>
 
-      {/* MODAL 1: MENIU FAB (Custom vs Suggested) */}
       <Modal visible={mainMenuVisible} transparent animationType="fade">
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setMainMenuVisible(false)}>
           <View style={styles.glassMenu}>
@@ -116,7 +111,6 @@ export default function TrainingScreen() {
         </TouchableOpacity>
       </Modal>
 
-      {/* MODAL 2: LISTA DE PRESETURI */}
       <Modal visible={presetsVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={[styles.glassMenu, { height: '60%' }]}>
@@ -137,7 +131,6 @@ export default function TrainingScreen() {
         </View>
       </Modal>
 
-      {/* MODAL 3: ECRANUL DE EDITARE (CEL DIN POZA) */}
       <Modal visible={isDetailVisible} animationType="slide">
         <View style={styles.detailContainer}>
           <SafeAreaView style={{ flex: 1 }}>
