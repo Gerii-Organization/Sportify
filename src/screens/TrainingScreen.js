@@ -25,14 +25,12 @@ export default function TrainingScreen({ navigation }) {
   const fetchMyWorkouts = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from('user_workouts')
         .select('*')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
-      
       if (data) setMyWorkouts(data);
-      if (error) console.error("Eroare la preluarea antrenamentelor:", error.message);
     }
   };
 
@@ -42,33 +40,134 @@ export default function TrainingScreen({ navigation }) {
       const { data: profile } = await supabase.from('profiles').select('goal, sex').eq('id', user.id).single();
       const goal = profile?.goal || 'maintain';
       const sex = profile?.sex || 'M';
+      
+      const genSets = (w, r) => Array.from({ length: 4 }).map(() => ({ 
+        id: Math.random().toString(), weight: w, reps: r, prev: '-', completed: false 
+      }));
+
       let generated = [];
 
       if (goal === 'lose_weight') {
         generated = [
-          { name: 'Cardio & Core Burn', duration: '30 min', intensity: 'Medium', exercises: [{ id: 'e1', name: 'Crunches', sets: [{ id: 's1', weight: '0', reps: '15', prev: '-', completed: false }] }] },
-          { name: 'Fat Burner HIIT', duration: '45 min', intensity: 'Hard', exercises: [{ id: 'e1', name: 'Burpees', sets: [{ id: 's1', weight: '0', reps: '20', prev: '-', completed: false }] }] },
+          { name: 'Cardio & Core Burn', duration: '35 min', intensity: 'Medium', exercises: [
+            { id: 'e1', name: 'Jumping Jacks', sets: genSets('0', '30') },
+            { id: 'e2', name: 'Burpees', sets: genSets('0', '15') },
+            { id: 'e3', name: 'Mountain Climbers', sets: genSets('0', '40') },
+            { id: 'e4', name: 'Crunches', sets: genSets('0', '20') },
+            { id: 'e5', name: 'Plank', sets: genSets('0', '60') }
+          ]},
+          { name: 'Fat Burner HIIT', duration: '40 min', intensity: 'Hard', exercises: [
+            { id: 'e1', name: 'High Knees', sets: genSets('0', '40') },
+            { id: 'e2', name: 'Squat Jumps', sets: genSets('0', '15') },
+            { id: 'e3', name: 'Push-ups', sets: genSets('0', '12') },
+            { id: 'e4', name: 'Lunges', sets: genSets('0', '20') },
+            { id: 'e5', name: 'Bicycle Crunches', sets: genSets('0', '30') }
+          ]},
+          { name: 'Full Body Sweater', duration: '45 min', intensity: 'Hard', exercises: [
+            { id: 'e1', name: 'Kettlebell Swings', sets: genSets('12', '20') },
+            { id: 'e2', name: 'Dumbbell Thrusters', sets: genSets('10', '15') },
+            { id: 'e3', name: 'Renegade Rows', sets: genSets('10', '16') },
+            { id: 'e4', name: 'Box Jumps', sets: genSets('0', '12') },
+            { id: 'e5', name: 'Russian Twists', sets: genSets('5', '30') }
+          ]}
         ];
       } else if (goal === 'build_muscle') {
         if (sex.toUpperCase() === 'M') {
           generated = [
-            { name: 'Piept & Triceps', duration: '60 min', intensity: 'Hard', exercises: [{ id: 'e1', name: 'Barbell Bench Press', sets: [{ id: 's1', weight: '', reps: '', prev: '-', completed: false }] }] },
-            { name: 'Spate & Biceps', duration: '55 min', intensity: 'Hard', exercises: [{ id: 'e1', name: 'Lat Pulldown', sets: [{ id: 's1', weight: '', reps: '', prev: '-', completed: false }] }] },
+            { name: 'Piept & Triceps', duration: '60 min', intensity: 'Hard', exercises: [
+              { id: 'e1', name: 'Bench Press', sets: genSets('60', '10') },
+              { id: 'e2', name: 'Incline DB Press', sets: genSets('24', '10') },
+              { id: 'e3', name: 'Chest Fly', sets: genSets('15', '12') },
+              { id: 'e4', name: 'Overhead Tricep Ext', sets: genSets('20', '12') },
+              { id: 'e5', name: 'Cable Pushdown', sets: genSets('25', '12') }
+            ]},
+            { name: 'Spate & Biceps', duration: '60 min', intensity: 'Hard', exercises: [
+              { id: 'e1', name: 'Lat Pulldown', sets: genSets('50', '10') },
+              { id: 'e2', name: 'Barbell Row', sets: genSets('60', '10') },
+              { id: 'e3', name: 'Face Pulls', sets: genSets('15', '15') },
+              { id: 'e4', name: 'Barbell Curl', sets: genSets('30', '10') },
+              { id: 'e5', name: 'Hammer Curl', sets: genSets('14', '12') }
+            ]},
+            { name: 'Umeri & Picioare', duration: '65 min', intensity: 'Insane', exercises: [
+              { id: 'e1', name: 'Squats', sets: genSets('80', '8') },
+              { id: 'e2', name: 'Leg Press', sets: genSets('120', '10') },
+              { id: 'e3', name: 'Overhead Press', sets: genSets('40', '8') },
+              { id: 'e4', name: 'Lateral Raises', sets: genSets('10', '15') },
+              { id: 'e5', name: 'Calf Raises', sets: genSets('60', '15') }
+            ]}
           ];
         } else {
           generated = [
-            { name: 'Glutes & Legs Focus', duration: '55 min', intensity: 'Hard', exercises: [{ id: 'e1', name: 'Barbell Squat', sets: [{ id: 's1', weight: '', reps: '', prev: '-', completed: false }] }] },
-            { name: 'Upper Body Toning', duration: '45 min', intensity: 'Medium', exercises: [{ id: 'e1', name: 'Lat Pulldown', sets: [{ id: 's1', weight: '', reps: '', prev: '-', completed: false }] }] },
+            { name: 'Glutes & Legs Focus', duration: '55 min', intensity: 'Hard', exercises: [
+              { id: 'e1', name: 'Hip Thrusts', sets: genSets('60', '12') },
+              { id: 'e2', name: 'Romanian Deadlifts', sets: genSets('40', '12') },
+              { id: 'e3', name: 'Bulgarian Split Squats', sets: genSets('12', '10') },
+              { id: 'e4', name: 'Leg Extensions', sets: genSets('30', '15') },
+              { id: 'e5', name: 'Cable Kickbacks', sets: genSets('10', '15') }
+            ]},
+            { name: 'Upper Body Toning', duration: '45 min', intensity: 'Medium', exercises: [
+              { id: 'e1', name: 'Dumbbell Press', sets: genSets('12', '12') },
+              { id: 'e2', name: 'Lat Pulldown', sets: genSets('30', '12') },
+              { id: 'e3', name: 'Dumbbell Rows', sets: genSets('14', '10') },
+              { id: 'e4', name: 'Lateral Raises', sets: genSets('6', '15') },
+              { id: 'e5', name: 'Tricep Pushdown', sets: genSets('15', '15') }
+            ]},
+            { name: 'Full Body Curves', duration: '50 min', intensity: 'Hard', exercises: [
+              { id: 'e1', name: 'Goblet Squat', sets: genSets('20', '12') },
+              { id: 'e2', name: 'Push-ups', sets: genSets('0', '10') },
+              { id: 'e3', name: 'Walking Lunges', sets: genSets('10', '20') },
+              { id: 'e4', name: 'Face Pulls', sets: genSets('15', '15') },
+              { id: 'e5', name: 'Plank', sets: genSets('0', '60') }
+            ]}
           ];
         }
       } else if (goal === 'gain_strength') {
         generated = [
-          { name: '5x5 Lifts (Picioare)', duration: '60 min', intensity: 'Insane', exercises: [{ id: 'e1', name: 'Barbell Squat', sets: [{ id: 's1', weight: '', reps: '', prev: '-', completed: false }] }] },
-          { name: 'Push Power (Piept/Umeri)', duration: '55 min', intensity: 'Hard', exercises: [{ id: 'e1', name: 'Overhead Press', sets: [{ id: 's1', weight: '', reps: '', prev: '-', completed: false }] }] },
+          { name: 'Heavy Lifts (Picioare)', duration: '60 min', intensity: 'Insane', exercises: [
+            { id: 'e1', name: 'Barbell Squat', sets: genSets('100', '5') },
+            { id: 'e2', name: 'Leg Press', sets: genSets('150', '5') },
+            { id: 'e3', name: 'RDL', sets: genSets('80', '5') },
+            { id: 'e4', name: 'Weighted Lunges', sets: genSets('20', '8') },
+            { id: 'e5', name: 'Calf Raises', sets: genSets('80', '10') }
+          ]},
+          { name: 'Push Power (Piept/Umeri)', duration: '55 min', intensity: 'Hard', exercises: [
+            { id: 'e1', name: 'Bench Press', sets: genSets('80', '5') },
+            { id: 'e2', name: 'Overhead Press', sets: genSets('50', '5') },
+            { id: 'e3', name: 'Incline DB Press', sets: genSets('30', '6') },
+            { id: 'e4', name: 'Weighted Dips', sets: genSets('10', '8') },
+            { id: 'e5', name: 'Skull Crushers', sets: genSets('30', '8') }
+          ]},
+          { name: 'Pull Power (Spate)', duration: '60 min', intensity: 'Insane', exercises: [
+            { id: 'e1', name: 'Deadlift', sets: genSets('120', '5') },
+            { id: 'e2', name: 'Weighted Pull-ups', sets: genSets('10', '5') },
+            { id: 'e3', name: 'Barbell Row', sets: genSets('80', '5') },
+            { id: 'e4', name: 'T-Bar Row', sets: genSets('40', '8') },
+            { id: 'e5', name: 'Barbell Curl', sets: genSets('40', '6') }
+          ]}
         ];
       } else {
         generated = [
-          { name: 'Full Body Maintenance', duration: '45 min', intensity: 'Medium', exercises: [{ id: 'e1', name: 'Push-ups', sets: [{ id: 's1', weight: '0', reps: '15', prev: '-', completed: false }] }] },
+          { name: 'Full Body A', duration: '45 min', intensity: 'Medium', exercises: [
+            { id: 'e1', name: 'Squat', sets: genSets('50', '10') },
+            { id: 'e2', name: 'Bench Press', sets: genSets('50', '10') },
+            { id: 'e3', name: 'Barbell Row', sets: genSets('50', '10') },
+            { id: 'e4', name: 'Dumbbell Curl', sets: genSets('12', '12') },
+            { id: 'e5', name: 'Crunches', sets: genSets('0', '20') }
+          ]},
+          { name: 'Full Body B', duration: '45 min', intensity: 'Medium', exercises: [
+            { id: 'e1', name: 'Deadlift', sets: genSets('60', '10') },
+            { id: 'e2', name: 'Overhead Press', sets: genSets('30', '10') },
+            { id: 'e3', name: 'Lat Pulldown', sets: genSets('40', '10') },
+            { id: 'e4', name: 'Tricep Pushdown', sets: genSets('20', '12') },
+            { id: 'e5', name: 'Plank', sets: genSets('0', '60') }
+          ]},
+          { name: 'Core & Mobility', duration: '35 min', intensity: 'Light', exercises: [
+            { id: 'e1', name: 'Lunge Twists', sets: genSets('0', '20') },
+            { id: 'e2', name: 'Push-ups', sets: genSets('0', '15') },
+            { id: 'e3', name: 'Bodyweight Squats', sets: genSets('0', '20') },
+            { id: 'e4', name: 'Supermans', sets: genSets('0', '15') },
+            { id: 'e5', name: 'Leg Raises', sets: genSets('0', '20') }
+          ]}
         ];
       }
       setSuggestedWorkouts(generated);
@@ -97,37 +196,24 @@ export default function TrainingScreen({ navigation }) {
     setIsNamingModalVisible(false);
     
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    const { data, error } = await supabase.from('user_workouts').insert({
-      user_id: user.id,
-      name: finalName,
-      exercises: []
+    const { data } = await supabase.from('user_workouts').insert({
+      user_id: user.id, name: finalName, exercises: []
     }).select().single();
 
     if (data) {
       setMyWorkouts([data, ...myWorkouts]);
-      openWorkoutDetail(data);
-    } else if (error) {
-      Alert.alert("Eroare", "Nu s-a putut crea antrenamentul.");
+      openWorkoutDetail(data); 
     }
   };
 
   const addPreset = async (item) => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    const { data, error } = await supabase.from('user_workouts').insert({
-      user_id: user.id,
-      name: item.name,
-      duration: item.duration,
-      intensity: item.intensity,
-      exercises: item.exercises || []
+    const { data } = await supabase.from('user_workouts').insert({
+      user_id: user.id, name: item.name, duration: item.duration,
+      intensity: item.intensity, exercises: item.exercises || []
     }).select().single();
 
-    if (data) {
-      setMyWorkouts([data, ...myWorkouts]);
-    }
+    if (data) setMyWorkouts([data, ...myWorkouts]);
     closeMainMenu();
   };
 
@@ -141,10 +227,7 @@ export default function TrainingScreen({ navigation }) {
   };
 
   const openWorkoutDetail = (workout) => {
-    navigation.navigate('WorkoutDetailScreen', {
-      workout: workout,
-      onSave: handleSaveWorkout
-    });
+    navigation.navigate('WorkoutDetailScreen', { workout: workout, onSave: handleSaveWorkout });
   };
 
   return (
@@ -224,27 +307,19 @@ export default function TrainingScreen({ navigation }) {
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
           <View style={styles.glassMenu}>
             <Text style={styles.menuTitle}>Numește Antrenamentul</Text>
-            
             <TextInput 
-              style={styles.nameInput}
-              placeholder="Ex: Leg Day Killer"
-              placeholderTextColor="#666"
-              value={newWorkoutName}
-              onChangeText={setNewWorkoutName}
-              autoFocus
+              style={styles.nameInput} placeholder="Ex: Leg Day Killer" placeholderTextColor="#666"
+              value={newWorkoutName} onChangeText={setNewWorkoutName} autoFocus
             />
-            
             <TouchableOpacity style={styles.saveNameBtn} onPress={handleCreateNamedWorkout}>
               <Text style={styles.saveNameBtnText}>Creează și Editează</Text>
             </TouchableOpacity>
-            
             <TouchableOpacity onPress={() => setIsNamingModalVisible(false)} style={{ marginTop: 20 }}>
               <Text style={styles.closeText}>Anulează</Text>
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
       </Modal>
-
     </SafeAreaView>
   );
 }
@@ -254,7 +329,6 @@ const styles = StyleSheet.create({
   header: { padding: 25, paddingTop: 40 },
   title: { fontSize: 28, fontWeight: 'bold', color: '#fff' },
   listContent: { padding: 20, paddingBottom: 100 },
-  
   glassCard: { backgroundColor: 'rgba(255, 255, 255, 0.07)', borderRadius: 20, padding: 15, marginBottom: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.1)' },
   workoutMain: { flexDirection: 'row', alignItems: 'center', flex: 1 },
   iconCircle: { backgroundColor: 'rgba(29, 185, 84, 0.1)', padding: 10, borderRadius: 12, marginRight: 15 },
@@ -262,26 +336,20 @@ const styles = StyleSheet.create({
   actionButtons: { flexDirection: 'row', alignItems: 'center' },
   playBtn: { backgroundColor: '#1DB954', width: 35, height: 35, borderRadius: 18, justifyContent: 'center', alignItems: 'center', marginLeft: 15 },
   deleteBtn: { padding: 8 },
-  
-  fab: { position: 'absolute', bottom: 90, right: 25, backgroundColor: '#1DB954', width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', elevation: 8, shadowColor: '#1DB954', shadowOpacity: 0.4, shadowRadius: 10, shadowOffset: { width: 0, height: 5 } },
-  
+  fab: { position: 'absolute', bottom: 90, right: 25, backgroundColor: '#1DB954', width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', elevation: 8 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center', padding: 20 },
   glassMenu: { backgroundColor: '#1c1c1e', width: '100%', borderRadius: 30, padding: 25, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
   menuTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 20, textAlign: 'center' },
-  
   menuOption: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.05)', padding: 18, borderRadius: 15, marginBottom: 12 },
   menuOptionExpanded: { borderBottomLeftRadius: 0, borderBottomRightRadius: 0, marginBottom: 0 },
   menuOptionText: { color: '#fff', fontSize: 16, fontWeight: '600', marginLeft: 15 },
   chevron: { marginLeft: 'auto' },
-  
   expandedContainer: { backgroundColor: 'rgba(255,255,255,0.02)', padding: 15, borderBottomLeftRadius: 15, borderBottomRightRadius: 15, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', borderTopWidth: 0 },
   expandedItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)' },
   expandedItemName: { color: '#fff', fontSize: 15, fontWeight: 'bold' },
   expandedItemSub: { color: '#1DB954', fontSize: 12, marginTop: 4 },
-  
   closeText: { color: '#b3b3b3', textAlign: 'center', fontSize: 16 },
   emptyText: { color: '#555', textAlign: 'center', marginTop: 50 },
-
   nameInput: { backgroundColor: '#2c2c2e', color: '#fff', borderRadius: 12, padding: 15, fontSize: 16, marginBottom: 20, borderWidth: 1, borderColor: '#333' },
   saveNameBtn: { backgroundColor: '#1DB954', padding: 15, borderRadius: 15, alignItems: 'center' },
   saveNameBtnText: { color: '#000', fontWeight: 'bold', fontSize: 16 }

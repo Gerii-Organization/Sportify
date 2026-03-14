@@ -3,7 +3,10 @@ import {
   View, Text, StyleSheet, TouchableOpacity, 
   Modal, SafeAreaView, TextInput, ScrollView, KeyboardAvoidingView, Platform, FlatList, Alert 
 } from 'react-native';
-import { ChevronLeft, Edit3, Plus, X, Play, CheckCircle2, Circle, Clock, Save, Trash2, Zap, Star, Flame } from 'lucide-react-native';
+import { 
+  ChevronLeft, Edit3, Plus, X, Play, CheckCircle2, Circle, Clock, 
+  Save, Trash2, Zap, Star, Flame, ChevronUp, ChevronDown 
+} from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 
 const EXERCISE_DB = [
@@ -27,18 +30,18 @@ const MOTIVATIONAL_MESSAGES = [
   "Antrenament legendar finalizat! 🏆",
   "Transpirația de azi e forța de mâine! 💪",
   "Bufnița Duo ar fi mândră de streak-ul tău! 🦉🔥",
-  "Niciun scuză, doar rezultate! Genial! ⚡"
+  "Nicio scuză, doar rezultate! Genial! ⚡"
 ];
 
 export default function WorkoutDetailScreen({ route, navigation }) {
   const { workout, onSave } = route.params;
   const [currentWorkout, setCurrentWorkout] = useState(workout);
-  const [mode, setMode] = useState('idle');
+  const [mode, setMode] = useState('idle'); 
   const [timer, setTimer] = useState(0);
   const [isExerciseSelectorVisible, setIsExerciseSelectorVisible] = useState(false);
   
   const [showSummary, setShowSummary] = useState(false);
-  const [workoutStats, setWorkoutStats] = useState({ volume: 0, time: 0, message: '', xpGained: 50, energyGained: 20 });
+  const [workoutStats, setWorkoutStats] = useState({ volume: 0, time: 0, message: '', xpGained: 50, energyGained: 20, isFirstWorkoutToday: false });
 
   useEffect(() => {
     let interval;
@@ -53,11 +56,45 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     return `${m}:${s}`;
   };
 
+  const toggleEditMode = async () => {
+    if (mode === 'editing') {
+      const { error } = await supabase
+        .from('user_workouts')
+        .update({ exercises: currentWorkout.exercises })
+        .eq('id', currentWorkout.id);
+        
+      if (error) {
+        Alert.alert("Eroare la salvare", error.message);
+      } else {
+        setMode('idle');
+        if (onSave) onSave(currentWorkout);
+      }
+    } else {
+      setMode('editing');
+    }
+  };
+
+  const moveExerciseUp = (index) => {
+    if (index === 0) return;
+    const newExercises = [...currentWorkout.exercises];
+    const temp = newExercises[index - 1];
+    newExercises[index - 1] = newExercises[index];
+    newExercises[index] = temp;
+    setCurrentWorkout({ ...currentWorkout, exercises: newExercises });
+  };
+
+  const moveExerciseDown = (index) => {
+    if (index === currentWorkout.exercises.length - 1) return;
+    const newExercises = [...currentWorkout.exercises];
+    const temp = newExercises[index + 1];
+    newExercises[index + 1] = newExercises[index];
+    newExercises[index] = temp;
+    setCurrentWorkout({ ...currentWorkout, exercises: newExercises });
+  };
+
   const updateSetData = (exerciseId, setId, field, value) => {
     const updatedExercises = currentWorkout.exercises.map(ex => {
-      if (ex.id === exerciseId) {
-        return { ...ex, sets: ex.sets.map(s => s.id === setId ? { ...s, [field]: value } : s) };
-      }
+      if (ex.id === exerciseId) return { ...ex, sets: ex.sets.map(s => s.id === setId ? { ...s, [field]: value } : s) };
       return ex;
     });
     setCurrentWorkout({ ...currentWorkout, exercises: updatedExercises });
@@ -84,9 +121,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
   const confirmDeleteExercise = (exId) => {
     Alert.alert("Ștergere", "Elimini acest exercițiu din antrenament?", [
       { text: "Anulează", style: "cancel" },
-      { text: "Șterge", style: "destructive", onPress: () => {
-        setCurrentWorkout({ ...currentWorkout, exercises: currentWorkout.exercises.filter(ex => ex.id !== exId) });
-      }}
+      { text: "Șterge", style: "destructive", onPress: () => setCurrentWorkout({ ...currentWorkout, exercises: currentWorkout.exercises.filter(ex => ex.id !== exId) }) }
     ]);
   };
 
@@ -114,74 +149,94 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
   const handleFinishWorkout = async () => {
     const allSetsCompleted = currentWorkout.exercises.every(ex => ex.sets.every(set => set.completed));
-
+    
     if (!allSetsCompleted) {
-      Alert.alert('Ești sigur?', 'Mai ai seturi nebifate. Vrei să finalizezi oricum?', [
-        { text: 'Nu, mă întorc', style: 'cancel' },
-        { text: 'Da, finalizează', onPress: processWorkoutCompletion }
-      ]);
-    } else {
-      processWorkoutCompletion();
+      Alert.alert(
+        'Antrenament Incomplet', 
+        'Acest antrenament nu va fi validat! Este obligatoriu ca toate seturile să fie bifate (DONE) pentru a putea termina și salva progresul.', 
+        [{ text: 'Am înțeles', style: 'cancel' }]
+      );
+      return;
     }
+    processWorkoutCompletion();
   };
 
- const processWorkoutCompletion = async () => {
+  const processWorkoutCompletion = async () => {
     setMode('idle');
-    
     let totalKg = 0;
     currentWorkout.exercises.forEach(ex => {
       ex.sets.forEach(set => {
-        if (set.completed && set.weight && set.reps) {
-          totalKg += (parseFloat(set.weight) * parseInt(set.reps));
-        }
+        if (set.completed && set.weight && set.reps) totalKg += (parseFloat(set.weight) * parseInt(set.reps));
       });
     });
 
     const randomMsg = MOTIVATIONAL_MESSAGES[Math.floor(Math.random() * MOTIVATIONAL_MESSAGES.length)];
     const elapsedMinutes = Math.ceil(timer / 60);
-    
-    setWorkoutStats({ volume: totalKg, time: timer, message: randomMsg, xpGained: 50 + (totalKg > 1000 ? 20 : 0), energyGained: 20 });
 
     const { data: { user } } = await supabase.auth.getUser();
+    let isFirstWorkoutToday = false;
+
     if (user) {
       const today = new Date().toISOString().split('T')[0];
       const { data: currentStat } = await supabase.from('daily_stats').select('activity_minutes').eq('user_id', user.id).eq('date', today).maybeSingle();
       
-      await supabase.from('daily_stats').upsert({ user_id: user.id, date: today, activity_minutes: (currentStat?.activity_minutes || 0) + elapsedMinutes });
+      const currentMinutes = currentStat?.activity_minutes || 0;
+      isFirstWorkoutToday = currentMinutes === 0; 
+      
+      await supabase.from('daily_stats').upsert({ user_id: user.id, date: today, activity_minutes: currentMinutes + elapsedMinutes });
 
       const { data: profile } = await supabase.from('profiles').select('xp, energy_points').eq('id', user.id).single();
-      await supabase.from('profiles').update({
-        xp: (profile?.xp || 0) + 50,
-        energy_points: (profile?.energy_points || 0) + 20
-      }).eq('id', user.id);
-
-      await supabase.from('user_workouts').update({ exercises: currentWorkout.exercises }).eq('id', currentWorkout.id);
+      await supabase.from('profiles').update({ xp: (profile?.xp || 0) + 50, energy_points: (profile?.energy_points || 0) + 20 }).eq('id', user.id);
     }
 
-    setShowSummary(true);
+    setWorkoutStats({ volume: totalKg, time: timer, message: randomMsg, xpGained: 50 + (totalKg > 1000 ? 20 : 0), energyGained: 20, isFirstWorkoutToday });
+
+    const resetExercises = currentWorkout.exercises.map(ex => ({
+      ...ex,
+      sets: ex.sets.map(set => ({
+        ...set,
+        prev: set.weight && set.reps ? `${set.weight}kg x ${set.reps}` : set.prev,
+        completed: false 
+      }))
+    }));
+
+    const finalWorkoutToSave = { ...currentWorkout, exercises: resetExercises };
+    
+    if (user) {
+      await supabase.from('user_workouts').update({ exercises: resetExercises }).eq('id', currentWorkout.id);
+    }
+
+    setCurrentWorkout(finalWorkoutToSave); 
+    setShowSummary(true); 
   };
 
   const closeSummaryAndExit = () => {
     if (onSave) onSave(currentWorkout);
     setShowSummary(false);
-    
     navigation.navigate('MainTabs', { screen: 'Dashboard' }); 
   };
 
-  const toggleEditMode = async () => {
-    if (mode === 'editing') {
-      await supabase.from('user_workouts').update({ exercises: currentWorkout.exercises }).eq('id', currentWorkout.id);
-      setMode('idle');
+  const handleBackPress = () => {
+    if (mode === 'started') {
+      Alert.alert('Antrenament în curs', 'Dacă părăsești acum, antrenamentul va fi anulat!', [
+        { text: 'Rămâi', style: 'cancel' },
+        { text: 'Ieși', style: 'destructive', onPress: () => navigation.goBack() }
+      ]);
+    } else if (mode === 'editing') {
+      Alert.alert('Modificări nesalvate', 'Ai modificări pe care nu le-ai salvat. Vrei să ieși oricum?', [
+        { text: 'Nu, înapoi la editare', style: 'cancel' },
+        { text: 'Da, renunță', style: 'destructive', onPress: () => navigation.goBack() }
+      ]);
     } else {
-      setMode('editing');
+      if (onSave) onSave(currentWorkout);
+      navigation.goBack();
     }
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      
       <View style={styles.detailHeader}>
-        <TouchableOpacity onPress={() => navigation.goBack()}><ChevronLeft color="#fff" size={30} /></TouchableOpacity>
+        <TouchableOpacity onPress={handleBackPress}><ChevronLeft color="#fff" size={30} /></TouchableOpacity>
         {mode === 'started' ? (
           <View style={styles.timerHeader}><Clock color="#1DB954" size={20} /><Text style={styles.timerText}>{formatTime(timer)}</Text></View>
         ) : (
@@ -201,16 +256,24 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={{ padding: 15, paddingBottom: 100 }}>
-          
-          {currentWorkout?.exercises?.map((exercise) => (
+          {currentWorkout?.exercises?.map((exercise, index) => (
             <View key={exercise.id} style={styles.exerciseCard}>
               
               <View style={styles.exerciseHeaderRow}>
                 <Text style={styles.exerciseName}>{exercise.name}</Text>
+                
                 {mode === 'editing' && (
-                  <TouchableOpacity onPress={() => confirmDeleteExercise(exercise.id)}>
-                    <Trash2 color="#ff4444" size={20} />
-                  </TouchableOpacity>
+                  <View style={styles.exerciseActionRow}>
+                    <TouchableOpacity onPress={() => moveExerciseUp(index)} disabled={index === 0} style={{ opacity: index === 0 ? 0.2 : 1, paddingHorizontal: 5 }}>
+                      <ChevronUp color="#1DB954" size={24} />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => moveExerciseDown(index)} disabled={index === currentWorkout.exercises.length - 1} style={{ opacity: index === currentWorkout.exercises.length - 1 ? 0.2 : 1, paddingHorizontal: 5, marginRight: 15 }}>
+                      <ChevronDown color="#1DB954" size={24} />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => confirmDeleteExercise(exercise.id)}>
+                      <Trash2 color="#ff4444" size={22} />
+                    </TouchableOpacity>
+                  </View>
                 )}
               </View>
               
@@ -223,9 +286,9 @@ export default function WorkoutDetailScreen({ route, navigation }) {
                 {mode === 'editing' && <Text style={[styles.tableHeaderText, { flex: 0.5 }]}></Text>}
               </View>
               
-              {exercise.sets.map((set, index) => (
+              {exercise.sets.map((set, setIndex) => (
                 <View key={set.id} style={[styles.setRow, set.completed && styles.setRowCompleted]}>
-                  <Text style={[styles.setText, { flex: 0.5 }]}>{index + 1}</Text>
+                  <Text style={[styles.setText, { flex: 0.5 }]}>{setIndex + 1}</Text>
                   <Text style={[styles.setText, { flex: 1, color: '#555' }]}>{set.prev}</Text>
                   
                   <TextInput style={[styles.setInput, set.completed && {opacity: 0.5}]} keyboardType="numeric" value={set.weight} onChangeText={(v) => updateSetData(exercise.id, set.id, 'weight', v)} placeholder="0" placeholderTextColor="#444" editable={!set.completed} />
@@ -236,7 +299,6 @@ export default function WorkoutDetailScreen({ route, navigation }) {
                       {set.completed ? <CheckCircle2 color="#1DB954" size={26} /> : <Circle color="#444" size={26} />}
                     </TouchableOpacity>
                   )}
-
                   {mode === 'editing' && (
                     <TouchableOpacity style={{ flex: 0.5, alignItems: 'center' }} onPress={() => confirmDeleteSet(exercise.id, set.id)}>
                       <X color="#ff4444" size={20} />
@@ -259,7 +321,6 @@ export default function WorkoutDetailScreen({ route, navigation }) {
               <Text style={styles.addExerciseText}>Adaugă Exercițiu</Text>
             </TouchableOpacity>
           )}
-
         </ScrollView>
       </KeyboardAvoidingView>
 
@@ -274,7 +335,6 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       <Modal visible={showSummary} animationType="slide">
         <SafeAreaView style={styles.summaryContainer}>
           <ScrollView contentContainerStyle={styles.summaryScroll}>
-            
             <View style={styles.summaryHeader}>
               <CheckCircle2 color="#1DB954" size={80} style={{ marginBottom: 20 }} />
               <Text style={styles.summaryTitle}>ANTRENAMENT{'\n'}FINALIZAT!</Text>
@@ -309,15 +369,17 @@ export default function WorkoutDetailScreen({ route, navigation }) {
               </View>
             </View>
 
-            <View style={[styles.duoCard, { borderColor: '#FF8800' }]}>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Flame color="#FF8800" size={30} fill="#FF8800" style={{ marginRight: 15 }} />
-                <View>
-                  <Text style={styles.duoStreakTitle}>Streak Actualizat!</Text>
-                  <Text style={styles.duoStreakSub}>Ai progresat și azi. Ține-o tot așa!</Text>
+            {workoutStats.isFirstWorkoutToday && (
+              <View style={[styles.duoCard, { borderColor: '#FF8800' }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Flame color="#FF8800" size={30} fill="#FF8800" style={{ marginRight: 15 }} />
+                  <View>
+                    <Text style={styles.duoStreakTitle}>Streak Actualizat!</Text>
+                    <Text style={styles.duoStreakSub}>Ai progresat și azi. Ține-o tot așa!</Text>
+                  </View>
                 </View>
               </View>
-            </View>
+            )}
 
           </ScrollView>
 
@@ -361,9 +423,12 @@ const styles = StyleSheet.create({
   timerText: { color: '#1DB954', fontSize: 18, fontWeight: 'bold', marginLeft: 8 },
   startBigBtn: { flexDirection: 'row', backgroundColor: '#1DB954', margin: 20, padding: 18, borderRadius: 25, justifyContent: 'center', alignItems: 'center', shadowColor: '#1DB954', shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
   startBigBtnText: { color: '#000', fontWeight: 'bold', fontSize: 18, marginLeft: 10 },
+  
   exerciseCard: { backgroundColor: '#1c1c1e', borderRadius: 15, padding: 15, marginBottom: 20 },
   exerciseHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
-  exerciseName: { color: '#1DB954', fontSize: 16, fontWeight: '700' },
+  exerciseName: { color: '#1DB954', fontSize: 16, fontWeight: '700', flex: 1 },
+  exerciseActionRow: { flexDirection: 'row', alignItems: 'center' }, // Stil nou
+  
   tableHeader: { flexDirection: 'row', marginBottom: 10 },
   tableHeaderText: { color: '#666', fontSize: 12, textAlign: 'center', fontWeight: 'bold' },
   setRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: '#333' },
