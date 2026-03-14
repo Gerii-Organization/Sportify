@@ -1,172 +1,205 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   View, Text, StyleSheet, FlatList, TouchableOpacity, 
-  Modal, SafeAreaView, TextInput, ScrollView, KeyboardAvoidingView, Platform 
+  Modal, SafeAreaView, TextInput, KeyboardAvoidingView, Platform 
 } from 'react-native';
 import { 
-  Plus, Dumbbell, Play, Trash2, X, 
-  ChevronLeft, Zap, Layout, MoreVertical 
+  Plus, Dumbbell, Play, Trash2, Zap, Layout, ChevronDown, ChevronUp 
 } from 'lucide-react-native';
+import { supabase } from '../lib/supabase';
 
-const PRESET_WORKOUTS = [
-  { 
-    id: 'p1', name: 'Full Body Blast', 
-    exercises: [
-      { id: 'e1', name: 'Dumbbell Bench Press', sets: [{ id: 's1', weight: '', reps: '', prev: '20kg x 12' }, { id: 's2', weight: '', reps: '', prev: '-' }] },
-      { id: 'e2', name: 'Squats', sets: [{ id: 's1', weight: '', reps: '', prev: '60kg x 10' }] }
-    ] 
-  },
-  { id: 'p2', name: 'Upper Body Power', exercises: [] },
-];
-
-export default function TrainingScreen() {
-  const [myWorkouts, setMyWorkouts] = useState([
-    { id: '1', name: 'Piept', exercises: [] }
-  ]);
+export default function TrainingScreen({ navigation }) {
+  const [myWorkouts, setMyWorkouts] = useState([]);
+  const [suggestedWorkouts, setSuggestedWorkouts] = useState([]); 
   
-  const [selectedWorkout, setSelectedWorkout] = useState(null);
-  const [isDetailVisible, setIsDetailVisible] = useState(false);
   const [mainMenuVisible, setMainMenuVisible] = useState(false);
-  const [presetsVisible, setPresetsVisible] = useState(false);
+  const [isBuiltInExpanded, setIsBuiltInExpanded] = useState(false);
+  
+  // State pentru Modalul de Numire
+  const [isNamingModalVisible, setIsNamingModalVisible] = useState(false);
+  const [newWorkoutName, setNewWorkoutName] = useState('');
 
-  const deleteWorkout = (id) => {
-    setMyWorkouts(myWorkouts.filter(w => w.id !== id));
+  useEffect(() => {
+    fetchUserDataAndGenerateWorkouts();
+  }, []);
+
+  const fetchUserDataAndGenerateWorkouts = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const { data: profile } = await supabase.from('profiles').select('goal, sex').eq('id', user.id).single();
+      const goal = profile?.goal || 'maintain';
+      const sex = profile?.sex || 'M';
+      let generated = [];
+
+      if (goal === 'lose_weight') {
+        generated = [
+          { id: 'bw1', name: 'Cardio & Core Burn', duration: '30 min', intensity: 'Medium', exercises: [{ id: 'e1', name: 'Crunches', sets: [{ id: 's1', weight: '0', reps: '15', prev: '-' }] }] },
+          { id: 'bw2', name: 'Fat Burner HIIT', duration: '45 min', intensity: 'Hard', exercises: [{ id: 'e1', name: 'Burpees', sets: [{ id: 's1', weight: '0', reps: '20', prev: '-' }] }] },
+        ];
+      } else if (goal === 'build_muscle') {
+        if (sex.toUpperCase() === 'M') {
+          generated = [
+            { id: 'bm1', name: 'Piept & Triceps', duration: '60 min', intensity: 'Hard', exercises: [{ id: 'e1', name: 'Barbell Bench Press', sets: [{ id: 's1', weight: '', reps: '', prev: '-' }] }] },
+            { id: 'bm2', name: 'Spate & Biceps', duration: '55 min', intensity: 'Hard', exercises: [{ id: 'e1', name: 'Lat Pulldown', sets: [{ id: 's1', weight: '', reps: '', prev: '-' }] }] },
+          ];
+        } else {
+          generated = [
+            { id: 'bf1', name: 'Glutes & Legs Focus', duration: '55 min', intensity: 'Hard', exercises: [{ id: 'e1', name: 'Barbell Squat', sets: [{ id: 's1', weight: '', reps: '', prev: '-' }] }] },
+            { id: 'bf2', name: 'Upper Body Toning', duration: '45 min', intensity: 'Medium', exercises: [{ id: 'e1', name: 'Lat Pulldown', sets: [{ id: 's1', weight: '', reps: '', prev: '-' }] }] },
+          ];
+        }
+      } else if (goal === 'gain_strength') {
+        generated = [
+          { id: 'bs1', name: '5x5 Lifts (Picioare)', duration: '60 min', intensity: 'Insane', exercises: [{ id: 'e1', name: 'Barbell Squat', sets: [{ id: 's1', weight: '', reps: '', prev: '-' }] }] },
+          { id: 'bs2', name: 'Push Power (Piept/Umeri)', duration: '55 min', intensity: 'Hard', exercises: [{ id: 'e1', name: 'Overhead Press', sets: [{ id: 's1', weight: '', reps: '', prev: '-' }] }] },
+        ];
+      } else {
+        generated = [
+          { id: 'bd1', name: 'Full Body Maintenance', duration: '45 min', intensity: 'Medium', exercises: [{ id: 'e1', name: 'Push-ups', sets: [{ id: 's1', weight: '0', reps: '15', prev: '-' }] }] },
+        ];
+      }
+      setSuggestedWorkouts(generated);
+    }
   };
 
-  const addCustomWorkout = () => {
-    const newW = { id: Math.random().toString(), name: 'Custom Session', exercises: [] };
+  const deleteWorkout = (id) => setMyWorkouts(myWorkouts.filter(w => w.id !== id));
+
+  // --- LOGICĂ NOUĂ DE CREARE MANUALĂ ---
+  const triggerCustomWorkoutCreation = () => {
+    closeMainMenu();
+    setNewWorkoutName(''); // Resetăm input-ul
+    setIsNamingModalVisible(true); // Deschidem modalul de nume
+  };
+
+  const handleCreateNamedWorkout = () => {
+    const finalName = newWorkoutName.trim() || 'Custom Session';
+    const newW = { id: Math.random().toString(), name: finalName, exercises: [] };
+    
+    // Adăugăm în listă
     setMyWorkouts([newW, ...myWorkouts]);
-    setMainMenuVisible(false);
+    setIsNamingModalVisible(false);
+    
+    // Îl deschidem imediat pentru editare
+    openWorkoutDetail(newW);
   };
 
   const addPreset = (item) => {
-    const newW = { ...item, id: Math.random().toString() };
+    const newW = { ...item, id: Math.random().toString(), exercises: item.exercises ? [...item.exercises] : [] };
     setMyWorkouts([newW, ...myWorkouts]);
-    setPresetsVisible(false);
+    closeMainMenu();
+  };
+
+  const closeMainMenu = () => {
     setMainMenuVisible(false);
+    setIsBuiltInExpanded(false); 
   };
 
-  const updateSetData = (exerciseId, setId, field, value) => {
-    const updatedExercises = selectedWorkout.exercises.map(ex => {
-      if (ex.id === exerciseId) {
-        return {
-          ...ex,
-          sets: ex.sets.map(s => s.id === setId ? { ...s, [field]: value } : s)
-        };
-      }
-      return ex;
+  const handleSaveWorkout = (updatedWorkout) => {
+    setMyWorkouts(prevWorkouts => prevWorkouts.map(w => w.id === updatedWorkout.id ? updatedWorkout : w));
+  };
+
+  const openWorkoutDetail = (workout) => {
+    navigation.navigate('WorkoutDetailScreen', {
+      workout: workout,
+      onSave: handleSaveWorkout
     });
-    setSelectedWorkout({ ...selectedWorkout, exercises: updatedExercises });
   };
-
-  const renderWorkoutItem = ({ item }) => (
-    <View style={styles.glassCard}>
-      <TouchableOpacity 
-        style={styles.workoutMain} 
-        onPress={() => { setSelectedWorkout(item); setIsDetailVisible(true); }}
-      >
-        <View style={styles.iconCircle}><Dumbbell color="#1DB954" size={20} /></View>
-        <Text style={styles.workoutName}>{item.name}</Text>
-      </TouchableOpacity>
-      
-      <View style={styles.actionButtons}>
-        <TouchableOpacity onPress={() => deleteWorkout(item.id)} style={styles.deleteBtn}>
-          <Trash2 color="#ff4444" size={18} />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.playBtn} onPress={() => { setSelectedWorkout(item); setIsDetailVisible(true); }}>
-          <Play color="#000" size={16} fill="#000" />
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}><Text style={styles.title}>Workouts</Text></View>
+      <View style={styles.header}><Text style={styles.title}>Your Library</Text></View>
 
       <FlatList
         data={myWorkouts}
-        renderItem={renderWorkoutItem}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.listContent}
-        ListEmptyComponent={<Text style={styles.emptyText}>No workouts yet</Text>}
+        ListEmptyComponent={<Text style={styles.emptyText}>Nu ai antrenamente salvate. Apasă + pentru a adăuga.</Text>}
+        renderItem={({ item }) => (
+          <View style={styles.glassCard}>
+            <TouchableOpacity style={styles.workoutMain} onPress={() => openWorkoutDetail(item)}>
+              <View style={styles.iconCircle}><Dumbbell color="#1DB954" size={20} /></View>
+              <View>
+                <Text style={styles.workoutName}>{item.name}</Text>
+                {item.duration && <Text style={{color: '#666', fontSize: 12}}>{item.duration} • {item.intensity}</Text>}
+              </View>
+            </TouchableOpacity>
+            <View style={styles.actionButtons}>
+              <TouchableOpacity onPress={() => deleteWorkout(item.id)} style={styles.deleteBtn}><Trash2 color="#ff4444" size={18} /></TouchableOpacity>
+              <TouchableOpacity style={styles.playBtn} onPress={() => openWorkoutDetail(item)}>
+                <Play color="#000" size={16} fill="#000" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
       />
 
       <TouchableOpacity style={styles.fab} onPress={() => setMainMenuVisible(true)}>
         <Plus color="#000" size={30} />
       </TouchableOpacity>
 
+      {/* MODAL 1: MENIU FAB */}
       <Modal visible={mainMenuVisible} transparent animationType="fade">
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setMainMenuVisible(false)}>
-          <View style={styles.glassMenu}>
-            <Text style={styles.menuTitle}>New Workout</Text>
-            <TouchableOpacity style={styles.menuOption} onPress={addCustomWorkout}>
-              <Zap color="#1DB954" size={22} /><Text style={styles.menuOptionText}>Custom Workout</Text>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={closeMainMenu}>
+          <TouchableOpacity activeOpacity={1} style={styles.glassMenu}>
+            <Text style={styles.menuTitle}>Alege o opțiune</Text>
+            
+            {/* AM MODIFICAT AICI SĂ APELEZE FUNCȚIA NOUĂ */}
+            <TouchableOpacity style={styles.menuOption} onPress={triggerCustomWorkoutCreation}>
+              <Zap color="#1DB954" size={22} /><Text style={styles.menuOptionText}>Creare Manuală</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.menuOption} onPress={() => setPresetsVisible(true)}>
-              <Layout color="#1DB954" size={22} /><Text style={styles.menuOptionText}>Suggested Workout</Text>
+            
+            <TouchableOpacity 
+              style={[styles.menuOption, isBuiltInExpanded && styles.menuOptionExpanded]} 
+              onPress={() => setIsBuiltInExpanded(!isBuiltInExpanded)}
+            >
+              <Layout color="#1DB954" size={22} />
+              <Text style={styles.menuOptionText}>Antrenamente Built-in</Text>
+              {isBuiltInExpanded ? <ChevronUp color="#666" size={20} style={styles.chevron} /> : <ChevronDown color="#666" size={20} style={styles.chevron} />}
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => setMainMenuVisible(false)}><Text style={styles.closeText}>Cancel</Text></TouchableOpacity>
-          </View>
+            {isBuiltInExpanded && (
+              <View style={styles.expandedContainer}>
+                {suggestedWorkouts.map(item => (
+                  <TouchableOpacity key={item.id} style={styles.expandedItem} onPress={() => addPreset(item)}>
+                    <View>
+                      <Text style={styles.expandedItemName}>{item.name}</Text>
+                      <Text style={styles.expandedItemSub}>{item.duration} • {item.intensity}</Text>
+                    </View>
+                    <Plus color="#1DB954" size={20} />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+            <TouchableOpacity onPress={closeMainMenu} style={{ marginTop: 20 }}><Text style={styles.closeText}>Anulează</Text></TouchableOpacity>
+          </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
 
-      <Modal visible={presetsVisible} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={[styles.glassMenu, { height: '60%' }]}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.menuTitle}>Suggestions</Text>
-              <TouchableOpacity onPress={() => setPresetsVisible(false)}><X color="#fff" size={24} /></TouchableOpacity>
-            </View>
-            <FlatList
-              data={PRESET_WORKOUTS}
-              renderItem={({ item }) => (
-                <TouchableOpacity style={styles.presetCard} onPress={() => addPreset(item)}>
-                  <Text style={styles.presetName}>{item.name}</Text>
-                  <Plus color="#1DB954" size={20} />
-                </TouchableOpacity>
-              )}
+      {/* MODAL 2: NUMIREA ANTRENAMENTULUI */}
+      <Modal visible={isNamingModalVisible} transparent animationType="fade">
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
+          <View style={styles.glassMenu}>
+            <Text style={styles.menuTitle}>Numește Antrenamentul</Text>
+            
+            <TextInput 
+              style={styles.nameInput}
+              placeholder="Ex: Leg Day Killer"
+              placeholderTextColor="#666"
+              value={newWorkoutName}
+              onChangeText={setNewWorkoutName}
+              autoFocus
             />
+            
+            <TouchableOpacity style={styles.saveNameBtn} onPress={handleCreateNamedWorkout}>
+              <Text style={styles.saveNameBtnText}>Creează și Editează</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity onPress={() => setIsNamingModalVisible(false)} style={{ marginTop: 20 }}>
+              <Text style={styles.closeText}>Anulează</Text>
+            </TouchableOpacity>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={isDetailVisible} animationType="slide">
-        <View style={styles.detailContainer}>
-          <SafeAreaView style={{ flex: 1 }}>
-            <View style={styles.detailHeader}>
-              <TouchableOpacity onPress={() => setIsDetailVisible(false)}><ChevronLeft color="#fff" size={30} /></TouchableOpacity>
-              <Text style={styles.detailTitle}>{selectedWorkout?.name}</Text>
-              <MoreVertical color="#fff" size={24} />
-            </View>
-
-            <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
-              <ScrollView contentContainerStyle={{ padding: 15 }}>
-                {selectedWorkout?.exercises?.map((exercise) => (
-                  <View key={exercise.id} style={styles.exerciseCard}>
-                    <Text style={styles.exerciseName}>{exercise.name}</Text>
-                    <View style={styles.tableHeader}>
-                      <Text style={[styles.tableHeaderText, { flex: 0.5 }]}>SET</Text>
-                      <Text style={[styles.tableHeaderText, { flex: 1 }]}>PREV</Text>
-                      <Text style={[styles.tableHeaderText, { flex: 1 }]}>KG</Text>
-                      <Text style={[styles.tableHeaderText, { flex: 1 }]}>REPS</Text>
-                    </View>
-                    {exercise.sets.map((set, index) => (
-                      <View key={set.id} style={styles.setRow}>
-                        <Text style={[styles.setText, { flex: 0.5 }]}>{index + 1}</Text>
-                        <Text style={[styles.setText, { flex: 1, color: '#555' }]}>{set.prev}</Text>
-                        <TextInput style={styles.setInput} keyboardType="numeric" value={set.weight} onChangeText={(v) => updateSetData(exercise.id, set.id, 'weight', v)} placeholder="0" placeholderTextColor="#444"/>
-                        <TextInput style={styles.setInput} keyboardType="numeric" value={set.reps} onChangeText={(v) => updateSetData(exercise.id, set.id, 'reps', v)} placeholder="0" placeholderTextColor="#444"/>
-                      </View>
-                    ))}
-                  </View>
-                ))}
-              </ScrollView>
-            </KeyboardAvoidingView>
-            <TouchableOpacity style={styles.finishBtn} onPress={() => setIsDetailVisible(false)}><Text style={styles.finishBtnText}>Finish Workout</Text></TouchableOpacity>
-          </SafeAreaView>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -176,38 +209,31 @@ const styles = StyleSheet.create({
   header: { padding: 25, paddingTop: 40 },
   title: { fontSize: 28, fontWeight: 'bold', color: '#fff' },
   listContent: { padding: 20, paddingBottom: 100 },
-  glassCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.07)',
-    borderRadius: 20, padding: 15, marginBottom: 15,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.1)',
-  },
+  glassCard: { backgroundColor: 'rgba(255, 255, 255, 0.07)', borderRadius: 20, padding: 15, marginBottom: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.1)' },
   workoutMain: { flexDirection: 'row', alignItems: 'center', flex: 1 },
   iconCircle: { backgroundColor: 'rgba(29, 185, 84, 0.1)', padding: 10, borderRadius: 12, marginRight: 15 },
-  workoutName: { color: '#fff', fontSize: 18, fontWeight: '600' },
+  workoutName: { color: '#fff', fontSize: 16, fontWeight: '600' },
   actionButtons: { flexDirection: 'row', alignItems: 'center' },
   playBtn: { backgroundColor: '#1DB954', width: 35, height: 35, borderRadius: 18, justifyContent: 'center', alignItems: 'center', marginLeft: 15 },
   deleteBtn: { padding: 8 },
   fab: { position: 'absolute', bottom: 90, right: 25, backgroundColor: '#1DB954', width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', elevation: 8 },
+  
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center', padding: 20 },
   glassMenu: { backgroundColor: '#1c1c1e', width: '100%', borderRadius: 30, padding: 25, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
   menuTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 20, textAlign: 'center' },
   menuOption: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.05)', padding: 18, borderRadius: 15, marginBottom: 12 },
+  menuOptionExpanded: { borderBottomLeftRadius: 0, borderBottomRightRadius: 0, marginBottom: 0 },
   menuOptionText: { color: '#fff', fontSize: 16, fontWeight: '600', marginLeft: 15 },
-  closeText: { color: '#b3b3b3', textAlign: 'center', marginTop: 10 },
-  presetCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 15, marginBottom: 10 },
-  presetName: { color: '#fff', fontWeight: '600' },
-  detailContainer: { flex: 1, backgroundColor: '#121212' },
-  detailHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15 },
-  detailTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
-  exerciseCard: { backgroundColor: '#1c1c1e', borderRadius: 15, padding: 15, marginBottom: 20 },
-  exerciseName: { color: '#1DB954', fontSize: 16, fontWeight: '700', marginBottom: 15 },
-  tableHeader: { flexDirection: 'row', marginBottom: 10 },
-  tableHeaderText: { color: '#666', fontSize: 12, textAlign: 'center' },
-  setRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: '#333' },
-  setText: { color: '#fff', textAlign: 'center' },
-  setInput: { flex: 1, backgroundColor: '#2c2c2e', color: '#fff', borderRadius: 8, padding: 6, marginHorizontal: 5, textAlign: 'center' },
-  finishBtn: { backgroundColor: '#1DB954', margin: 20, padding: 18, borderRadius: 30, alignItems: 'center' },
-  finishBtnText: { color: '#000', fontWeight: 'bold' },
-  emptyText: { color: '#555', textAlign: 'center', marginTop: 50 }
+  chevron: { marginLeft: 'auto' },
+  expandedContainer: { backgroundColor: 'rgba(255,255,255,0.02)', padding: 15, borderBottomLeftRadius: 15, borderBottomRightRadius: 15, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', borderTopWidth: 0 },
+  expandedItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)' },
+  expandedItemName: { color: '#fff', fontSize: 15, fontWeight: 'bold' },
+  expandedItemSub: { color: '#1DB954', fontSize: 12, marginTop: 4 },
+  closeText: { color: '#b3b3b3', textAlign: 'center', fontSize: 16 },
+  emptyText: { color: '#555', textAlign: 'center', marginTop: 50 },
+
+  // STILURI PENTRU MODALUL DE NUMIRE
+  nameInput: { backgroundColor: '#2c2c2e', color: '#fff', borderRadius: 12, padding: 15, fontSize: 16, marginBottom: 20, borderWidth: 1, borderColor: '#333' },
+  saveNameBtn: { backgroundColor: '#1DB954', padding: 15, borderRadius: 15, alignItems: 'center' },
+  saveNameBtnText: { color: '#000', fontWeight: 'bold', fontSize: 16 }
 });

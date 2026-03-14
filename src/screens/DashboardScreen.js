@@ -1,13 +1,14 @@
 import React, { useState, useCallback } from 'react';
 import {
   StyleSheet, View, Text, ScrollView, SafeAreaView,
-  Dimensions, TouchableOpacity, Modal
+  Dimensions, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Alert
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import {
-  Flame, User, Settings, LogIn, X, Bell, ShieldCheck,
-  HelpCircle, Ruler, ChevronRight, Edit3, Footprints, Droplets, Clock, Moon, 
-  Trophy, Calendar, TrendingUp, Target, Award, Activity, Crown
+  Flame, User, LogIn, X, Bell, ShieldCheck,
+  HelpCircle, Ruler, ChevronRight, Edit3, Footprints, Droplets, Clock, Moon,
+  Trophy, TrendingUp, Target, Award, Activity, Crown,
+  CheckCircle2, Plus, Trash2, ChevronDown, ChevronUp, Edit2, Check, Zap
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Circle, G, Polygon } from 'react-native-svg';
@@ -19,7 +20,6 @@ const WATER_BLUE = '#3b82f6';
 const SLEEP_PURPLE = '#a29bfe';
 const CARD_BG = '#121212';
 
-// Temele din noul tău Dashboard
 const RING_THEMES = {
   'r1': { color: '#00FF66', type: 'standard', perimeter: 283 },
   'r2': { color: '#FF3300', type: 'inferno', perimeter: 283 },
@@ -38,18 +38,27 @@ export default function DashboardScreen() {
   const [isMenuVisible, setMenuVisible] = useState(false);
   const [isProfileModalVisible, setProfileModalVisible] = useState(false);
   const [isWaterModalVisible, setWaterModalVisible] = useState(false);
+  const [isAddTaskModalVisible, setAddTaskModalVisible] = useState(false);
 
   const [userProfile, setUserProfile] = useState(null);
+  const [stepsGoal, setStepsGoal] = useState(10000);
   const [dailyStats, setDailyStats] = useState({
     steps: 0,
     calories: 0,
-    activity: 0,
-    sleep: 0,
+    activity: 42,
+    sleep: 7.5,
     water: 0
   });
 
+  const [tasks, setTasks] = useState([]);
+  const [isTasksCollapsed, setIsTasksCollapsed] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [isCustomExpanded, setIsCustomExpanded] = useState(false);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskGoal, setNewTaskGoal] = useState('');
+  const [taskType, setTaskType] = useState('manual');
+
   const WATER_GOAL = 3000;
-  const STEPS_GOAL = 10000;
 
   useFocusEffect(
     useCallback(() => {
@@ -60,31 +69,50 @@ export default function DashboardScreen() {
   const fetchProfileAndStats = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
-      // Preluăm profilul cu datele despre itemele echipate
       const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
-      if (profile) setUserProfile(profile);
+      if (profile) {
+        setUserProfile(profile);
+        setStepsGoal(profile.step_goal || 10000);
+      }
 
-      // Logica nouă de preluare a caloriilor
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const isoToday = today.toISOString();
+      const todayStr = isoToday.split('T')[0];
 
-      const { data: foodLogs, error } = await supabase
+      const { data: foodLogs } = await supabase
         .from('scanned_foods')
         .select('calories')
         .eq('user_id', user.id)
         .gte('scanned_at', isoToday);
 
-      if (error) {
-        console.error("Eroare preluare calorii:", error);
+      const totalCalories = foodLogs ? foodLogs.reduce((sum, log) => sum + (Number(log.calories) || 0), 0) : 0;
+
+      const { data: stepsLog } = await supabase
+        .from('daily_steps')
+        .select('step_count')
+        .eq('user_id', user.id)
+        .eq('record_date', todayStr)
+        .maybeSingle();
+
+      let totalSteps = 0;
+
+      if (!stepsLog) {
+        await supabase.from('daily_steps').insert([
+          { user_id: user.id, record_date: todayStr, step_count: 0 }
+        ]);
+      } else {
+        totalSteps = stepsLog.step_count;
       }
 
-      const totalCalories = foodLogs ? foodLogs.reduce((sum, log) => sum + (Number(log.calories) || 0), 0) : 0;
-      
       setDailyStats(prev => ({
         ...prev,
-        calories: totalCalories
+        calories: totalCalories,
+        steps: totalSteps
       }));
+
+      const { data: tasksData } = await supabase.from('tasks').select('*').order('created_at', { ascending: true });
+      if (tasksData) setTasks(tasksData);
     }
   };
 
@@ -93,10 +121,80 @@ export default function DashboardScreen() {
     setWaterModalVisible(false);
   };
 
-  // Randarea dinamică a inelului de progres (Din Dashboard nou)
+  const handleAddTask = async (type = taskType) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    let finalTitle = "";
+    let finalGoal = parseFloat(newTaskGoal) || 0;
+
+    if (type === 'manual') {
+      if (!newTaskTitle.trim()) return;
+      finalTitle = newTaskTitle;
+    } else if (type === 'water') {
+      if (!finalGoal) return;
+      finalTitle = `Drink ${finalGoal}L Water`;
+    } else if (type === 'steps') {
+      if (!finalGoal) return;
+      finalTitle = `Walk ${finalGoal.toLocaleString()} steps`;
+    }
+
+    const tempId = Date.now().toString();
+    const newTask = { id: tempId, title: finalTitle, goal: finalGoal, type: type, completed: false };
+    setTasks(prev => [...prev, newTask]);
+    resetAndCloseModal();
+
+    try {
+      const { data, error } = await supabase.from('tasks').insert([{
+        user_id: user.id,
+        title: newTask.title,
+        goal: newTask.goal,
+        type: newTask.type,
+        completed: false
+      }]).select();
+
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        setTasks(prev => prev.map(t => t.id === tempId ? data[0] : t));
+      }
+    } catch (err) {
+      if (Platform.OS === 'web') {
+        window.alert(err.message);
+      } else {
+        Alert.alert("Eroare", err.message);
+      }
+    }
+  };
+
+  const resetAndCloseModal = () => {
+    setAddTaskModalVisible(false);
+    setIsCustomExpanded(false);
+    setNewTaskTitle('');
+    setNewTaskGoal('');
+    setTaskType('manual');
+  };
+
+  const deleteTask = async (id) => {
+    setTasks(prev => prev.filter(t => t.id !== id));
+    await supabase.from('tasks').delete().eq('id', id);
+  };
+
+  const toggleTask = async (id, currentStatus) => {
+    if (isEditMode) return;
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: !currentStatus } : t));
+    await supabase.from('tasks').update({ completed: !currentStatus }).eq('id', id);
+  };
+
+  const isTaskAutoCompleted = (task) => {
+    if (task.type === 'water') return (dailyStats.water / 1000) >= task.goal;
+    if (task.type === 'steps') return dailyStats.steps >= task.goal;
+    return task.completed;
+  };
+
   const renderProgressShape = () => {
     const theme = RING_THEMES[userProfile?.equipped_ring] || RING_THEMES['r1'];
-    const progress = Math.min(dailyStats.steps / STEPS_GOAL, 1);
+    const progress = Math.min(dailyStats.steps / stepsGoal, 1);
     const offset = theme.perimeter - (theme.perimeter * progress);
 
     return (
@@ -141,13 +239,12 @@ export default function DashboardScreen() {
         <View style={styles.stepsInfoContainer}>
           <Footprints size={24} color={theme.color} />
           <Text style={styles.stepCount}>{dailyStats.steps}</Text>
-          <Text style={styles.stepGoal}>of {STEPS_GOAL} steps</Text>
+          <Text style={styles.stepGoal}>of {stepsGoal} steps</Text>
         </View>
       </View>
     );
   };
 
-  // Randarea dinamică a avatarului (Din Dashboard nou)
   const renderAvatar = (size, iconSize) => {
     const theme = AVATAR_THEMES[userProfile?.equipped_avatar] || AVATAR_THEMES['a1'];
     return (
@@ -171,7 +268,7 @@ export default function DashboardScreen() {
     <SafeAreaView style={styles.container}>
       <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-          
+
           <View style={styles.header}>
             <View style={styles.logoRow}>
               <View style={styles.logoAndName}>
@@ -186,35 +283,67 @@ export default function DashboardScreen() {
             <Text style={styles.welcomeText}>Hello, {userProfile?.first_name || 'User'}</Text>
           </View>
 
-          {/* Forma dinamică înlocuiește vechiul Svg static */}
           {renderProgressShape()}
 
-          <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>Today's Focus</Text></View>
-          
-          <TouchableOpacity 
-            style={[styles.taskCard, dailyStats.water >= WATER_GOAL && styles.neonBorder]}
-            onPress={() => setWaterModalVisible(true)}
-          >
-            <Droplets size={24} color={WATER_BLUE} />
-            <View style={styles.taskTextContainer}>
-              <Text style={styles.taskTitle}>Hydration Goal</Text>
-              <Text style={styles.taskDescription}>
-                {(dailyStats.water / 1000).toFixed(2)}L / {(WATER_GOAL / 1000).toFixed(1)}L
-              </Text>
+          <View style={styles.sectionHeader}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Text style={styles.sectionTitle}>Today's Focus</Text>
+              {tasks.length > 2 && (
+                <TouchableOpacity onPress={() => setIsTasksCollapsed(!isTasksCollapsed)} style={{ marginLeft: 12 }}>
+                  {isTasksCollapsed ? <ChevronDown color={NEON_GREEN} size={22} /> : <ChevronUp color={NEON_GREEN} size={22} />}
+                </TouchableOpacity>
+              )}
             </View>
-          </TouchableOpacity>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              {isEditMode && (
+                <TouchableOpacity onPress={() => setAddTaskModalVisible(true)} style={[styles.editButtonBorder, { marginRight: 12 }]}>
+                  <Plus color={NEON_GREEN} size={24} />
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity onPress={() => setIsEditMode(!isEditMode)} style={styles.editButtonBorder}>
+                {isEditMode ? <Check color={NEON_GREEN} size={24} /> : <Edit2 color={NEON_GREEN} size={22} />}
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <View>
+            {tasks.length === 0 ? (
+              <TouchableOpacity style={styles.emptyTaskPlaceholder} onPress={() => setAddTaskModalVisible(true)}>
+                <Plus color="#333" size={40} />
+                <Text style={styles.emptyTaskText}>Add your first task</Text>
+              </TouchableOpacity>
+            ) : (
+              (isTasksCollapsed ? tasks.slice(0, 2) : tasks).map(item => {
+                const completed = isTaskAutoCompleted(item);
+                return (
+                  <View key={item.id} style={[styles.taskCard, completed && styles.neonBorder]}>
+                    <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }} onPress={() => toggleTask(item.id, item.completed)}>
+                      {completed ? <CheckCircle2 size={24} color={NEON_GREEN} /> : <View style={styles.circleOutline} />}
+                      <View style={{ marginLeft: 15 }}>
+                        <Text style={styles.taskTitleText}>{item.title}</Text>
+                        {item.type === 'water' && <Text style={styles.taskSub}>{(dailyStats.water / 1000).toFixed(2)}L / {item.goal}L</Text>}
+                      </View>
+                    </TouchableOpacity>
+                    {isEditMode && <TouchableOpacity onPress={() => deleteTask(item.id)}><Trash2 color="#FF4444" size={20} /></TouchableOpacity>}
+                  </View>
+                );
+              })
+            )}
+          </View>
+
+
 
           <Text style={[styles.sectionTitle, { marginLeft: 20, marginTop: 25, marginBottom: 15 }]}>Daily Summary</Text>
           <View style={styles.statsGrid}>
             <StatCardWrapper icon={<Flame size={16} color={NEON_GREEN}/>} label="CALORIES" value={dailyStats.calories} unit="kcal" color={NEON_GREEN} />
             <StatCardWrapper icon={<Clock size={16} color="#4D79FF"/>} label="ACTIVITY" value={dailyStats.activity} unit="mins" color="#4D79FF" />
             <StatCardWrapper icon={<Moon size={16} color={SLEEP_PURPLE}/>} label="SLEEP" value={dailyStats.sleep} unit="hrs" color={SLEEP_PURPLE} />
-            <StatCardWrapper 
-              icon={<Droplets size={16} color={WATER_BLUE}/>} 
-              label="WATER" 
-              value={(dailyStats.water / 1000).toFixed(2)} 
-              unit="L" 
-              color={WATER_BLUE} 
+            <StatCardWrapper
+              icon={<Droplets size={16} color={WATER_BLUE}/>}
+              label="WATER"
+              value={(dailyStats.water / 1000).toFixed(2)}
+              unit="L"
+              color={WATER_BLUE}
               onPress={() => setWaterModalVisible(true)}
             />
           </View>
@@ -222,9 +351,79 @@ export default function DashboardScreen() {
         </ScrollView>
       </LinearGradient>
 
-      {/* --- SIDE MENU --- */}
+      <Modal visible={isAddTaskModalVisible} transparent animationType="slide">
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{flex: 1}}>
+          <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={resetAndCloseModal}>
+            <TouchableOpacity activeOpacity={1} style={styles.modalContentTasks}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>New Task</Text>
+                <TouchableOpacity onPress={resetAndCloseModal} style={styles.closeBtnContainer}>
+                  <X color="#666" size={24} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView bounces={false} showsVerticalScrollIndicator={false}>
+                <View style={styles.expandableSection}>
+                  <TouchableOpacity style={styles.sectionMainRow} onPress={() => { setIsCustomExpanded(!isCustomExpanded); setTaskType('manual'); }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Zap size={20} color={NEON_GREEN} style={{ marginRight: 15 }} />
+                      <Text style={styles.sectionLabelMain}>Custom Task</Text>
+                    </View>
+                    {isCustomExpanded ? <ChevronDown color={NEON_GREEN} size={20} /> : <ChevronRight color="#666" size={20} />}
+                  </TouchableOpacity>
+                  {isCustomExpanded && (
+                    <View style={styles.expandedContent}>
+                      <TextInput
+                        style={styles.modalInput}
+                        placeholder="E.g. Morning Yoga"
+                        placeholderTextColor="#444"
+                        value={newTaskTitle}
+                        onChangeText={setNewTaskTitle}
+                      />
+                      <TouchableOpacity style={styles.saveBtn} onPress={() => handleAddTask('manual')}>
+                        <Text style={styles.saveBtnText}>Add Task</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+
+                <View style={styles.divider} />
+
+                <View style={styles.suggestedGridTasks}>
+                  <TouchableOpacity style={[styles.suggestedItem, taskType === 'steps' && styles.selectedItem]} onPress={() => setTaskType('steps')}>
+                    <Footprints color={taskType === 'steps' ? NEON_GREEN : "#666"} size={32} />
+                    <Text style={[styles.suggestedText, taskType === 'steps' && {color: NEON_GREEN}]}>Steps</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.suggestedItem, taskType === 'water' && styles.selectedItem]} onPress={() => setTaskType('water')}>
+                    <Droplets color={taskType === 'water' ? WATER_BLUE : "#666"} size={32} />
+                    <Text style={[styles.suggestedText, taskType === 'water' && {color: WATER_BLUE}]}>Water</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {(taskType === 'steps' || taskType === 'water') && (
+                  <View style={{ width: '100%', marginTop: 20 }}>
+                    <TextInput
+                      style={styles.modalInput}
+                      placeholder={taskType === 'steps' ? "Goal: 10000 steps" : "Goal: 2.5 liters"}
+                      placeholderTextColor="#444"
+                      keyboardType="numeric"
+                      value={newTaskGoal}
+                      onChangeText={(t) => setNewTaskGoal(t.replace(/[^0-9.]/g, ''))}
+                    />
+                    <TouchableOpacity style={[styles.saveBtn, { backgroundColor: NEON_GREEN }]} onPress={() => handleAddTask(taskType)}>
+                      <Text style={styles.saveBtnText}>Set Goal</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+                <View style={{ height: 40 }} />
+              </ScrollView>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </KeyboardAvoidingView>
+      </Modal>
+
       <Modal visible={isMenuVisible} transparent animationType="fade">
-        <View style={styles.menuOverlay}>
+        <View style={styles.menuOverlaySide}>
           <TouchableOpacity style={styles.menuCloseArea} onPress={() => setMenuVisible(false)} />
           <View style={styles.sideMenuContent}>
             <View style={styles.sidebarProfileSection}>
@@ -253,10 +452,9 @@ export default function DashboardScreen() {
         </View>
       </Modal>
 
-      {/* --- MODAL APA --- */}
       <Modal transparent visible={isWaterModalVisible} animationType="fade">
         <View style={styles.modalOverlayFull}>
-          <View style={styles.modalContent}>
+          <View style={styles.modalContentWater}>
             <Droplets size={48} color={WATER_BLUE} style={{ marginBottom: 25 }} />
             <Text style={styles.modalTitle}>Add Water</Text>
             <View style={styles.selectionGrid}>
@@ -271,12 +469,11 @@ export default function DashboardScreen() {
         </View>
       </Modal>
 
-      {/* --- MODAL DETALII PROFIL --- */}
       <Modal visible={isProfileModalVisible} animationType="slide">
         <View style={styles.profileContainer}>
           <LinearGradient colors={['#000000', '#0a0a0a']} style={{ flex: 1 }}>
             <SafeAreaView style={{ flex: 1 }}>
-              
+
               <View style={styles.profileHeaderContent}>
                 <TouchableOpacity onPress={() => setProfileModalVisible(false)} style={styles.backBtn}>
                   <X color="#FFF" size={28} />
@@ -288,7 +485,7 @@ export default function DashboardScreen() {
               </View>
 
               <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
-                
+
                 <View style={styles.mainInfoSection}>
                   <View style={styles.bigAvatarContainer}>
                     {renderAvatar(110, 60)}
@@ -301,8 +498,8 @@ export default function DashboardScreen() {
                 </View>
 
                 <View style={styles.streakCard}>
-                  <LinearGradient 
-                    colors={['rgba(30, 215, 96, 0.15)', 'rgba(0,0,0,0)']} 
+                  <LinearGradient
+                    colors={['rgba(30, 215, 96, 0.15)', 'rgba(0,0,0,0)']}
                     start={{x: 0, y: 0}} end={{x: 1, y: 1}}
                     style={styles.streakGradient}
                   >
@@ -330,7 +527,7 @@ export default function DashboardScreen() {
                     <Text style={styles.profileSectionTitle}>Recent Activity</Text>
                     <TouchableOpacity><Text style={styles.seeMore}>View History</Text></TouchableOpacity>
                   </View>
-                  
+
                   <RecentWorkoutItem title="Push Day" date="Yesterday" duration="55 min" intensity="Hard" />
                   <RecentWorkoutItem title="Back & Biceps" date="3 days ago" duration="42 min" intensity="Medium" />
                   <RecentWorkoutItem title="Leg Day" date="Last week" duration="65 min" intensity="Insane" />
@@ -355,7 +552,6 @@ export default function DashboardScreen() {
   );
 }
 
-// COMPONENTE HELPER
 function MenuOption({ icon, label }) {
   return (
     <TouchableOpacity style={styles.menuOption}>
@@ -422,22 +618,28 @@ const styles = StyleSheet.create({
   appName: { color: '#FFF', fontSize: 22, fontWeight: 'bold', marginLeft: 10 },
   dateText: { color: '#666', marginTop: 15, fontSize: 14 },
   welcomeText: { color: '#FFF', fontSize: 32, fontWeight: 'bold' },
-  
+
   progressContainer: { alignItems: 'center', marginVertical: 40, justifyContent: 'center' },
   ringWrapper: { width: 220, height: 220, justifyContent: 'center', alignItems: 'center' },
   absoluteIcon: { position: 'absolute' },
   stepsInfoContainer: { position: 'absolute', alignItems: 'center' },
   stepCount: { color: '#FFF', fontSize: 42, fontWeight: 'bold' },
   stepGoal: { color: '#666', fontSize: 14 },
-  
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 15 },
+
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 15, alignItems: 'center' },
   sectionTitle: { color: '#FFF', fontSize: 20, fontWeight: 'bold' },
+  editButtonBorder: { width: 42, height: 42, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: '#333', borderRadius: 12, backgroundColor: '#121212' },
+  emptyTaskPlaceholder: { height: 120, marginHorizontal: 20, borderRadius: 25, borderStyle: 'dashed', borderWidth: 1, borderColor: '#222', justifyContent: 'center', alignItems: 'center' },
+  emptyTaskText: { color: '#333', marginTop: 10, fontWeight: '600' },
   taskCard: { backgroundColor: CARD_BG, marginHorizontal: 20, borderRadius: 20, padding: 20, flexDirection: 'row', alignItems: 'center', marginBottom: 12, borderWidth: 1, borderColor: '#222' },
   neonBorder: { borderColor: NEON_GREEN + 'AA' },
+  circleOutline: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#333' },
+  taskTitleText: { color: '#FFF', fontSize: 16, fontWeight: 'bold' },
+  taskSub: { color: '#666', fontSize: 12 },
   taskTextContainer: { marginLeft: 15 },
   taskTitle: { color: '#FFF', fontSize: 16, fontWeight: 'bold' },
   taskDescription: { color: '#666', fontSize: 12 },
-  
+
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 16, justifyContent: 'space-between' },
   statCardWrapper: { width: '48%', marginBottom: 12 },
   statCardInner: { backgroundColor: CARD_BG, borderRadius: 22, padding: 16, height: 110, justifyContent: 'space-between', borderWidth: 1, borderColor: '#222' },
@@ -446,8 +648,25 @@ const styles = StyleSheet.create({
   statValueContainer: { flexDirection: 'row', alignItems: 'baseline' },
   statValue: { color: '#FFF', fontSize: 24, fontWeight: 'bold' },
   statUnit: { color: '#666', fontSize: 11, marginLeft: 5 },
-  
-  menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', flexDirection: 'row' },
+
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end' },
+  modalContentTasks: { backgroundColor: '#161616', borderTopLeftRadius: 35, borderTopRightRadius: 35, padding: 25, width: '100%', maxHeight: '85%' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 25 },
+  closeBtnContainer: { padding: 6, backgroundColor: '#222', borderRadius: 12 },
+  expandableSection: { width: '100%', paddingVertical: 10 },
+  sectionMainRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  sectionLabelMain: { color: '#FFF', fontSize: 18, fontWeight: '600' },
+  expandedContent: { marginTop: 20 },
+  modalInput: { backgroundColor: '#222', borderRadius: 15, padding: 18, color: '#FFF', fontSize: 16, marginBottom: 15 },
+  saveBtn: { backgroundColor: NEON_GREEN, padding: 18, borderRadius: 15, alignItems: 'center' },
+  saveBtnText: { color: '#000', fontWeight: 'bold' },
+  divider: { height: 1, backgroundColor: '#222', marginVertical: 15 },
+  suggestedGridTasks: { flexDirection: 'row', justifyContent: 'space-between' },
+  suggestedItem: { alignItems: 'center', paddingVertical: 25, borderRadius: 25, backgroundColor: '#1c1c1c', width: '48%', borderWidth: 1, borderColor: 'transparent' },
+  selectedItem: { backgroundColor: '#252525', borderColor: '#333' },
+  suggestedText: { color: '#666', marginTop: 12, fontWeight: 'bold' },
+
+  menuOverlaySide: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', flexDirection: 'row' },
   menuCloseArea: { flex: 1 },
   sideMenuContent: { width: width * 0.75, backgroundColor: '#121212', padding: 25, paddingTop: 60 },
   sidebarProfileSection: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
@@ -461,22 +680,20 @@ const styles = StyleSheet.create({
   menuFooter: { marginTop: 'auto', paddingTop: 20 },
   logoutButton: { flexDirection: 'row', alignItems: 'center', paddingVertical: 15 },
   logoutText: { color: '#FF4444', fontSize: 16, fontWeight: 'bold', marginLeft: 15 },
-  
+
   modalOverlayFull: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' },
-  modalContent: { backgroundColor: '#121212', borderRadius: 32, padding: 30, width: '85%', alignItems: 'center', borderWidth: 1, borderColor: '#222' },
+  modalContentWater: { backgroundColor: '#121212', borderRadius: 32, padding: 30, width: '85%', alignItems: 'center', borderWidth: 1, borderColor: '#222' },
   modalTitle: { color: '#FFF', fontSize: 24, fontWeight: 'bold', marginBottom: 30 },
   selectionGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', width: '100%' },
   amountButton: { backgroundColor: '#1c2533', paddingVertical: 20, borderRadius: 16, marginBottom: 15, width: '47%', alignItems: 'center' },
   amountButtonText: { color: '#FFF', fontWeight: 'bold', fontSize: 16 },
   closeBtnText: { color: '#666', fontSize: 16, marginTop: 10 },
 
-  // STILURI NOI PENTRU AVATAR DIN SHOP
   avatarBase: { justifyContent: 'center', alignItems: 'center', backgroundColor: '#1A1A1A', overflow: 'hidden' },
   avatarCrown: { position: 'absolute', top: -12 },
   avatarFlameBack: { position: 'absolute', opacity: 0.3, zIndex: -1 },
   avatarGlitchOverlay: { position: 'absolute', opacity: 0.5, marginLeft: 4 },
 
-  // PROFILE STYLES
   profileContainer: { flex: 1, backgroundColor: '#000' },
   profileHeaderContent: { flexDirection: 'row', justifyContent: 'space-between', padding: 20, alignItems: 'center' },
   headerTitle: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
