@@ -156,8 +156,29 @@ export default function WorkoutDetailScreen({ route, navigation }) {
         'Acest antrenament nu va fi validat! Este obligatoriu ca toate seturile să fie bifate (DONE) pentru a putea termina și salva progresul.', 
         [{ text: 'Am înțeles', style: 'cancel' }]
       );
+      return; 
+    }
+
+    let totalSets = 0;
+    currentWorkout.exercises.forEach(ex => {
+      totalSets += ex.sets.length;
+    });
+
+    const MIN_SECONDS_PER_SET = 60; 
+    const minRequiredSeconds = totalSets * MIN_SECONDS_PER_SET;
+
+    if (timer < minRequiredSeconds) {
+      const minutesSpent = Math.floor(timer / 60);
+      const minimumMinutes = Math.floor(minRequiredSeconds / 60);
+
+      Alert.alert(
+        'Antrenament Suspect de Rapid 🏃💨',
+        `Ai încercat să finalizezi ${totalSets} seturi în doar ${minutesSpent} minute.\n\nTimpul minim fizic estimat pentru acest volum este de cel puțin ~${minimumMinutes} minute.\n\nFără scurtături! Ia-ți pauzele corecte și execută exercițiile pentru a primi XP-ul.`,
+        [{ text: 'Înapoi la treabă', style: 'default' }]
+      );
       return;
     }
+
     processWorkoutCompletion();
   };
 

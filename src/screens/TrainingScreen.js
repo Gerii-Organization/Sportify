@@ -31,147 +31,152 @@ export default function TrainingScreen({ navigation }) {
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
       if (data) setMyWorkouts(data);
+    } else {
+      setMyWorkouts([]); // Resetăm dacă nu e logat
     }
   };
 
   const fetchUserDataAndGenerateWorkouts = async () => {
     const { data: { user } } = await supabase.auth.getUser();
+    let goal = 'maintain';
+    let sex = 'M';
+
     if (user) {
-      const { data: profile } = await supabase.from('profiles').select('goal, sex').eq('id', user.id).single();
-      const goal = profile?.goal || 'maintain';
-      const sex = profile?.sex || 'M';
-      
-      const genSets = (w, r) => Array.from({ length: 4 }).map(() => ({ 
-        id: Math.random().toString(), weight: w, reps: r, prev: '-', completed: false 
-      }));
+      const { data: profile } = await supabase.from('profiles').select('goal, sex').eq('id', user.id).maybeSingle();
+      goal = profile?.goal || 'maintain';
+      sex = profile?.sex || 'M';
+    }
 
-      let generated = [];
+    const genSets = (w, r) => Array.from({ length: 4 }).map(() => ({
+      id: Math.random().toString(), weight: w, reps: r, prev: '-', completed: false
+    }));
 
-      if (goal === 'lose_weight') {
+    let generated = [];
+
+    if (goal === 'lose_weight') {
+      generated = [
+        { name: 'Cardio & Core Burn', duration: '35 min', intensity: 'Medium', exercises: [
+          { id: 'e1', name: 'Jumping Jacks', sets: genSets('0', '30') },
+          { id: 'e2', name: 'Burpees', sets: genSets('0', '15') },
+          { id: 'e3', name: 'Mountain Climbers', sets: genSets('0', '40') },
+          { id: 'e4', name: 'Crunches', sets: genSets('0', '20') },
+          { id: 'e5', name: 'Plank', sets: genSets('0', '60') }
+        ]},
+        { name: 'Fat Burner HIIT', duration: '40 min', intensity: 'Hard', exercises: [
+          { id: 'e1', name: 'High Knees', sets: genSets('0', '40') },
+          { id: 'e2', name: 'Squat Jumps', sets: genSets('0', '15') },
+          { id: 'e3', name: 'Push-ups', sets: genSets('0', '12') },
+          { id: 'e4', name: 'Lunges', sets: genSets('0', '20') },
+          { id: 'e5', name: 'Bicycle Crunches', sets: genSets('0', '30') }
+        ]},
+        { name: 'Full Body Sweater', duration: '45 min', intensity: 'Hard', exercises: [
+          { id: 'e1', name: 'Kettlebell Swings', sets: genSets('12', '20') },
+          { id: 'e2', name: 'Dumbbell Thrusters', sets: genSets('10', '15') },
+          { id: 'e3', name: 'Renegade Rows', sets: genSets('10', '16') },
+          { id: 'e4', name: 'Box Jumps', sets: genSets('0', '12') },
+          { id: 'e5', name: 'Russian Twists', sets: genSets('5', '30') }
+        ]}
+      ];
+    } else if (goal === 'build_muscle') {
+      if (sex.toUpperCase() === 'M') {
         generated = [
-          { name: 'Cardio & Core Burn', duration: '35 min', intensity: 'Medium', exercises: [
-            { id: 'e1', name: 'Jumping Jacks', sets: genSets('0', '30') },
-            { id: 'e2', name: 'Burpees', sets: genSets('0', '15') },
-            { id: 'e3', name: 'Mountain Climbers', sets: genSets('0', '40') },
-            { id: 'e4', name: 'Crunches', sets: genSets('0', '20') },
-            { id: 'e5', name: 'Plank', sets: genSets('0', '60') }
+          { name: 'Piept & Triceps', duration: '60 min', intensity: 'Hard', exercises: [
+            { id: 'e1', name: 'Bench Press', sets: genSets('60', '10') },
+            { id: 'e2', name: 'Incline DB Press', sets: genSets('24', '10') },
+            { id: 'e3', name: 'Chest Fly', sets: genSets('15', '12') },
+            { id: 'e4', name: 'Overhead Tricep Ext', sets: genSets('20', '12') },
+            { id: 'e5', name: 'Cable Pushdown', sets: genSets('25', '12') }
           ]},
-          { name: 'Fat Burner HIIT', duration: '40 min', intensity: 'Hard', exercises: [
-            { id: 'e1', name: 'High Knees', sets: genSets('0', '40') },
-            { id: 'e2', name: 'Squat Jumps', sets: genSets('0', '15') },
-            { id: 'e3', name: 'Push-ups', sets: genSets('0', '12') },
-            { id: 'e4', name: 'Lunges', sets: genSets('0', '20') },
-            { id: 'e5', name: 'Bicycle Crunches', sets: genSets('0', '30') }
+          { name: 'Spate & Biceps', duration: '60 min', intensity: 'Hard', exercises: [
+            { id: 'e1', name: 'Lat Pulldown', sets: genSets('50', '10') },
+            { id: 'e2', name: 'Barbell Row', sets: genSets('60', '10') },
+            { id: 'e3', name: 'Face Pulls', sets: genSets('15', '15') },
+            { id: 'e4', name: 'Barbell Curl', sets: genSets('30', '10') },
+            { id: 'e5', name: 'Hammer Curl', sets: genSets('14', '12') }
           ]},
-          { name: 'Full Body Sweater', duration: '45 min', intensity: 'Hard', exercises: [
-            { id: 'e1', name: 'Kettlebell Swings', sets: genSets('12', '20') },
-            { id: 'e2', name: 'Dumbbell Thrusters', sets: genSets('10', '15') },
-            { id: 'e3', name: 'Renegade Rows', sets: genSets('10', '16') },
-            { id: 'e4', name: 'Box Jumps', sets: genSets('0', '12') },
-            { id: 'e5', name: 'Russian Twists', sets: genSets('5', '30') }
-          ]}
-        ];
-      } else if (goal === 'build_muscle') {
-        if (sex.toUpperCase() === 'M') {
-          generated = [
-            { name: 'Piept & Triceps', duration: '60 min', intensity: 'Hard', exercises: [
-              { id: 'e1', name: 'Bench Press', sets: genSets('60', '10') },
-              { id: 'e2', name: 'Incline DB Press', sets: genSets('24', '10') },
-              { id: 'e3', name: 'Chest Fly', sets: genSets('15', '12') },
-              { id: 'e4', name: 'Overhead Tricep Ext', sets: genSets('20', '12') },
-              { id: 'e5', name: 'Cable Pushdown', sets: genSets('25', '12') }
-            ]},
-            { name: 'Spate & Biceps', duration: '60 min', intensity: 'Hard', exercises: [
-              { id: 'e1', name: 'Lat Pulldown', sets: genSets('50', '10') },
-              { id: 'e2', name: 'Barbell Row', sets: genSets('60', '10') },
-              { id: 'e3', name: 'Face Pulls', sets: genSets('15', '15') },
-              { id: 'e4', name: 'Barbell Curl', sets: genSets('30', '10') },
-              { id: 'e5', name: 'Hammer Curl', sets: genSets('14', '12') }
-            ]},
-            { name: 'Umeri & Picioare', duration: '65 min', intensity: 'Insane', exercises: [
-              { id: 'e1', name: 'Squats', sets: genSets('80', '8') },
-              { id: 'e2', name: 'Leg Press', sets: genSets('120', '10') },
-              { id: 'e3', name: 'Overhead Press', sets: genSets('40', '8') },
-              { id: 'e4', name: 'Lateral Raises', sets: genSets('10', '15') },
-              { id: 'e5', name: 'Calf Raises', sets: genSets('60', '15') }
-            ]}
-          ];
-        } else {
-          generated = [
-            { name: 'Glutes & Legs Focus', duration: '55 min', intensity: 'Hard', exercises: [
-              { id: 'e1', name: 'Hip Thrusts', sets: genSets('60', '12') },
-              { id: 'e2', name: 'Romanian Deadlifts', sets: genSets('40', '12') },
-              { id: 'e3', name: 'Bulgarian Split Squats', sets: genSets('12', '10') },
-              { id: 'e4', name: 'Leg Extensions', sets: genSets('30', '15') },
-              { id: 'e5', name: 'Cable Kickbacks', sets: genSets('10', '15') }
-            ]},
-            { name: 'Upper Body Toning', duration: '45 min', intensity: 'Medium', exercises: [
-              { id: 'e1', name: 'Dumbbell Press', sets: genSets('12', '12') },
-              { id: 'e2', name: 'Lat Pulldown', sets: genSets('30', '12') },
-              { id: 'e3', name: 'Dumbbell Rows', sets: genSets('14', '10') },
-              { id: 'e4', name: 'Lateral Raises', sets: genSets('6', '15') },
-              { id: 'e5', name: 'Tricep Pushdown', sets: genSets('15', '15') }
-            ]},
-            { name: 'Full Body Curves', duration: '50 min', intensity: 'Hard', exercises: [
-              { id: 'e1', name: 'Goblet Squat', sets: genSets('20', '12') },
-              { id: 'e2', name: 'Push-ups', sets: genSets('0', '10') },
-              { id: 'e3', name: 'Walking Lunges', sets: genSets('10', '20') },
-              { id: 'e4', name: 'Face Pulls', sets: genSets('15', '15') },
-              { id: 'e5', name: 'Plank', sets: genSets('0', '60') }
-            ]}
-          ];
-        }
-      } else if (goal === 'gain_strength') {
-        generated = [
-          { name: 'Heavy Lifts (Picioare)', duration: '60 min', intensity: 'Insane', exercises: [
-            { id: 'e1', name: 'Barbell Squat', sets: genSets('100', '5') },
-            { id: 'e2', name: 'Leg Press', sets: genSets('150', '5') },
-            { id: 'e3', name: 'RDL', sets: genSets('80', '5') },
-            { id: 'e4', name: 'Weighted Lunges', sets: genSets('20', '8') },
-            { id: 'e5', name: 'Calf Raises', sets: genSets('80', '10') }
-          ]},
-          { name: 'Push Power (Piept/Umeri)', duration: '55 min', intensity: 'Hard', exercises: [
-            { id: 'e1', name: 'Bench Press', sets: genSets('80', '5') },
-            { id: 'e2', name: 'Overhead Press', sets: genSets('50', '5') },
-            { id: 'e3', name: 'Incline DB Press', sets: genSets('30', '6') },
-            { id: 'e4', name: 'Weighted Dips', sets: genSets('10', '8') },
-            { id: 'e5', name: 'Skull Crushers', sets: genSets('30', '8') }
-          ]},
-          { name: 'Pull Power (Spate)', duration: '60 min', intensity: 'Insane', exercises: [
-            { id: 'e1', name: 'Deadlift', sets: genSets('120', '5') },
-            { id: 'e2', name: 'Weighted Pull-ups', sets: genSets('10', '5') },
-            { id: 'e3', name: 'Barbell Row', sets: genSets('80', '5') },
-            { id: 'e4', name: 'T-Bar Row', sets: genSets('40', '8') },
-            { id: 'e5', name: 'Barbell Curl', sets: genSets('40', '6') }
+          { name: 'Umeri & Picioare', duration: '65 min', intensity: 'Insane', exercises: [
+            { id: 'e1', name: 'Squats', sets: genSets('80', '8') },
+            { id: 'e2', name: 'Leg Press', sets: genSets('120', '10') },
+            { id: 'e3', name: 'Overhead Press', sets: genSets('40', '8') },
+            { id: 'e4', name: 'Lateral Raises', sets: genSets('10', '15') },
+            { id: 'e5', name: 'Calf Raises', sets: genSets('60', '15') }
           ]}
         ];
       } else {
         generated = [
-          { name: 'Full Body A', duration: '45 min', intensity: 'Medium', exercises: [
-            { id: 'e1', name: 'Squat', sets: genSets('50', '10') },
-            { id: 'e2', name: 'Bench Press', sets: genSets('50', '10') },
-            { id: 'e3', name: 'Barbell Row', sets: genSets('50', '10') },
-            { id: 'e4', name: 'Dumbbell Curl', sets: genSets('12', '12') },
-            { id: 'e5', name: 'Crunches', sets: genSets('0', '20') }
+          { name: 'Glutes & Legs Focus', duration: '55 min', intensity: 'Hard', exercises: [
+            { id: 'e1', name: 'Hip Thrusts', sets: genSets('60', '12') },
+            { id: 'e2', name: 'Romanian Deadlifts', sets: genSets('40', '12') },
+            { id: 'e3', name: 'Bulgarian Split Squats', sets: genSets('12', '10') },
+            { id: 'e4', name: 'Leg Extensions', sets: genSets('30', '15') },
+            { id: 'e5', name: 'Cable Kickbacks', sets: genSets('10', '15') }
           ]},
-          { name: 'Full Body B', duration: '45 min', intensity: 'Medium', exercises: [
-            { id: 'e1', name: 'Deadlift', sets: genSets('60', '10') },
-            { id: 'e2', name: 'Overhead Press', sets: genSets('30', '10') },
-            { id: 'e3', name: 'Lat Pulldown', sets: genSets('40', '10') },
-            { id: 'e4', name: 'Tricep Pushdown', sets: genSets('20', '12') },
+          { name: 'Upper Body Toning', duration: '45 min', intensity: 'Medium', exercises: [
+            { id: 'e1', name: 'Dumbbell Press', sets: genSets('12', '12') },
+            { id: 'e2', name: 'Lat Pulldown', sets: genSets('30', '12') },
+            { id: 'e3', name: 'Dumbbell Rows', sets: genSets('14', '10') },
+            { id: 'e4', name: 'Lateral Raises', sets: genSets('6', '15') },
+            { id: 'e5', name: 'Tricep Pushdown', sets: genSets('15', '15') }
+          ]},
+          { name: 'Full Body Curves', duration: '50 min', intensity: 'Hard', exercises: [
+            { id: 'e1', name: 'Goblet Squat', sets: genSets('20', '12') },
+            { id: 'e2', name: 'Push-ups', sets: genSets('0', '10') },
+            { id: 'e3', name: 'Walking Lunges', sets: genSets('10', '20') },
+            { id: 'e4', name: 'Face Pulls', sets: genSets('15', '15') },
             { id: 'e5', name: 'Plank', sets: genSets('0', '60') }
-          ]},
-          { name: 'Core & Mobility', duration: '35 min', intensity: 'Light', exercises: [
-            { id: 'e1', name: 'Lunge Twists', sets: genSets('0', '20') },
-            { id: 'e2', name: 'Push-ups', sets: genSets('0', '15') },
-            { id: 'e3', name: 'Bodyweight Squats', sets: genSets('0', '20') },
-            { id: 'e4', name: 'Supermans', sets: genSets('0', '15') },
-            { id: 'e5', name: 'Leg Raises', sets: genSets('0', '20') }
           ]}
         ];
       }
-      setSuggestedWorkouts(generated);
+    } else if (goal === 'gain_strength') {
+      generated = [
+        { name: 'Heavy Lifts (Picioare)', duration: '60 min', intensity: 'Insane', exercises: [
+          { id: 'e1', name: 'Barbell Squat', sets: genSets('100', '5') },
+          { id: 'e2', name: 'Leg Press', sets: genSets('150', '5') },
+          { id: 'e3', name: 'RDL', sets: genSets('80', '5') },
+          { id: 'e4', name: 'Weighted Lunges', sets: genSets('20', '8') },
+          { id: 'e5', name: 'Calf Raises', sets: genSets('80', '10') }
+        ]},
+        { name: 'Push Power (Piept/Umeri)', duration: '55 min', intensity: 'Hard', exercises: [
+          { id: 'e1', name: 'Bench Press', sets: genSets('80', '5') },
+          { id: 'e2', name: 'Overhead Press', sets: genSets('50', '5') },
+          { id: 'e3', name: 'Incline DB Press', sets: genSets('30', '6') },
+          { id: 'e4', name: 'Weighted Dips', sets: genSets('10', '8') },
+          { id: 'e5', name: 'Skull Crushers', sets: genSets('30', '8') }
+        ]},
+        { name: 'Pull Power (Spate)', duration: '60 min', intensity: 'Insane', exercises: [
+          { id: 'e1', name: 'Deadlift', sets: genSets('120', '5') },
+          { id: 'e2', name: 'Weighted Pull-ups', sets: genSets('10', '5') },
+          { id: 'e3', name: 'Barbell Row', sets: genSets('80', '5') },
+          { id: 'e4', name: 'T-Bar Row', sets: genSets('40', '8') },
+          { id: 'e5', name: 'Barbell Curl', sets: genSets('40', '6') }
+        ]}
+      ];
+    } else {
+      generated = [
+        { name: 'Full Body A', duration: '45 min', intensity: 'Medium', exercises: [
+          { id: 'e1', name: 'Squat', sets: genSets('50', '10') },
+          { id: 'e2', name: 'Bench Press', sets: genSets('50', '10') },
+          { id: 'e3', name: 'Barbell Row', sets: genSets('50', '10') },
+          { id: 'e4', name: 'Dumbbell Curl', sets: genSets('12', '12') },
+          { id: 'e5', name: 'Crunches', sets: genSets('0', '20') }
+        ]},
+        { name: 'Full Body B', duration: '45 min', intensity: 'Medium', exercises: [
+          { id: 'e1', name: 'Deadlift', sets: genSets('60', '10') },
+          { id: 'e2', name: 'Overhead Press', sets: genSets('30', '10') },
+          { id: 'e3', name: 'Lat Pulldown', sets: genSets('40', '10') },
+          { id: 'e4', name: 'Tricep Pushdown', sets: genSets('20', '12') },
+          { id: 'e5', name: 'Plank', sets: genSets('0', '60') }
+        ]},
+        { name: 'Core & Mobility', duration: '35 min', intensity: 'Light', exercises: [
+          { id: 'e1', name: 'Lunge Twists', sets: genSets('0', '20') },
+          { id: 'e2', name: 'Push-ups', sets: genSets('0', '15') },
+          { id: 'e3', name: 'Bodyweight Squats', sets: genSets('0', '20') },
+          { id: 'e4', name: 'Supermans', sets: genSets('0', '15') },
+          { id: 'e5', name: 'Leg Raises', sets: genSets('0', '20') }
+        ]}
+      ];
     }
+    setSuggestedWorkouts(generated);
   };
 
   const confirmDeleteWorkout = (id) => {
@@ -179,8 +184,11 @@ export default function TrainingScreen({ navigation }) {
       { text: "Anulează", style: "cancel" },
       { text: "Șterge", style: "destructive", onPress: async () => {
           setMyWorkouts(myWorkouts.filter(w => w.id !== id));
-          await supabase.from('user_workouts').delete().eq('id', id);
-        } 
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user) {
+            await supabase.from('user_workouts').delete().eq('id', id);
+          }
+        }
       }
     ]);
   };
@@ -194,26 +202,45 @@ export default function TrainingScreen({ navigation }) {
   const handleCreateNamedWorkout = async () => {
     const finalName = newWorkoutName.trim() || 'Custom Session';
     setIsNamingModalVisible(false);
-    
-    const { data: { user } } = await supabase.auth.getUser();
-    const { data } = await supabase.from('user_workouts').insert({
-      user_id: user.id, name: finalName, exercises: []
-    }).select().single();
 
-    if (data) {
-      setMyWorkouts([data, ...myWorkouts]);
-      openWorkoutDetail(data); 
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (user) {
+      const { data } = await supabase.from('user_workouts').insert({
+        user_id: user.id, name: finalName, exercises: []
+      }).select().single();
+
+      if (data) {
+        setMyWorkouts([data, ...myWorkouts]);
+        openWorkoutDetail(data);
+      }
+    } else {
+      const newWorkout = { id: Date.now().toString(), name: finalName, exercises: [] };
+      setMyWorkouts([newWorkout, ...myWorkouts]);
+      openWorkoutDetail(newWorkout);
     }
   };
 
   const addPreset = async (item) => {
     const { data: { user } } = await supabase.auth.getUser();
-    const { data } = await supabase.from('user_workouts').insert({
-      user_id: user.id, name: item.name, duration: item.duration,
-      intensity: item.intensity, exercises: item.exercises || []
-    }).select().single();
 
-    if (data) setMyWorkouts([data, ...myWorkouts]);
+    if (user) {
+      const { data } = await supabase.from('user_workouts').insert({
+        user_id: user.id, name: item.name, duration: item.duration,
+        intensity: item.intensity, exercises: item.exercises || []
+      }).select().single();
+
+      if (data) setMyWorkouts([data, ...myWorkouts]);
+    } else {
+      const newWorkout = {
+        id: Date.now().toString(),
+        name: item.name,
+        duration: item.duration,
+        intensity: item.intensity,
+        exercises: item.exercises || []
+      };
+      setMyWorkouts([newWorkout, ...myWorkouts]);
+    }
     closeMainMenu();
   };
 

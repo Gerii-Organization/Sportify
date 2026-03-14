@@ -4,6 +4,7 @@ import {
   Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView 
 } from 'react-native';
 import { supabase } from '../lib/supabase';
+import { X } from 'lucide-react-native';
 
 const NEON_GREEN = '#1ED760';
 
@@ -14,7 +15,7 @@ const GOALS = [
   { id: 'gain_strength', label: 'Forta' }
 ];
 
-export default function AuthScreen() {
+export default function AuthScreen({ navigation }) {
   const [isRegistering, setIsRegistering] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -60,11 +61,17 @@ export default function AuthScreen() {
           goal: goal,
         });
         if (profileError) Alert.alert('Eroare Profil', profileError.message);
-        else Alert.alert('Succes', 'Cont creat! Acum te poți loga.');
+        else {
+          Alert.alert('Succes', 'Cont creat! Acum te poți loga.');
+          toggleAuthMode(); // Trece automat pe modul de logare
+        }
       }
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       if (error) Alert.alert('Eroare', error.message);
+      else {
+        navigation.goBack(); // Ne intoarcem la Dashboard dupa logare cu succes
+      }
     }
     setLoading(false);
   };
@@ -72,9 +79,15 @@ export default function AuthScreen() {
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+
+        {/* Buton de Close pentru Guest Mode */}
+        <TouchableOpacity style={styles.closeBtn} onPress={() => navigation.goBack()}>
+          <X color="#FFF" size={32} />
+        </TouchableOpacity>
+
         <View style={styles.card}>
           <Text style={styles.title}>{isRegistering ? 'Hai să începem' : 'Bine ai revenit'}</Text>
-          
+
           <View style={styles.form}>
             <CustomInput label="Email" value={email} onChange={setEmail} placeholder="vic@test.com" autoCap="none" />
             <CustomInput label="Parolă" value={password} onChange={setPassword} placeholder="******" secure />
@@ -84,12 +97,12 @@ export default function AuthScreen() {
                 <CustomInput label="Confirmă Parola" value={confirmPassword} onChange={setConfirmPassword} placeholder="******" secure />
                 <View style={styles.divider} />
                 <Text style={styles.sectionTitle}>Obiectivul Tău</Text>
-                
+
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.goalContainer}>
                   {GOALS.map(g => (
-                    <TouchableOpacity 
-                      key={g.id} 
-                      style={[styles.chip, goal === g.id && styles.chipActive]} 
+                    <TouchableOpacity
+                      key={g.id}
+                      style={[styles.chip, goal === g.id && styles.chipActive]}
                       onPress={() => setGoal(g.id)}
                     >
                       <Text style={[styles.chipText, goal === g.id && styles.chipTextActive]}>{g.label}</Text>
@@ -141,6 +154,7 @@ function CustomInput({ label, value, onChange, placeholder, secure, autoCap, key
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
+  closeBtn: { alignSelf: 'flex-end', marginBottom: 20, padding: 5 },
   scrollContent: { padding: 20, paddingTop: 60, paddingBottom: 40 },
   card: { backgroundColor: '#121212', borderRadius: 30, padding: 25, borderWidth: 1, borderColor: '#222' },
   title: { color: '#FFF', fontSize: 28, fontWeight: 'bold', marginBottom: 30, textAlign: 'center' },

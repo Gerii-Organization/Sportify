@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { StyleSheet } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { BlurView } from 'expo-blur';
-import { supabase } from './src/lib/supabase';
 
 import AuthScreen from './src/screens/AuthScreen';
 import DashboardScreen from './src/screens/DashboardScreen';
@@ -79,39 +78,21 @@ function MainTabs() {
 }
 
 export default function App() {
-  const [session, setSession] = useState(null);
-  const [isManualAuth, setIsManualAuth] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setLoading(false);
-    });
-
-    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-    });
-
-    return () => {
-      authListener.subscription.unsubscribe();
-    };
-  }, []);
-
-  if (session || isManualAuth) {
-    return (
-      <NavigationContainer>
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="MainTabs" component={MainTabs} />
-          <Stack.Screen 
-            name="WorkoutDetailScreen" 
-            component={WorkoutDetailScreen} 
-            options={{ presentation: 'fullScreenModal' }}
-          />
-        </Stack.Navigator>
-      </NavigationContainer>
-    );
-  }
-
-  return <AuthScreen onManualLogin={() => setIsManualAuth(true)} />;
+  return (
+    <NavigationContainer>
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="MainTabs" component={MainTabs} />
+        <Stack.Screen
+          name="WorkoutDetailScreen"
+          component={WorkoutDetailScreen}
+          options={{ presentation: 'fullScreenModal' }}
+        />
+        <Stack.Screen
+          name="AuthScreen"
+          component={AuthScreen}
+          options={{ presentation: 'modal' }}
+        />
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
 }

@@ -53,7 +53,14 @@ export default function ShopScreen() {
     try {
       setLoading(true);
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      if (!user) {
+        setBalance(0);
+        setRings(CATALOG_RINGS.map(item => ({ ...item, owned: false, equipped: false })));
+        setAvatars(CATALOG_AVATARS.map(item => ({ ...item, owned: false, equipped: false })));
+        setBadges(CATALOG_BADGES.map(item => ({ ...item, owned: false, equipped: false })));
+        setLoading(false); // FOARTE IMPORTANT! Altfel rămâne blocat.
+        return;
+      }
 
       const { data: profile, error: profileError } = await supabase
         .from('profiles')

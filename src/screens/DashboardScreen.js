@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   StyleSheet, View, Text, ScrollView, SafeAreaView,
   Dimensions, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Alert
@@ -13,6 +13,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Circle, G, Polygon } from 'react-native-svg';
 import { supabase } from '../lib/supabase';
+import { Pedometer } from 'expo-sensors';
 
 const { width } = Dimensions.get('window');
 const NEON_GREEN = '#1ED760';
@@ -34,7 +35,8 @@ const AVATAR_THEMES = {
   'a4': { color: '#FF00FF', type: 'glitch' },
 };
 
-export default function DashboardScreen() {
+export default function DashboardScreen({ navigation, route }) {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isMenuVisible, setMenuVisible] = useState(false);
   const [isProfileModalVisible, setProfileModalVisible] = useState(false);
   const [isWaterModalVisible, setWaterModalVisible] = useState(false);
@@ -45,7 +47,7 @@ export default function DashboardScreen() {
   const [dailyStats, setDailyStats] = useState({
     steps: 0,
     calories: 0,
-    activity: 42,
+    activity: 0,
     sleep: 7.5,
     water: 0
   });
@@ -57,8 +59,69 @@ export default function DashboardScreen() {
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskGoal, setNewTaskGoal] = useState('');
   const [taskType, setTaskType] = useState('manual');
+  const [isPedometerAvailable, setIsPedometerAvailable] = useState(null);
+  const [deviceSteps, setDeviceSteps] = useState(0);
 
   const WATER_GOAL = 3000;
+
+  // Actualizare vizuală imediată când te întorci de la antrenament
+  useEffect(() => {
+    if (route.params?.newActivityMinutes) {
+      setDailyStats(prev => ({ ...prev, activity: prev.activity + route.params.newActivityMinutes }));
+      navigation.setParams({ newActivityMinutes: undefined });
+    }
+  }, [route.params?.newActivityMinutes]);
+
+  const saveStepsToSupabase = async (steps) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const todayStr = new Date().toISOString().split('T')[0];
+
+      const { data: existing } = await supabase.from('daily_steps').select('id').eq('user_id', user.id).eq('record_date', todayStr).maybeSingle();
+
+      if (existing) {
+        await supabase.from('daily_steps').update({ step_count: steps }).eq('id', existing.id);
+      } else {
+        await supabase.from('daily_steps').insert([{ user_id: user.id, record_date: todayStr, step_count: steps }]);
+      }
+    } catch (e) { }
+  };
+
+  useEffect(() => {
+    let subscription;
+    const subscribePedometer = async () => {
+      try {
+        const available = await Pedometer.isAvailableAsync();
+        setIsPedometerAvailable(available);
+        if (!available) return;
+
+        const end = new Date();
+        const start = new Date();
+        start.setHours(0, 0, 0, 0);
+
+        const result = await Pedometer.getStepCountAsync(start, end);
+        const initialSteps = result?.steps || 0;
+        setDeviceSteps(initialSteps);
+        setDailyStats(prev => ({ ...prev, steps: initialSteps }));
+        saveStepsToSupabase(initialSteps);
+
+        subscription = Pedometer.watchStepCount(stepResult => {
+          setDeviceSteps(prev => {
+            const updated = Math.max(prev, stepResult.steps);
+            setDailyStats(p => ({ ...p, steps: updated }));
+            saveStepsToSupabase(updated);
+            return updated;
+          });
+        });
+      } catch (e) {
+        setIsPedometerAvailable(false);
+      }
+    };
+    subscribePedometer();
+    return () => { if (subscription) subscription.remove(); };
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -68,62 +131,39 @@ export default function DashboardScreen() {
 
   const fetchProfileAndStats = async () => {
     const { data: { user } } = await supabase.auth.getUser();
+
     if (user) {
+      setIsLoggedIn(true);
       const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
       if (profile) {
         setUserProfile(profile);
         setStepsGoal(profile.step_goal || 10000);
       }
 
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const isoToday = today.toISOString();
-      const todayStr = isoToday.split('T')[0];
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const todayStr = `${year}-${month}-${day}`;
 
-      const { data: foodLogs } = await supabase
-        .from('scanned_foods')
-        .select('calories')
-        .eq('user_id', user.id)
-        .gte('scanned_at', isoToday);
+      const isoMidnight = new Date(year, now.getMonth(), now.getDate()).toISOString();
 
+      const { data: foodLogs } = await supabase.from('scanned_foods').select('calories').eq('user_id', user.id).gte('scanned_at', isoMidnight);
       const totalCalories = foodLogs ? foodLogs.reduce((sum, log) => sum + (Number(log.calories) || 0), 0) : 0;
 
-      const { data: stepsLog } = await supabase
-        .from('daily_steps')
-        .select('step_count')
-        .eq('user_id', user.id)
-        .eq('record_date', todayStr)
-        .maybeSingle();
+      // CITIM MINUTELE DIN TABELUL ZILNIC
+      const { data: statLog } = await supabase.from('daily_stats').select('activity_minutes').eq('user_id', user.id).eq('date', todayStr).maybeSingle();
+      const totalActivityMinutes = statLog?.activity_minutes || 0;
 
-      let totalSteps = 0;
-
-      if (!stepsLog) {
-        await supabase.from('daily_steps').insert([
-          { user_id: user.id, record_date: todayStr, step_count: 0 }
-        ]);
-      } else {
-        totalSteps = stepsLog.step_count;
-      }
-
-      const { data: trainingSessions } = await supabase
-        .from('training_sessions')
-        .select('minutes, performed_at')
-        .eq('user_id', user.id)
-        .gte('performed_at', isoToday);
-
-      const totalActivityMinutes = trainingSessions
-        ? trainingSessions.reduce((sum, session) => sum + (Number(session.minutes) || 0), 0)
-        : 0;
-
-      setDailyStats(prev => ({
-        ...prev,
-        calories: totalCalories,
-        steps: totalSteps,
-        activity: totalActivityMinutes
-      }));
+      setDailyStats(prev => ({ ...prev, calories: totalCalories, activity: totalActivityMinutes }));
 
       const { data: tasksData } = await supabase.from('tasks').select('*').order('created_at', { ascending: true });
       if (tasksData) setTasks(tasksData);
+    } else {
+      setIsLoggedIn(false);
+      setUserProfile(null);
+      setDailyStats(prev => ({ ...prev, calories: 0, activity: 0, sleep: 7.5, water: 0 }));
+      setTasks([]);
     }
   };
 
@@ -133,9 +173,6 @@ export default function DashboardScreen() {
   };
 
   const handleAddTask = async (type = taskType) => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
     let finalTitle = "";
     let finalGoal = parseFloat(newTaskGoal) || 0;
 
@@ -152,29 +189,20 @@ export default function DashboardScreen() {
 
     const tempId = Date.now().toString();
     const newTask = { id: tempId, title: finalTitle, goal: finalGoal, type: type, completed: false };
+
     setTasks(prev => [...prev, newTask]);
     resetAndCloseModal();
 
-    try {
-      const { data, error } = await supabase.from('tasks').insert([{
-        user_id: user.id,
-        title: newTask.title,
-        goal: newTask.goal,
-        type: newTask.type,
-        completed: false
-      }]).select();
-
-      if (error) throw error;
-
-      if (data && data.length > 0) {
-        setTasks(prev => prev.map(t => t.id === tempId ? data[0] : t));
-      }
-    } catch (err) {
-      if (Platform.OS === 'web') {
-        window.alert(err.message);
-      } else {
-        Alert.alert("Eroare", err.message);
-      }
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      try {
+        const { data } = await supabase.from('tasks').insert([{
+          user_id: user.id, title: newTask.title, goal: newTask.goal, type: newTask.type, completed: false
+        }]).select();
+        if (data && data.length > 0) {
+          setTasks(prev => prev.map(t => t.id === tempId ? data[0] : t));
+        }
+      } catch (err) {}
     }
   };
 
@@ -188,13 +216,15 @@ export default function DashboardScreen() {
 
   const deleteTask = async (id) => {
     setTasks(prev => prev.filter(t => t.id !== id));
-    await supabase.from('tasks').delete().eq('id', id);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) await supabase.from('tasks').delete().eq('id', id);
   };
 
   const toggleTask = async (id, currentStatus) => {
     if (isEditMode) return;
     setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: !currentStatus } : t));
-    await supabase.from('tasks').update({ completed: !currentStatus }).eq('id', id);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) await supabase.from('tasks').update({ completed: !currentStatus }).eq('id', id);
   };
 
   const isTaskAutoCompleted = (task) => {
@@ -216,26 +246,17 @@ export default function DashboardScreen() {
             {theme.type === 'toxic' ? (
               <G>
                 <Polygon points="50,5 95,85 5,85" stroke="#1A1A1A" strokeWidth="4" fill="transparent" />
-                <Polygon
-                  points="50,5 95,85 5,85" stroke={theme.color} strokeWidth="4" fill="transparent"
-                  strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round"
-                />
+                <Polygon points="50,5 95,85 5,85" stroke={theme.color} strokeWidth="4" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" />
               </G>
             ) : theme.type === 'cyber' ? (
               <G>
                 <Polygon points="50,5 90,25 90,75 50,95 10,75 10,25" stroke="#1A1A1A" strokeWidth="4" fill="transparent" />
-                <Polygon
-                  points="50,5 90,25 90,75 50,95 10,75 10,25" stroke={theme.color} strokeWidth="4" fill="transparent"
-                  strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round"
-                />
+                <Polygon points="50,5 90,25 90,75 50,95 10,75 10,25" stroke={theme.color} strokeWidth="4" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" />
               </G>
             ) : (
               <G transform="rotate(-90 50 50)">
                 <Circle cx="50" cy="50" r="45" stroke="#1A1A1A" strokeWidth="6" fill="transparent" />
-                <Circle
-                  cx="50" cy="50" r="45" stroke={theme.color} strokeWidth="6" fill="transparent"
-                  strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round"
-                />
+                <Circle cx="50" cy="50" r="45" stroke={theme.color} strokeWidth="6" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" />
               </G>
             )}
           </Svg>
@@ -259,19 +280,21 @@ export default function DashboardScreen() {
 
   const renderAvatar = (size, iconSize) => {
     const theme = AVATAR_THEMES[userProfile?.equipped_avatar] || AVATAR_THEMES['a1'];
+    const strokeColor = isLoggedIn ? theme.color : '#444';
+
     return (
       <View style={[
         styles.avatarBase,
-        { width: size, height: size, borderRadius: size / 2, borderColor: theme.color },
-        theme.type === 'royal' && { borderWidth: 3 },
-        theme.type === 'demon' && { borderWidth: 2, borderStyle: 'dashed' },
-        theme.type === 'glitch' && { borderWidth: 2, borderRadius: size / 4 },
-        theme.type === 'standard' && { borderWidth: 1 }
+        { width: size, height: size, borderRadius: size / 2, borderColor: strokeColor },
+        isLoggedIn && theme.type === 'royal' && { borderWidth: 3 },
+        isLoggedIn && theme.type === 'demon' && { borderWidth: 2, borderStyle: 'dashed' },
+        isLoggedIn && theme.type === 'glitch' && { borderWidth: 2, borderRadius: size / 4 },
+        isLoggedIn && theme.type === 'standard' && { borderWidth: 1 }
       ]}>
-        <User size={iconSize} color={theme.type === 'glitch' ? '#00EAFF' : theme.color} />
-        {theme.type === 'royal' && <Crown color={theme.color} size={iconSize * 0.8} style={styles.avatarCrown} fill="rgba(255, 215, 0, 0.3)" />}
-        {theme.type === 'demon' && <Flame color={theme.color} size={size * 0.8} style={styles.avatarFlameBack} />}
-        {theme.type === 'glitch' && <User size={iconSize} color="#FF00FF" style={styles.avatarGlitchOverlay} />}
+        <User size={iconSize} color={isLoggedIn ? (theme.type === 'glitch' ? '#00EAFF' : theme.color) : '#888'} />
+        {isLoggedIn && theme.type === 'royal' && <Crown color={theme.color} size={iconSize * 0.8} style={styles.avatarCrown} fill="rgba(255, 215, 0, 0.3)" />}
+        {isLoggedIn && theme.type === 'demon' && <Flame color={theme.color} size={size * 0.8} style={styles.avatarFlameBack} />}
+        {isLoggedIn && theme.type === 'glitch' && <User size={iconSize} color="#FF00FF" style={styles.avatarGlitchOverlay} />}
       </View>
     );
   };
@@ -292,7 +315,7 @@ export default function DashboardScreen() {
               </TouchableOpacity>
             </View>
             <Text style={styles.dateText}>{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</Text>
-            <Text style={styles.welcomeText}>Hello, {userProfile?.first_name || 'User'}</Text>
+            <Text style={styles.welcomeText}>Hello, {isLoggedIn ? (userProfile?.first_name || 'User') : 'Guest'}</Text>
           </View>
 
           {renderProgressShape()}
@@ -333,16 +356,8 @@ export default function DashboardScreen() {
                       {completed ? <CheckCircle2 size={24} color={NEON_GREEN} /> : <View style={styles.circleOutline} />}
                       <View style={{ marginLeft: 15 }}>
                         <Text style={styles.taskTitleText}>{item.title}</Text>
-                        {item.type === 'water' && (
-                          <Text style={styles.taskSub}>
-                            {(dailyStats.water / 1000).toFixed(2)}L / {item.goal}L
-                          </Text>
-                        )}
-                        {item.type === 'gym' && (
-                          <Text style={styles.taskSub}>
-                            {dailyStats.activity} min / {item.goal} min
-                          </Text>
-                        )}
+                        {item.type === 'water' && <Text style={styles.taskSub}>{(dailyStats.water / 1000).toFixed(2)}L / {item.goal}L</Text>}
+                        {item.type === 'gym' && <Text style={styles.taskSub}>{dailyStats.activity} min / {item.goal} min</Text>}
                       </View>
                     </TouchableOpacity>
                     {isEditMode && <TouchableOpacity onPress={() => deleteTask(item.id)}><Trash2 color="#FF4444" size={20} /></TouchableOpacity>}
@@ -352,21 +367,12 @@ export default function DashboardScreen() {
             )}
           </View>
 
-
-
           <Text style={[styles.sectionTitle, { marginLeft: 20, marginTop: 25, marginBottom: 15 }]}>Daily Summary</Text>
           <View style={styles.statsGrid}>
             <StatCardWrapper icon={<Flame size={16} color={NEON_GREEN}/>} label="CALORIES" value={dailyStats.calories} unit="kcal" color={NEON_GREEN} />
             <StatCardWrapper icon={<Clock size={16} color="#4D79FF"/>} label="ACTIVITY" value={dailyStats.activity} unit="mins" color="#4D79FF" />
             <StatCardWrapper icon={<Moon size={16} color={SLEEP_PURPLE}/>} label="SLEEP" value={dailyStats.sleep} unit="hrs" color={SLEEP_PURPLE} />
-            <StatCardWrapper
-              icon={<Droplets size={16} color={WATER_BLUE}/>}
-              label="WATER"
-              value={(dailyStats.water / 1000).toFixed(2)}
-              unit="L"
-              color={WATER_BLUE}
-              onPress={() => setWaterModalVisible(true)}
-            />
+            <StatCardWrapper icon={<Droplets size={16} color={WATER_BLUE}/>} label="WATER" value={(dailyStats.water / 1000).toFixed(2)} unit="L" color={WATER_BLUE} onPress={() => setWaterModalVisible(true)} />
           </View>
 
         </ScrollView>
@@ -382,63 +388,28 @@ export default function DashboardScreen() {
                   <X color="#666" size={24} />
                 </TouchableOpacity>
               </View>
-
               <ScrollView bounces={false} showsVerticalScrollIndicator={false}>
                 <View style={styles.expandableSection}>
                   <TouchableOpacity style={styles.sectionMainRow} onPress={() => { setIsCustomExpanded(!isCustomExpanded); setTaskType('manual'); }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      <Zap size={20} color={NEON_GREEN} style={{ marginRight: 15 }} />
-                      <Text style={styles.sectionLabelMain}>Custom Task</Text>
-                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}><Zap size={20} color={NEON_GREEN} style={{ marginRight: 15 }} /><Text style={styles.sectionLabelMain}>Custom Task</Text></View>
                     {isCustomExpanded ? <ChevronDown color={NEON_GREEN} size={20} /> : <ChevronRight color="#666" size={20} />}
                   </TouchableOpacity>
                   {isCustomExpanded && (
                     <View style={styles.expandedContent}>
-                      <TextInput
-                        style={styles.modalInput}
-                        placeholder="E.g. Morning Yoga"
-                        placeholderTextColor="#444"
-                        value={newTaskTitle}
-                        onChangeText={setNewTaskTitle}
-                      />
-                      <TouchableOpacity style={styles.saveBtn} onPress={() => handleAddTask('manual')}>
-                        <Text style={styles.saveBtnText}>Add Task</Text>
-                      </TouchableOpacity>
+                      <TextInput style={styles.modalInput} placeholder="E.g. Morning Yoga" placeholderTextColor="#444" value={newTaskTitle} onChangeText={setNewTaskTitle} />
+                      <TouchableOpacity style={styles.saveBtn} onPress={() => handleAddTask('manual')}><Text style={styles.saveBtnText}>Add Task</Text></TouchableOpacity>
                     </View>
                   )}
                 </View>
-
                 <View style={styles.divider} />
-
                 <View style={styles.suggestedGridTasks}>
-                  <TouchableOpacity
-                    style={[styles.suggestedItem, taskType === 'gym' && styles.selectedItem]}
-                    onPress={() => setTaskType('gym')}
-                  >
-                    <Dumbbell color={taskType === 'gym' ? NEON_GREEN : "#666"} size={32} />
-                    <Text style={[styles.suggestedText, taskType === 'gym' && { color: NEON_GREEN }]}>
-                      GYM
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.suggestedItem, taskType === 'water' && styles.selectedItem]} onPress={() => setTaskType('water')}>
-                    <Droplets color={taskType === 'water' ? WATER_BLUE : "#666"} size={32} />
-                    <Text style={[styles.suggestedText, taskType === 'water' && {color: WATER_BLUE}]}>Water</Text>
-                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.suggestedItem, taskType === 'gym' && styles.selectedItem]} onPress={() => setTaskType('gym')}><Dumbbell color={taskType === 'gym' ? NEON_GREEN : "#666"} size={32} /><Text style={[styles.suggestedText, taskType === 'gym' && { color: NEON_GREEN }]}>GYM</Text></TouchableOpacity>
+                  <TouchableOpacity style={[styles.suggestedItem, taskType === 'water' && styles.selectedItem]} onPress={() => setTaskType('water')}><Droplets color={taskType === 'water' ? WATER_BLUE : "#666"} size={32} /><Text style={[styles.suggestedText, taskType === 'water' && {color: WATER_BLUE}]}>Water</Text></TouchableOpacity>
                 </View>
-
                 {(taskType === 'gym' || taskType === 'water') && (
                   <View style={{ width: '100%', marginTop: 20 }}>
-                    <TextInput
-                      style={styles.modalInput}
-                      placeholder={taskType === 'gym' ? "Goal: 45 min" : "Goal: 2.5 liters"}
-                      placeholderTextColor="#444"
-                      keyboardType="numeric"
-                      value={newTaskGoal}
-                      onChangeText={(t) => setNewTaskGoal(t.replace(/[^0-9.]/g, ''))}
-                    />
-                    <TouchableOpacity style={[styles.saveBtn, { backgroundColor: NEON_GREEN }]} onPress={() => handleAddTask(taskType)}>
-                      <Text style={styles.saveBtnText}>Set Goal</Text>
-                    </TouchableOpacity>
+                    <TextInput style={styles.modalInput} placeholder={taskType === 'gym' ? "Goal: 45 min" : "Goal: 2.5 liters"} placeholderTextColor="#444" keyboardType="numeric" value={newTaskGoal} onChangeText={(t) => setNewTaskGoal(t.replace(/[^0-9.]/g, ''))} />
+                    <TouchableOpacity style={[styles.saveBtn, { backgroundColor: NEON_GREEN }]} onPress={() => handleAddTask(taskType)}><Text style={styles.saveBtnText}>Set Goal</Text></TouchableOpacity>
                   </View>
                 )}
                 <View style={{ height: 40 }} />
@@ -455,10 +426,14 @@ export default function DashboardScreen() {
             <View style={styles.sidebarProfileSection}>
               {renderAvatar(56, 30)}
               <View style={{ marginLeft: 15 }}>
-                <Text style={styles.sidebarName}>{userProfile?.first_name || 'User'}</Text>
-                <TouchableOpacity onPress={() => { setMenuVisible(false); setProfileModalVisible(true); }}>
-                  <Text style={styles.viewProfileSidebar}>View Profile</Text>
-                </TouchableOpacity>
+                <Text style={styles.sidebarName}>{isLoggedIn ? (userProfile?.first_name || 'User') : 'Guest'}</Text>
+                {isLoggedIn ? (
+                  <TouchableOpacity onPress={() => { setMenuVisible(false); setProfileModalVisible(true); }}>
+                    <Text style={styles.viewProfileSidebar}>View Profile</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <Text style={[styles.viewProfileSidebar, { color: '#888' }]}>Neautentificat</Text>
+                )}
               </View>
             </View>
             <View style={styles.menuDivider} />
@@ -470,9 +445,15 @@ export default function DashboardScreen() {
               <MenuOption icon={<HelpCircle color="#666" size={20}/>} label="Help & Support" />
             </ScrollView>
             <View style={styles.menuFooter}>
-              <TouchableOpacity style={styles.logoutButton} onPress={async () => await supabase.auth.signOut()}>
-                <LogIn color="#FF4444" size={20} /><Text style={styles.logoutText}>Sign Out</Text>
-              </TouchableOpacity>
+              {isLoggedIn ? (
+                <TouchableOpacity style={styles.logoutButton} onPress={async () => { await supabase.auth.signOut(); setMenuVisible(false); fetchProfileAndStats(); }}>
+                  <LogIn color="#FF4444" size={20} /><Text style={styles.logoutText}>Sign Out</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity style={styles.loginButtonWrapper} onPress={() => { setMenuVisible(false); navigation.navigate('AuthScreen'); }}>
+                  <Text style={styles.loginButtonText}>Log In / Create Account</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </View>
         </View>
@@ -485,9 +466,7 @@ export default function DashboardScreen() {
             <Text style={styles.modalTitle}>Add Water</Text>
             <View style={styles.selectionGrid}>
               {[250, 500, 750, 1000].map((amount) => (
-                <TouchableOpacity key={amount} style={styles.amountButton} onPress={() => addWater(amount)}>
-                  <Text style={styles.amountButtonText}>+{amount}ml</Text>
-                </TouchableOpacity>
+                <TouchableOpacity key={amount} style={styles.amountButton} onPress={() => addWater(amount)}><Text style={styles.amountButtonText}>+{amount}ml</Text></TouchableOpacity>
               ))}
             </View>
             <TouchableOpacity onPress={() => setWaterModalVisible(false)}><Text style={styles.closeBtnText}>Cancel</Text></TouchableOpacity>
@@ -533,7 +512,7 @@ export default function DashboardScreen() {
                       <Flame size={40} color={NEON_GREEN} fill={NEON_GREEN} />
                     </View>
                     <View>
-                      <Text style={styles.streakValue}>14 Days</Text>
+                      <Text style={styles.streakValue}>{userProfile?.current_streak || 0} Zile</Text>
                       <Text style={styles.streakLabel}>Current Streak</Text>
                     </View>
                     <View style={styles.streakChartPlaceholder}>
@@ -574,6 +553,7 @@ export default function DashboardScreen() {
           </LinearGradient>
         </View>
       </Modal>
+
     </SafeAreaView>
   );
 }
@@ -662,9 +642,6 @@ const styles = StyleSheet.create({
   circleOutline: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#333' },
   taskTitleText: { color: '#FFF', fontSize: 16, fontWeight: 'bold' },
   taskSub: { color: '#666', fontSize: 12 },
-  taskTextContainer: { marginLeft: 15 },
-  taskTitle: { color: '#FFF', fontSize: 16, fontWeight: 'bold' },
-  taskDescription: { color: '#666', fontSize: 12 },
 
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 16, justifyContent: 'space-between' },
   statCardWrapper: { width: '48%', marginBottom: 12 },
@@ -706,6 +683,9 @@ const styles = StyleSheet.create({
   menuFooter: { marginTop: 'auto', paddingTop: 20 },
   logoutButton: { flexDirection: 'row', alignItems: 'center', paddingVertical: 15 },
   logoutText: { color: '#FF4444', fontSize: 16, fontWeight: 'bold', marginLeft: 15 },
+
+  loginButtonWrapper: { backgroundColor: NEON_GREEN, paddingVertical: 15, borderRadius: 15, alignItems: 'center', marginTop: 'auto' },
+  loginButtonText: { color: '#000', fontSize: 16, fontWeight: 'bold' },
 
   modalOverlayFull: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' },
   modalContentWater: { backgroundColor: '#121212', borderRadius: 32, padding: 30, width: '85%', alignItems: 'center', borderWidth: 1, borderColor: '#222' },
