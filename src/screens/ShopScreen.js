@@ -1,11 +1,13 @@
 import React, { useState, useCallback } from 'react';
 import { StyleSheet, Text, View, ScrollView, TouchableOpacity, SafeAreaView, ActivityIndicator, Modal, Platform, Alert } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { useFocusEffect } from '@react-navigation/native';
 import { ShoppingBag, Zap, Circle, User, Shield, Check, Flame, Crown, Swords, Ghost, Hexagon, Triangle, ZapOff, BatteryCharging, Trophy } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 
-const NEON_GREEN = '#00FF66';
+const NEON_GREEN = '#1ED760';
+const CARD_BG = '#121212';
 
 const CATALOG_RINGS = [
   { id: 'r1', name: 'Standard Flow', price: 0, type: 'standard', color: '#00FF66' },
@@ -350,23 +352,34 @@ export default function ShopScreen() {
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={NEON_GREEN} />
-      </View>
+      <SafeAreaView style={styles.container}>
+        <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={NEON_GREEN} />
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
     );
   }
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Shop</Text>
-        <BlurView intensity={30} tint="dark" style={styles.balanceContainer}>
-          <Zap color="#FFD700" size={20} fill="#FFD700" />
-          <Text style={styles.balanceText}>{balance}</Text>
-        </BlurView>
-      </View>
+      <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
+        <View style={styles.header}>
+          <View style={styles.logoRow}>
+            <View style={styles.logoAndName}>
+              <View style={styles.logoMark}><Flame size={18} color="black" fill="black" /></View>
+              <Text style={styles.appName}>Sportify</Text>
+            </View>
+            <BlurView intensity={30} tint="dark" style={styles.balanceContainer}>
+              <Zap color="#FFD700" size={20} fill="#FFD700" />
+              <Text style={styles.balanceText}>{balance}</Text>
+            </BlurView>
+          </View>
+          <Text style={styles.screenTitle}>Shop</Text>
+        </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
 
         <Text style={styles.sectionTitle}>Power-Ups</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
@@ -383,9 +396,9 @@ export default function ShopScreen() {
           {avatars.map(avatar => renderItemCard(avatar, 'avatar'))}
         </ScrollView>
 
-      </ScrollView>
+        </ScrollView>
 
-      <Modal transparent visible={purchaseModalVisible} animationType="fade">
+        <Modal transparent visible={purchaseModalVisible} animationType="fade">
         <View style={styles.modalOverlayFull}>
           <View style={styles.modalContent}>
             <ShoppingBag size={48} color={NEON_GREEN} style={{ marginBottom: 20 }} />
@@ -403,24 +416,30 @@ export default function ShopScreen() {
             </View>
           </View>
         </View>
-      </Modal>
-
+        </Modal>
+      </LinearGradient>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
+  gradientBg: { flex: 1 },
   loadingContainer: { flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: 40 },
-  title: { fontSize: 32, fontWeight: 'bold', color: '#fff' },
+  header: { padding: 20, paddingTop: 40 },
+  logoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  logoAndName: { flexDirection: 'row', alignItems: 'center' },
+  logoMark: { width: 32, height: 32, backgroundColor: NEON_GREEN, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
+  appName: { color: '#FFF', fontSize: 22, fontWeight: 'bold', marginLeft: 10 },
+  screenTitle: { color: '#666', marginTop: 15, fontSize: 14 },
+  title: { color: '#FFF', fontSize: 32, fontWeight: 'bold', marginTop: 5 },
   balanceContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255, 215, 0, 0.2)' },
   balanceText: { color: '#FFD700', fontSize: 18, fontWeight: 'bold', marginLeft: 8 },
   scrollContent: { paddingBottom: 120 },
-  sectionTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginLeft: 20, marginTop: 20, marginBottom: 15 },
+  sectionTitle: { color: '#FFF', fontSize: 20, fontWeight: 'bold', marginLeft: 20, marginTop: 20, marginBottom: 15 },
   horizontalScroll: { paddingHorizontal: 15, paddingRight: 30 },
-  itemCard: { backgroundColor: '#0a0a0a', width: 140, borderRadius: 20, padding: 15, marginRight: 15, borderWidth: 1, borderColor: '#1A1A1A', alignItems: 'center' },
-  itemCardEquipped: { borderColor: NEON_GREEN, backgroundColor: 'rgba(0, 255, 102, 0.05)', shadowColor: NEON_GREEN, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.3, shadowRadius: 10, elevation: 5 },
+  itemCard: { backgroundColor: CARD_BG, width: 140, borderRadius: 22, padding: 15, marginRight: 15, borderWidth: 1, borderColor: '#222', alignItems: 'center' },
+  itemCardEquipped: { borderColor: NEON_GREEN + 'AA', backgroundColor: 'rgba(30, 215, 96, 0.05)', shadowColor: NEON_GREEN, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.3, shadowRadius: 10, elevation: 5 },
   itemPreviewBox: { width: 70, height: 70, borderRadius: 35, backgroundColor: 'rgba(255,255,255,0.02)', justifyContent: 'center', alignItems: 'center', marginBottom: 15 },
   previewContainer: { width: 50, height: 50, justifyContent: 'center', alignItems: 'center' },
   absoluteTop: { position: 'absolute', top: -10 },
@@ -440,7 +459,7 @@ const styles = StyleSheet.create({
   statusBadgeOwned: { backgroundColor: 'rgba(255, 255, 255, 0.08)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 },
   statusTextOwned: { color: '#fff', fontWeight: 'bold', fontSize: 12 },
   modalOverlayFull: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' },
-  modalContent: { backgroundColor: '#0a0a0a', borderRadius: 25, padding: 25, width: '85%', alignItems: 'center', borderWidth: 1, borderColor: '#1A1A1A' },
+  modalContent: { backgroundColor: CARD_BG, borderRadius: 32, padding: 25, width: '85%', alignItems: 'center', borderWidth: 1, borderColor: '#222' },
   modalTitle: { color: '#fff', fontSize: 22, fontWeight: 'bold', marginBottom: 10 },
   modalText: { color: '#aaa', fontSize: 16, textAlign: 'center', marginBottom: 25 },
   modalActions: { flexDirection: 'row', justifyContent: 'space-between', width: '100%' },

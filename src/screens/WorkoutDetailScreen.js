@@ -3,11 +3,15 @@ import {
   View, Text, StyleSheet, TouchableOpacity, 
   Modal, SafeAreaView, TextInput, ScrollView, KeyboardAvoidingView, Platform, FlatList, Alert 
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { 
   ChevronLeft, Edit3, Plus, X, Play, CheckCircle2, Circle, Clock, 
   Save, Trash2, Zap, Star, Flame, ChevronUp, ChevronDown 
 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
+
+const NEON_GREEN = '#1ED760';
+const CARD_BG = '#121212';
 
 const EXERCISE_DB = [
   { id: 'ex1', name: 'Barbell Bench Press', muscle: 'Chest' },
@@ -211,6 +215,14 @@ export default function WorkoutDetailScreen({ route, navigation }) {
         activity_minutes: currentMinutes + elapsedMinutes
       });
 
+      await supabase.from('workout_completions').insert([{
+        user_id: user.id,
+        workout_id: currentWorkout.id,
+        workout_name: currentWorkout.name || 'Workout',
+        completed_at: new Date().toISOString(),
+        duration_minutes: elapsedMinutes
+      }]);
+
       const { data: profile } = await supabase.from('profiles').select('xp, energy_points, current_streak, last_workout_date').eq('id', user.id).single();
 
       let newStreak = profile?.current_streak || 0;
@@ -302,26 +314,27 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.detailHeader}>
-        <TouchableOpacity onPress={handleBackPress}><ChevronLeft color="#fff" size={30} /></TouchableOpacity>
-        {mode === 'started' ? (
-          <View style={styles.timerHeader}><Clock color="#1DB954" size={20} /><Text style={styles.timerText}>{formatTime(timer)}</Text></View>
-        ) : (
-          <Text style={styles.detailTitle}>{currentWorkout?.name}</Text>
+      <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
+        <View style={styles.detailHeader}>
+          <TouchableOpacity onPress={handleBackPress}><ChevronLeft color="#fff" size={30} /></TouchableOpacity>
+          {mode === 'started' ? (
+            <View style={styles.timerHeader}><Clock color={NEON_GREEN} size={20} /><Text style={styles.timerText}>{formatTime(timer)}</Text></View>
+          ) : (
+            <Text style={styles.detailTitle}>{currentWorkout?.name}</Text>
+          )}
+          {mode === 'idle' && <TouchableOpacity onPress={toggleEditMode}><Edit3 color={NEON_GREEN} size={24} /></TouchableOpacity>}
+          {mode === 'editing' && <TouchableOpacity onPress={toggleEditMode}><Save color={NEON_GREEN} size={24} /></TouchableOpacity>}
+          {mode === 'started' && <View style={{width: 24}} />}
+        </View>
+
+        {mode === 'idle' && (
+          <TouchableOpacity style={styles.startBigBtn} onPress={() => setMode('started')}>
+            <Play color="#000" size={24} fill="#000" />
+            <Text style={styles.startBigBtnText}>Start Workout</Text>
+          </TouchableOpacity>
         )}
-        {mode === 'idle' && <TouchableOpacity onPress={toggleEditMode}><Edit3 color="#1DB954" size={24} /></TouchableOpacity>}
-        {mode === 'editing' && <TouchableOpacity onPress={toggleEditMode}><Save color="#1DB954" size={24} /></TouchableOpacity>}
-        {mode === 'started' && <View style={{width: 24}} />}
-      </View>
 
-      {mode === 'idle' && (
-        <TouchableOpacity style={styles.startBigBtn} onPress={() => setMode('started')}>
-          <Play color="#000" size={24} fill="#000" />
-          <Text style={styles.startBigBtnText}>Start Workout</Text>
-        </TouchableOpacity>
-      )}
-
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={{ padding: 15, paddingBottom: 100 }}>
           {currentWorkout?.exercises?.map((exercise, index) => (
             <View key={exercise.id} style={styles.exerciseCard}>
@@ -332,10 +345,10 @@ export default function WorkoutDetailScreen({ route, navigation }) {
                 {mode === 'editing' && (
                   <View style={styles.exerciseActionRow}>
                     <TouchableOpacity onPress={() => moveExerciseUp(index)} disabled={index === 0} style={{ opacity: index === 0 ? 0.2 : 1, paddingHorizontal: 5 }}>
-                      <ChevronUp color="#1DB954" size={24} />
+                      <ChevronUp color={NEON_GREEN} size={24} />
                     </TouchableOpacity>
                     <TouchableOpacity onPress={() => moveExerciseDown(index)} disabled={index === currentWorkout.exercises.length - 1} style={{ opacity: index === currentWorkout.exercises.length - 1 ? 0.2 : 1, paddingHorizontal: 5, marginRight: 15 }}>
-                      <ChevronDown color="#1DB954" size={24} />
+                      <ChevronDown color={NEON_GREEN} size={24} />
                     </TouchableOpacity>
                     <TouchableOpacity onPress={() => confirmDeleteExercise(exercise.id)}>
                       <Trash2 color="#ff4444" size={22} />
@@ -363,7 +376,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
                   {mode === 'started' && (
                     <TouchableOpacity style={styles.checkboxContainer} onPress={() => toggleSetCompletion(exercise.id, set.id)}>
-                      {set.completed ? <CheckCircle2 color="#1DB954" size={26} /> : <Circle color="#444" size={26} />}
+                      {set.completed ? <CheckCircle2 color={NEON_GREEN} size={26} /> : <Circle color="#444" size={26} />}
                     </TouchableOpacity>
                   )}
                   {mode === 'editing' && (
@@ -384,27 +397,28 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
           {mode === 'editing' && (
             <TouchableOpacity style={styles.addExerciseBtn} onPress={() => setIsExerciseSelectorVisible(true)}>
-              <Plus color="#1DB954" size={24} />
+              <Plus color={NEON_GREEN} size={24} />
               <Text style={styles.addExerciseText}>Adaugă Exercițiu</Text>
             </TouchableOpacity>
           )}
         </ScrollView>
-      </KeyboardAvoidingView>
+        </KeyboardAvoidingView>
 
-      {mode === 'started' && (
-        <View style={styles.finishContainer}>
-          <TouchableOpacity style={styles.finishBtn} onPress={handleFinishWorkout}>
-            <Text style={styles.finishBtnText}>Finish Workout</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+        {mode === 'started' && (
+          <View style={styles.finishContainer}>
+            <TouchableOpacity style={styles.finishBtn} onPress={handleFinishWorkout}>
+              <Text style={styles.finishBtnText}>Finish Workout</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
-      <Modal visible={showSummary} animationType="slide">
-        <SafeAreaView style={styles.summaryContainer}>
-          <ScrollView contentContainerStyle={styles.summaryScroll}>
-            <View style={styles.summaryHeader}>
-              <CheckCircle2 color="#1DB954" size={80} style={{ marginBottom: 20 }} />
-              <Text style={styles.summaryTitle}>ANTRENAMENT{'\n'}FINALIZAT!</Text>
+        <Modal visible={showSummary} animationType="slide">
+          <SafeAreaView style={styles.summaryContainer}>
+            <LinearGradient colors={['#000000', '#05180B']} style={{ flex: 1 }}>
+            <ScrollView contentContainerStyle={styles.summaryScroll}>
+              <View style={styles.summaryHeader}>
+                <CheckCircle2 color={NEON_GREEN} size={80} style={{ marginBottom: 20 }} />
+                <Text style={styles.summaryTitle}>ANTRENAMENT{'\n'}FINALIZAT!</Text>
               <Text style={styles.summaryMessage}>{workoutStats.message}</Text>
             </View>
 
@@ -451,71 +465,73 @@ export default function WorkoutDetailScreen({ route, navigation }) {
               </View>
             )}
 
-          </ScrollView>
+            </ScrollView>
 
-          <View style={styles.duoFooter}>
-            <TouchableOpacity style={styles.duoButton} onPress={closeSummaryAndExit}>
-              <Text style={styles.duoButtonText}>CONTINUĂ</Text>
-            </TouchableOpacity>
-          </View>
-        </SafeAreaView>
-      </Modal>
-
-      <Modal visible={isExerciseSelectorVisible} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.glassMenu, { height: '80%', padding: 20 }]}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.menuTitle}>Alege Exercițiul</Text>
-              <TouchableOpacity onPress={() => setIsExerciseSelectorVisible(false)}><X color="#fff" size={24} /></TouchableOpacity>
+            <View style={styles.duoFooter}>
+              <TouchableOpacity style={styles.duoButton} onPress={closeSummaryAndExit}>
+                <Text style={styles.duoButtonText}>CONTINUĂ</Text>
+              </TouchableOpacity>
             </View>
-            <FlatList
-              data={EXERCISE_DB} keyExtractor={item => item.id} showsVerticalScrollIndicator={false}
-              renderItem={({ item }) => (
-                <TouchableOpacity style={styles.exerciseDbItem} onPress={() => addNewExercise(item.name)}>
-                  <View><Text style={styles.exerciseDbName}>{item.name}</Text><Text style={styles.exerciseDbMuscle}>{item.muscle}</Text></View>
-                  <Plus color="#1DB954" size={20} />
-                </TouchableOpacity>
-              )}
-            />
-          </View>
-        </View>
-      </Modal>
+            </LinearGradient>
+          </SafeAreaView>
+        </Modal>
 
+        <Modal visible={isExerciseSelectorVisible} animationType="slide" transparent>
+          <View style={styles.modalOverlay}>
+            <View style={[styles.glassMenu, { height: '80%', padding: 20 }]}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.menuTitle}>Alege Exercițiul</Text>
+                <TouchableOpacity onPress={() => setIsExerciseSelectorVisible(false)}><X color="#fff" size={24} /></TouchableOpacity>
+              </View>
+              <FlatList
+                data={EXERCISE_DB} keyExtractor={item => item.id} showsVerticalScrollIndicator={false}
+                renderItem={({ item }) => (
+                  <TouchableOpacity style={styles.exerciseDbItem} onPress={() => addNewExercise(item.name)}>
+                    <View><Text style={styles.exerciseDbName}>{item.name}</Text><Text style={styles.exerciseDbMuscle}>{item.muscle}</Text></View>
+                    <Plus color={NEON_GREEN} size={20} />
+                  </TouchableOpacity>
+                )}
+              />
+            </View>
+          </View>
+        </Modal>
+      </LinearGradient>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#121212' },
-  detailHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, paddingTop: Platform.OS === 'android' ? 40 : 15, borderBottomWidth: 1, borderBottomColor: '#1A1A1A' },
+  container: { flex: 1, backgroundColor: '#000' },
+  gradientBg: { flex: 1 },
+  detailHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, paddingTop: Platform.OS === 'android' ? 40 : 15, borderBottomWidth: 1, borderBottomColor: '#222' },
   detailTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
-  timerHeader: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(29, 185, 84, 0.1)', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20 },
-  timerText: { color: '#1DB954', fontSize: 18, fontWeight: 'bold', marginLeft: 8 },
-  startBigBtn: { flexDirection: 'row', backgroundColor: '#1DB954', margin: 20, padding: 18, borderRadius: 25, justifyContent: 'center', alignItems: 'center', shadowColor: '#1DB954', shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
+  timerHeader: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(30, 215, 96, 0.1)', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20 },
+  timerText: { color: NEON_GREEN, fontSize: 18, fontWeight: 'bold', marginLeft: 8 },
+  startBigBtn: { flexDirection: 'row', backgroundColor: NEON_GREEN, margin: 20, padding: 18, borderRadius: 25, justifyContent: 'center', alignItems: 'center', shadowColor: NEON_GREEN, shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
   startBigBtnText: { color: '#000', fontWeight: 'bold', fontSize: 18, marginLeft: 10 },
 
-  exerciseCard: { backgroundColor: '#1c1c1e', borderRadius: 15, padding: 15, marginBottom: 20 },
+  exerciseCard: { backgroundColor: CARD_BG, borderRadius: 20, padding: 15, marginBottom: 20, borderWidth: 1, borderColor: '#222' },
   exerciseHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
-  exerciseName: { color: '#1DB954', fontSize: 16, fontWeight: '700', flex: 1 },
+  exerciseName: { color: NEON_GREEN, fontSize: 16, fontWeight: '700', flex: 1 },
   exerciseActionRow: { flexDirection: 'row', alignItems: 'center' },
   
   tableHeader: { flexDirection: 'row', marginBottom: 10 },
   tableHeaderText: { color: '#666', fontSize: 12, textAlign: 'center', fontWeight: 'bold' },
   setRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: '#333' },
-  setRowCompleted: { backgroundColor: 'rgba(29, 185, 84, 0.05)', borderRadius: 10 },
+  setRowCompleted: { backgroundColor: 'rgba(30, 215, 96, 0.05)', borderRadius: 10 },
   setText: { color: '#fff', textAlign: 'center' },
-  setInput: { flex: 1, backgroundColor: '#2c2c2e', color: '#fff', borderRadius: 8, padding: 8, marginHorizontal: 5, textAlign: 'center', fontSize: 16, fontWeight: 'bold' },
+  setInput: { flex: 1, backgroundColor: '#222', color: '#fff', borderRadius: 8, padding: 8, marginHorizontal: 5, textAlign: 'center', fontSize: 16, fontWeight: 'bold' },
   checkboxContainer: { flex: 0.6, alignItems: 'center', justifyContent: 'center' },
   addSetBtn: { marginTop: 15, alignItems: 'center', paddingVertical: 5 },
   addSetText: { color: '#888', fontSize: 14, fontWeight: '600' },
-  addExerciseBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(29, 185, 84, 0.1)', padding: 15, borderRadius: 15, marginBottom: 30, borderWidth: 1, borderColor: 'rgba(29, 185, 84, 0.3)' },
-  addExerciseText: { color: '#1DB954', fontWeight: 'bold', fontSize: 16, marginLeft: 10 },
-  finishContainer: { position: 'absolute', bottom: 0, width: '100%', backgroundColor: '#121212', padding: 20, borderTopWidth: 1, borderTopColor: '#222' },
-  finishBtn: { backgroundColor: '#1DB954', padding: 18, borderRadius: 30, alignItems: 'center' },
+  addExerciseBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(30, 215, 96, 0.1)', padding: 15, borderRadius: 15, marginBottom: 30, borderWidth: 1, borderColor: NEON_GREEN + 'AA' },
+  addExerciseText: { color: NEON_GREEN, fontWeight: 'bold', fontSize: 16, marginLeft: 10 },
+  finishContainer: { position: 'absolute', bottom: 0, width: '100%', backgroundColor: CARD_BG, padding: 20, borderTopWidth: 1, borderTopColor: '#222' },
+  finishBtn: { backgroundColor: NEON_GREEN, padding: 18, borderRadius: 30, alignItems: 'center' },
   finishBtnText: { color: '#000', fontWeight: 'bold', fontSize: 16 },
   
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'flex-end', padding: 15 },
-  glassMenu: { backgroundColor: '#1c1c1e', width: '100%', borderRadius: 30, padding: 25, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', paddingBottom: 40 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end', padding: 15 },
+  glassMenu: { backgroundColor: '#161616', width: '100%', borderRadius: 35, padding: 25, borderWidth: 1, borderColor: '#222', paddingBottom: 40 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
   menuTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold', textAlign: 'center' },
   exerciseDbItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#222' },
@@ -525,10 +541,10 @@ const styles = StyleSheet.create({
   summaryContainer: { flex: 1, backgroundColor: '#000' },
   summaryScroll: { padding: 20, alignItems: 'center', paddingBottom: 100 },
   summaryHeader: { alignItems: 'center', marginVertical: 40 },
-  summaryTitle: { color: '#1DB954', fontSize: 32, fontWeight: '900', textAlign: 'center', letterSpacing: 1 },
+  summaryTitle: { color: NEON_GREEN, fontSize: 32, fontWeight: '900', textAlign: 'center', letterSpacing: 1 },
   summaryMessage: { color: '#FFF', fontSize: 16, textAlign: 'center', marginTop: 15, fontStyle: 'italic', paddingHorizontal: 20 },
   
-  duoCard: { backgroundColor: '#121212', width: '100%', borderRadius: 20, padding: 20, marginBottom: 20, borderWidth: 2, borderColor: '#222' },
+  duoCard: { backgroundColor: CARD_BG, width: '100%', borderRadius: 22, padding: 20, marginBottom: 20, borderWidth: 1, borderColor: '#222' },
   duoStatRow: { flexDirection: 'row', justifyContent: 'space-evenly', alignItems: 'center' },
   duoStatBox: { alignItems: 'center', flex: 1 },
   duoDivider: { width: 2, height: 40, backgroundColor: '#333' },
@@ -542,7 +558,7 @@ const styles = StyleSheet.create({
   duoStreakTitle: { color: '#FF8800', fontSize: 20, fontWeight: '900' },
   duoStreakSub: { color: '#FFAA44', fontSize: 13, marginTop: 4, fontWeight: '600' },
 
-  duoFooter: { position: 'absolute', bottom: 0, width: '100%', padding: 20, backgroundColor: '#000', borderTopWidth: 1, borderTopColor: '#1A1A1A' },
-  duoButton: { backgroundColor: '#1DB954', paddingVertical: 18, borderRadius: 16, alignItems: 'center', borderBottomWidth: 4, borderBottomColor: '#148F3D' },
+  duoFooter: { position: 'absolute', bottom: 0, width: '100%', padding: 20, backgroundColor: '#000', borderTopWidth: 1, borderTopColor: '#222' },
+  duoButton: { backgroundColor: NEON_GREEN, paddingVertical: 18, borderRadius: 16, alignItems: 'center' },
   duoButtonText: { color: '#000', fontSize: 18, fontWeight: '900', letterSpacing: 1 }
 });

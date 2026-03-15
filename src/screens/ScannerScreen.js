@@ -1,8 +1,8 @@
 import React, { useState, useRef } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, Dimensions, Alert, Modal, FlatList } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, Dimensions, Alert, Modal, FlatList, TextInput, ScrollView } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { BlurView } from 'expo-blur';
-import { X, Zap, Image as ImageIcon, RefreshCcw, Scan, ClipboardList, ChefHat, User, Plus, Clock } from 'lucide-react-native';
+import { X, Zap, Image as ImageIcon, RefreshCcw, Scan, Clock, Plus } from 'lucide-react-native';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '../lib/supabase';
@@ -16,11 +16,19 @@ export default function ScannerScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState('back');
   const [isScanning, setIsScanning] = useState(false);
+  const [mode, setMode] = useState('scan');
+
   const [scannedFood, setScannedFood] = useState(null);
-  const [foodList, setFoodList] = useState([]);
+  const [generatedMeals, setGeneratedMeals] = useState([]);
+  const [extraIngredients, setExtraIngredients] = useState([]);
 
   const [isHistoryVisible, setIsHistoryVisible] = useState(false);
   const [historyList, setHistoryList] = useState([]);
+
+  const [isManualModalVisible, setIsManualModalVisible] = useState(false);
+  const [manualInput, setManualInput] = useState('');
+
+  const [expandedItem, setExpandedItem] = useState(null);
 
   const cameraRef = useRef(null);
 
@@ -39,6 +47,14 @@ export default function ScannerScreen() {
 
   const toggleCameraFacing = () => {
     setFacing(current => (current === 'back' ? 'front' : 'back'));
+  };
+
+  const switchMode = (newMode) => {
+    setMode(newMode);
+    setScannedFood(null);
+    setGeneratedMeals([]);
+    setExtraIngredients([]);
+    setIsScanning(false);
   };
 
   const fetchHistory = async () => {
@@ -66,6 +82,10 @@ export default function ScannerScreen() {
 
   const processImage = async (imageUri) => {
     try {
+      if (!OPENAI_API_KEY) {
+        throw new Error("Cheia API OpenAI lipsește din mediul de dezvoltare.");
+      }
+
       const manipulatedImage = await ImageManipulator.manipulateAsync(
         imageUri,
         [{ resize: { width: 600 } }],
@@ -73,6 +93,14 @@ export default function ScannerScreen() {
       );
 
       const cleanBase64 = manipulatedImage.base64.replace(/[\r\n\t\s]+/gm, "");
+
+      const systemContent = mode === 'scan'
+        ? "Return strictly a JSON object with keys: name (string), calories (number), protein (number), fats (number), emoji (string), match (number), ingredients (array of strings)."
+        : "Return strictly a JSON object with a 'meals' array containing exactly 3 objects. Keys for each object: name (string), calories (number), protein (number), fats (number), emoji (string), match (number), ingredients (array of strings).";
+
+      const userContent = mode === 'scan'
+        ? "Identify this food, give nutrition info and list its main ingredients."
+        : `Analyze the fridge image and extra ingredients: ${extraIngredients.join(', ')}. Create 3 healthy meals and list their ingredients.`;
 
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -82,71 +110,60 @@ export default function ScannerScreen() {
         },
         body: JSON.stringify({
           model: "gpt-4o",
+          response_format: { type: "json_object" },
           messages: [
-            {
-              role: "system",
-              content: "Return only a strict JSON object. No prose, no markdown formatting. Estimate the weight of the food from the image and send the exact calories for that weight. Keys: name (string), calories (number), protein (number), fats (number), emoji (string, single emoji), match (number, 1-100)."
-            },
+            { role: "system", content: systemContent },
             {
               role: "user",
               content: [
-                {
-                  type: "text",
-                  text: "Identify this food and give nutrition info in JSON format."
-                },
-                {
-                  type: "image_url",
-                  image_url: {
-                    url: `data:image/jpeg;base64,${cleanBase64}`
-                  }
-                }
+                { type: "text", text: userContent },
+                { type: "image_url", image_url: { url: `data:image/jpeg;base64,${cleanBase64}` } }
               ]
             }
           ],
-          max_tokens: 500
+          max_tokens: 800
         })
       });
 
       const data = await response.json();
 
       if (!response.ok) {
-        Alert.alert("Eroare OpenAI", data.error?.message || "Eroare necunoscută");
-        return;
+        throw new Error(data.error?.message || "Eroare la serverul OpenAI.");
       }
 
       const aiMessage = data.choices[0].message.content;
-      const jsonMatch = aiMessage.match(/\{[\s\S]*\}/);
+      const parsedData = JSON.parse(aiMessage);
 
-      if (jsonMatch) {
-        const foodData = JSON.parse(jsonMatch[0]);
-        setScannedFood({
-          id: Date.now(),
-          ...foodData
-        });
+      if (mode === 'scan') {
+        setScannedFood({ id: Date.now(), ...parsedData });
       } else {
-        throw new Error("AI-ul nu a returnat un format JSON valid.");
+        if (parsedData.meals && Array.isArray(parsedData.meals)) {
+          setGeneratedMeals(parsedData.meals.map((m, i) => ({ id: Date.now() + i, ...m })));
+        } else {
+          throw new Error("Formatul rețetelor returnate este invalid.");
+        }
       }
 
     } catch (error) {
-      Alert.alert("Eroare", "Nu s-a putut analiza imaginea: " + error.message);
+      Alert.alert("Eroare Analiză", error.message || "A apărut o problemă la procesarea imaginii.");
+    } finally {
+      setIsScanning(false);
     }
   };
 
   const takePictureAndAnalyze = async () => {
-    if (cameraRef.current && !isScanning) {
-      setIsScanning(true);
-      setScannedFood(null);
+    if (!cameraRef.current || isScanning) return;
 
-      try {
-        const photo = await cameraRef.current.takePictureAsync({
-          quality: 0.5
-        });
-        await processImage(photo.uri);
-      } catch (error) {
-        Alert.alert("Eroare", "Nu am putut capta imaginea.");
-      } finally {
-        setIsScanning(false);
-      }
+    setIsScanning(true);
+    setScannedFood(null);
+    setGeneratedMeals([]);
+
+    try {
+      const photo = await cameraRef.current.takePictureAsync({ quality: 0.5 });
+      await processImage(photo.uri);
+    } catch (error) {
+      Alert.alert("Eroare Camera", "Nu am putut capta imaginea.");
+      setIsScanning(false);
     }
   };
 
@@ -160,45 +177,96 @@ export default function ScannerScreen() {
         quality: 0.5,
       });
 
-      if (!result.canceled) {
+      if (!result.canceled && result.assets && result.assets.length > 0) {
         setIsScanning(true);
         setScannedFood(null);
+        setGeneratedMeals([]);
         await processImage(result.assets[0].uri);
       }
     } catch (error) {
-      Alert.alert("Eroare", "Nu am putut deschide galeria.");
-    } finally {
+      Alert.alert("Eroare Galerie", "Nu am putut deschide galeria.");
       setIsScanning(false);
     }
   };
 
-  const addFoodToList = async () => {
-    if (scannedFood) {
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
+  const saveToDatabase = async (item) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
 
-        if (user) {
-          const { error } = await supabase.from('scanned_foods').insert({
-            user_id: user.id,
-            food_name: scannedFood.name,
-            calories: scannedFood.calories,
-            protein: scannedFood.protein,
-            fats: scannedFood.fats
-          });
+      if (user) {
+        const { error } = await supabase.from('scanned_foods').insert({
+          user_id: user.id,
+          food_name: item.name,
+          calories: item.calories,
+          protein: item.protein,
+          fats: item.fats
+        });
 
-          if (error) {
-            throw error;
-          }
-        }
-
-        setFoodList([...foodList, scannedFood]);
-        setScannedFood(null);
-        Alert.alert("Succes", `${scannedFood.name} a fost salvat în baza de date!`);
-      } catch (error) {
-        Alert.alert("Eroare", "Nu s-a putut salva alimentul în baza de date.");
+        if (error) throw error;
       }
+
+      Alert.alert("Succes", `${item.name} a fost salvat în baza de date!`);
+
+      if (mode === 'scan') {
+        setScannedFood(null);
+      } else {
+        setGeneratedMeals(current => current.filter(m => m.id !== item.id));
+      }
+      setExpandedItem(null);
+    } catch (error) {
+      Alert.alert("Eroare", "Nu s-a putut salva alimentul în baza de date.");
     }
   };
+
+  const handleAddManualIngredient = () => {
+    if (manualInput.trim()) {
+      setExtraIngredients([...extraIngredients, manualInput.trim()]);
+      setManualInput('');
+      setIsManualModalVisible(false);
+    }
+  };
+
+  const renderFoodItem = (item) => (
+    <BlurView intensity={70} tint="dark" style={mode === 'scan' ? styles.foodCard : styles.mealCard}>
+      <TouchableOpacity
+        style={styles.cardContentTouchable}
+        onPress={() => setExpandedItem(item)}
+        activeOpacity={0.7}
+      >
+        <View style={styles.foodEmojiContainer}>
+          <Text style={styles.foodEmoji}>{item.emoji}</Text>
+        </View>
+
+        <View style={styles.foodInfo}>
+          <View style={styles.foodHeaderRow}>
+            <Text style={styles.foodTitle} numberOfLines={1}>{item.name}</Text>
+            <View style={styles.matchBadge}>
+              <Text style={styles.matchText}>{item.match}%</Text>
+            </View>
+          </View>
+
+          <View style={styles.macrosRow}>
+            <View style={styles.macroItem}>
+              <Text style={styles.macroLabel}>CALORIES</Text>
+              <Text style={styles.macroValue}>{item.calories}</Text>
+            </View>
+            <View style={styles.macroItem}>
+              <Text style={styles.macroLabel}>PROTEIN</Text>
+              <Text style={styles.macroValue}>{item.protein}g</Text>
+            </View>
+            <View style={styles.macroItem}>
+              <Text style={styles.macroLabel}>FATS</Text>
+              <Text style={styles.macroValue}>{item.fats}g</Text>
+            </View>
+          </View>
+        </View>
+      </TouchableOpacity>
+
+      <TouchableOpacity style={styles.addButton} onPress={() => saveToDatabase(item)}>
+        <Plus color="#000" size={24} />
+      </TouchableOpacity>
+    </BlurView>
+  );
 
   return (
     <View style={styles.container}>
@@ -209,9 +277,13 @@ export default function ScannerScreen() {
             <Clock color={NEON_GREEN} size={22} />
           </TouchableOpacity>
 
-          <BlurView intensity={40} tint="dark" style={styles.liveAnalysis}>
-            <View style={styles.liveDot} />
-            <Text style={styles.liveText}>FOOD SCANNER</Text>
+          <BlurView intensity={40} tint="dark" style={styles.modeSelector}>
+            <TouchableOpacity onPress={() => switchMode('scan')} style={[styles.modeBtn, mode === 'scan' && styles.modeBtnActive]}>
+              <Text style={[styles.modeText, mode === 'scan' && styles.modeTextActive]}>SCAN FOOD</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => switchMode('create')} style={[styles.modeBtn, mode === 'create' && styles.modeBtnActive]}>
+              <Text style={[styles.modeText, mode === 'create' && styles.modeTextActive]}>CREATE MEAL</Text>
+            </TouchableOpacity>
           </BlurView>
 
           <TouchableOpacity style={styles.iconButton}>
@@ -243,43 +315,32 @@ export default function ScannerScreen() {
             </View>
             <View style={styles.unfocusedContainer} />
           </View>
-          <View style={styles.unfocusedContainer} />
+          <View style={styles.unfocusedContainer}>
+            {mode === 'create' && extraIngredients.length > 0 && (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.ingredientsScroll} contentContainerStyle={styles.ingredientsContainer}>
+                {extraIngredients.map((ing, idx) => (
+                  <View key={idx} style={styles.ingredientChip}>
+                    <Text style={styles.ingredientText}>{ing}</Text>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </View>
         </View>
 
-        {scannedFood && !isScanning && (
-          <BlurView intensity={70} tint="dark" style={styles.foodCard}>
-            <View style={styles.foodEmojiContainer}>
-              <Text style={styles.foodEmoji}>{scannedFood.emoji}</Text>
-            </View>
+        {mode === 'scan' && scannedFood && !isScanning && renderFoodItem(scannedFood)}
 
-            <View style={styles.foodInfo}>
-              <View style={styles.foodHeaderRow}>
-                <Text style={styles.foodTitle}>{scannedFood.name}</Text>
-                <View style={styles.matchBadge}>
-                  <Text style={styles.matchText}>{scannedFood.match}% Match</Text>
-                </View>
-              </View>
-
-              <View style={styles.macrosRow}>
-                <View style={styles.macroItem}>
-                  <Text style={styles.macroLabel}>CALORIES</Text>
-                  <Text style={styles.macroValue}>{scannedFood.calories} kcal</Text>
-                </View>
-                <View style={styles.macroItem}>
-                  <Text style={styles.macroLabel}>PROTEIN</Text>
-                  <Text style={styles.macroValue}>{scannedFood.protein}g</Text>
-                </View>
-                <View style={styles.macroItem}>
-                  <Text style={styles.macroLabel}>FATS</Text>
-                  <Text style={styles.macroValue}>{scannedFood.fats}g</Text>
-                </View>
-              </View>
-            </View>
-
-            <TouchableOpacity style={styles.addButton} onPress={addFoodToList}>
-              <Plus color="#000" size={24} />
-            </TouchableOpacity>
-          </BlurView>
+        {mode === 'create' && generatedMeals.length > 0 && !isScanning && (
+          <View style={styles.mealsListWrapper}>
+            <FlatList
+              data={generatedMeals}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              keyExtractor={item => item.id.toString()}
+              renderItem={({ item }) => renderFoodItem(item)}
+              contentContainerStyle={styles.mealsListContent}
+            />
+          </View>
         )}
 
         <View style={styles.cameraControls}>
@@ -287,6 +348,13 @@ export default function ScannerScreen() {
             <ImageIcon color={NEON_GREEN} size={26} />
             <Text style={styles.controlText}>Gallery</Text>
           </TouchableOpacity>
+
+          {mode === 'create' && (
+            <TouchableOpacity style={styles.controlBtn} onPress={() => setIsManualModalVisible(true)}>
+              <Plus color={NEON_GREEN} size={26} />
+              <Text style={styles.controlText}>Manual</Text>
+            </TouchableOpacity>
+          )}
 
           <TouchableOpacity style={styles.shutterBtn} onPress={takePictureAndAnalyze}>
             <View style={[styles.shutterInner, isScanning && styles.shutterScanning]} />
@@ -297,6 +365,79 @@ export default function ScannerScreen() {
             <Text style={styles.controlText}>Flip</Text>
           </TouchableOpacity>
         </View>
+
+        <Modal visible={!!expandedItem} transparent animationType="fade">
+          <View style={styles.modalOverlayCenter}>
+            <View style={styles.expandedModalContent}>
+              <TouchableOpacity style={styles.closeExpandedBtn} onPress={() => setExpandedItem(null)}>
+                <X color={NEON_GREEN} size={28} />
+              </TouchableOpacity>
+
+              <View style={styles.expandedEmojiContainer}>
+                <Text style={styles.expandedEmoji}>{expandedItem?.emoji}</Text>
+              </View>
+
+              <Text style={styles.expandedTitle}>{expandedItem?.name}</Text>
+
+              <View style={styles.expandedMacros}>
+                <View style={styles.expandedMacroItem}>
+                  <Text style={styles.macroLabel}>CALORIES</Text>
+                  <Text style={styles.macroValue}>{expandedItem?.calories}</Text>
+                </View>
+                <View style={styles.expandedMacroItem}>
+                  <Text style={styles.macroLabel}>PROTEIN</Text>
+                  <Text style={styles.macroValue}>{expandedItem?.protein}g</Text>
+                </View>
+                <View style={styles.expandedMacroItem}>
+                  <Text style={styles.macroLabel}>FATS</Text>
+                  <Text style={styles.macroValue}>{expandedItem?.fats}g</Text>
+                </View>
+              </View>
+
+              {expandedItem?.ingredients && expandedItem.ingredients.length > 0 && (
+                <View style={styles.expandedIngredientsContainer}>
+                  <Text style={styles.expandedIngredientsTitle}>Ingrediente:</Text>
+                  <ScrollView style={{ maxHeight: 150 }} showsVerticalScrollIndicator={false}>
+                    {expandedItem.ingredients.map((ing, idx) => (
+                      <View key={idx} style={styles.ingredientRow}>
+                        <View style={styles.ingredientDot} />
+                        <Text style={styles.ingredientTextExpanded}>{ing}</Text>
+                      </View>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+
+              <TouchableOpacity style={styles.expandedAddBtn} onPress={() => saveToDatabase(expandedItem)}>
+                <Text style={styles.expandedAddBtnText}>Adaugă în listă</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal visible={isManualModalVisible} transparent animationType="fade">
+          <View style={styles.modalOverlayCenter}>
+            <View style={styles.manualModal}>
+              <Text style={styles.manualTitle}>Adaugă ingredient</Text>
+              <TextInput
+                style={styles.manualInput}
+                placeholder="Ex: Roșii, Pui, Ouă..."
+                placeholderTextColor="#666"
+                value={manualInput}
+                onChangeText={setManualInput}
+                autoFocus
+              />
+              <View style={styles.manualBtns}>
+                <TouchableOpacity onPress={() => setIsManualModalVisible(false)} style={styles.manualBtnClose}>
+                  <Text style={styles.manualBtnTextClose}>Anulează</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={handleAddManualIngredient} style={styles.manualBtnAdd}>
+                  <Text style={styles.manualBtnTextAdd}>Adaugă</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
 
         <Modal visible={isHistoryVisible} animationType="slide" transparent>
           <View style={styles.modalOverlayFull}>
@@ -365,29 +506,29 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 5,
   },
-  liveAnalysis: {
+  modeSelector: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 15,
-    paddingVertical: 8,
     borderRadius: 20,
     overflow: 'hidden',
     borderColor: 'rgba(0, 255, 102, 0.3)',
     borderWidth: 1,
   },
-  liveDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: NEON_GREEN,
-    marginRight: 8,
-    shadowColor: NEON_GREEN,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.8,
-    shadowRadius: 5,
-    elevation: 3,
+  modeBtn: {
+    paddingHorizontal: 15,
+    paddingVertical: 10,
   },
-  liveText: { color: NEON_GREEN, fontSize: 12, fontWeight: 'bold', letterSpacing: 1 },
+  modeBtnActive: {
+    backgroundColor: 'rgba(0, 255, 102, 0.2)',
+  },
+  modeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  modeTextActive: {
+    color: NEON_GREEN,
+  },
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)' },
   unfocusedContainer: { flex: 1 },
   focusedRow: { flexDirection: 'row', height: width * 0.8 },
@@ -434,6 +575,29 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.8,
     shadowRadius: 4,
   },
+  ingredientsScroll: {
+    position: 'absolute',
+    top: 20,
+    width: '100%'
+  },
+  ingredientsContainer: {
+    paddingHorizontal: 20,
+    alignItems: 'center'
+  },
+  ingredientChip: {
+    backgroundColor: 'rgba(0, 255, 102, 0.2)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 15,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 255, 102, 0.4)'
+  },
+  ingredientText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold'
+  },
   foodCard: {
     position: 'absolute',
     bottom: 220,
@@ -446,14 +610,34 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: 'rgba(0, 255, 102, 0.4)',
-    shadowColor: NEON_GREEN,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 15,
+  },
+  mealsListWrapper: {
+    position: 'absolute',
+    bottom: 220,
+    width: '100%',
+  },
+  mealsListContent: {
+    paddingHorizontal: 20,
+  },
+  mealCard: {
+    width: width * 0.85,
+    marginRight: 15,
+    borderRadius: 24,
+    padding: 15,
+    flexDirection: 'row',
+    alignItems: 'center',
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 255, 102, 0.4)',
+  },
+  cardContentTouchable: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   foodEmojiContainer: {
-    width: 60,
-    height: 60,
+    width: 50,
+    height: 50,
     backgroundColor: 'rgba(255,255,255,0.1)',
     borderRadius: 16,
     justifyContent: 'center',
@@ -462,10 +646,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.2)',
   },
-  foodEmoji: { fontSize: 30 },
-  foodInfo: { flex: 1 },
-  foodHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  foodTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold', marginRight: 10 },
+  foodEmoji: { fontSize: 26 },
+  foodInfo: { flex: 1, paddingRight: 10 },
+  foodHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10, paddingRight: 10 },
+  foodTitle: { color: '#fff', fontSize: 16, fontWeight: 'bold', marginRight: 10, flexShrink: 1 },
   matchBadge: {
     backgroundColor: 'rgba(0, 255, 102, 0.15)',
     paddingHorizontal: 8,
@@ -478,7 +662,7 @@ const styles = StyleSheet.create({
   macrosRow: { flexDirection: 'row', justifyContent: 'space-between', paddingRight: 10 },
   macroItem: { alignItems: 'flex-start' },
   macroLabel: { color: '#aaa', fontSize: 10, marginBottom: 4 },
-  macroValue: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+  macroValue: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
   addButton: {
     width: 40,
     height: 40,
@@ -501,8 +685,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
   },
-  controlBtn: { alignItems: 'center' },
-  controlText: { color: NEON_GREEN, fontSize: 12, marginTop: 8, fontWeight: '600' },
+  controlBtn: { alignItems: 'center', width: 60 },
+  controlText: { color: NEON_GREEN, fontSize: 12, marginTop: 8, fontWeight: '600', textAlign: 'center' },
   shutterBtn: {
     width: 70,
     height: 70,
@@ -529,6 +713,150 @@ const styles = StyleSheet.create({
     shadowOpacity: 1,
     shadowRadius: 15,
   },
+  modalOverlayCenter: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20
+  },
+  manualModal: {
+    backgroundColor: '#121212',
+    width: '100%',
+    borderRadius: 20,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 255, 102, 0.3)'
+  },
+  manualTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 15
+  },
+  manualInput: {
+    backgroundColor: '#1c1c1e',
+    color: '#fff',
+    borderRadius: 10,
+    padding: 15,
+    fontSize: 16,
+    borderWidth: 1,
+    borderColor: '#333',
+    marginBottom: 20
+  },
+  manualBtns: {
+    flexDirection: 'row',
+    justifyContent: 'space-between'
+  },
+  manualBtnClose: {
+    flex: 1,
+    padding: 15,
+    borderRadius: 10,
+    backgroundColor: '#1c1c1e',
+    marginRight: 10,
+    alignItems: 'center'
+  },
+  manualBtnAdd: {
+    flex: 1,
+    padding: 15,
+    borderRadius: 10,
+    backgroundColor: NEON_GREEN,
+    marginLeft: 10,
+    alignItems: 'center'
+  },
+  manualBtnTextClose: { color: '#fff', fontWeight: 'bold' },
+  manualBtnTextAdd: { color: '#000', fontWeight: 'bold' },
+
+  expandedModalContent: {
+    backgroundColor: '#121212',
+    width: '90%',
+    maxHeight: '80%',
+    borderRadius: 24,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 255, 102, 0.3)',
+    alignItems: 'center'
+  },
+  closeExpandedBtn: {
+    position: 'absolute',
+    top: 15,
+    right: 15,
+    zIndex: 10
+  },
+  expandedEmojiContainer: {
+    width: 80,
+    height: 80,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 15,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  expandedEmoji: {
+    fontSize: 40
+  },
+  expandedTitle: {
+    color: '#fff',
+    fontSize: 22,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 20
+  },
+  expandedMacros: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    width: '100%',
+    backgroundColor: '#1c1c1e',
+    padding: 15,
+    borderRadius: 15,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#333'
+  },
+  expandedMacroItem: {
+    alignItems: 'center'
+  },
+  expandedIngredientsContainer: {
+    width: '100%',
+    marginBottom: 20
+  },
+  expandedIngredientsTitle: {
+    color: NEON_GREEN,
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 10
+  },
+  ingredientRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8
+  },
+  ingredientDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: NEON_GREEN,
+    marginRight: 10
+  },
+  ingredientTextExpanded: {
+    color: '#ddd',
+    fontSize: 14
+  },
+  expandedAddBtn: {
+    backgroundColor: NEON_GREEN,
+    width: '100%',
+    padding: 15,
+    borderRadius: 15,
+    alignItems: 'center'
+  },
+  expandedAddBtnText: {
+    color: '#000',
+    fontWeight: 'bold',
+    fontSize: 16
+  },
+
   modalOverlayFull: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.8)',

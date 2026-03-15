@@ -3,11 +3,15 @@ import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, 
   Modal, SafeAreaView, TextInput, KeyboardAvoidingView, Platform, Alert 
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
 import { 
-  Plus, Dumbbell, Play, Trash2, Zap, Layout, ChevronDown, ChevronUp 
+  Plus, Dumbbell, Play, Trash2, Zap, Layout, ChevronDown, ChevronUp, Flame 
 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
+
+const NEON_GREEN = '#1ED760';
+const CARD_BG = '#121212';
 
 export default function TrainingScreen({ navigation }) {
   const [myWorkouts, setMyWorkouts] = useState([]);
@@ -266,9 +270,17 @@ export default function TrainingScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}><Text style={styles.title}>Your Library</Text></View>
+      <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
+        <View style={styles.header}>
+          <View style={styles.logoAndName}>
+            <View style={styles.logoMark}><Flame size={18} color="black" fill="black" /></View>
+            <Text style={styles.appName}>Sportify</Text>
+          </View>
+          <Text style={styles.dateText}>{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</Text>
+          <Text style={styles.title}>Your Library</Text>
+        </View>
 
-      <FlatList
+        <FlatList
         data={myWorkouts}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.listContent}
@@ -276,7 +288,7 @@ export default function TrainingScreen({ navigation }) {
         renderItem={({ item }) => (
           <View style={styles.glassCard}>
             <TouchableOpacity style={styles.workoutMain} onPress={() => openWorkoutDetail(item)}>
-              <View style={styles.iconCircle}><Dumbbell color="#1DB954" size={20} /></View>
+              <View style={styles.iconCircle}><Dumbbell color={NEON_GREEN} size={20} /></View>
               <View>
                 <Text style={styles.workoutName}>{item.name}</Text>
                 {item.duration && <Text style={{color: '#666', fontSize: 12}}>{item.duration} • {item.intensity}</Text>}
@@ -304,14 +316,14 @@ export default function TrainingScreen({ navigation }) {
             <Text style={styles.menuTitle}>Alege o opțiune</Text>
             
             <TouchableOpacity style={styles.menuOption} onPress={triggerCustomWorkoutCreation}>
-              <Zap color="#1DB954" size={22} /><Text style={styles.menuOptionText}>Creare Manuală</Text>
+              <Zap color={NEON_GREEN} size={22} /><Text style={styles.menuOptionText}>Creare Manuală</Text>
             </TouchableOpacity>
             
             <TouchableOpacity 
               style={[styles.menuOption, isBuiltInExpanded && styles.menuOptionExpanded]} 
               onPress={() => setIsBuiltInExpanded(!isBuiltInExpanded)}
             >
-              <Layout color="#1DB954" size={22} />
+              <Layout color={NEON_GREEN} size={22} />
               <Text style={styles.menuOptionText}>Antrenamente Generate (AI)</Text>
               {isBuiltInExpanded ? <ChevronUp color="#666" size={20} style={styles.chevron} /> : <ChevronDown color="#666" size={20} style={styles.chevron} />}
             </TouchableOpacity>
@@ -324,7 +336,7 @@ export default function TrainingScreen({ navigation }) {
                       <Text style={styles.expandedItemName}>{item.name}</Text>
                       <Text style={styles.expandedItemSub}>{item.duration} • {item.intensity}</Text>
                     </View>
-                    <Plus color="#1DB954" size={20} />
+                    <Plus color={NEON_GREEN} size={20} />
                   </TouchableOpacity>
                 ))}
               </View>
@@ -354,37 +366,43 @@ export default function TrainingScreen({ navigation }) {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+      </LinearGradient>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
-  header: { padding: 25, paddingTop: 40 },
-  title: { fontSize: 28, fontWeight: 'bold', color: '#fff' },
+  gradientBg: { flex: 1 },
+  header: { padding: 20, paddingTop: 40 },
+  logoAndName: { flexDirection: 'row', alignItems: 'center' },
+  logoMark: { width: 32, height: 32, backgroundColor: NEON_GREEN, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
+  appName: { color: '#FFF', fontSize: 22, fontWeight: 'bold', marginLeft: 10 },
+  dateText: { color: '#666', marginTop: 15, fontSize: 14 },
+  title: { color: '#FFF', fontSize: 32, fontWeight: 'bold', marginTop: 5 },
   listContent: { padding: 20, paddingBottom: 100 },
-  glassCard: { backgroundColor: 'rgba(255, 255, 255, 0.07)', borderRadius: 20, padding: 15, marginBottom: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.1)' },
+  glassCard: { backgroundColor: CARD_BG, borderRadius: 20, padding: 15, marginBottom: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#222' },
   workoutMain: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  iconCircle: { backgroundColor: 'rgba(29, 185, 84, 0.1)', padding: 10, borderRadius: 12, marginRight: 15 },
+  iconCircle: { backgroundColor: 'rgba(30, 215, 96, 0.1)', padding: 10, borderRadius: 12, marginRight: 15 },
   workoutName: { color: '#fff', fontSize: 16, fontWeight: '600' },
   actionButtons: { flexDirection: 'row', alignItems: 'center' },
-  playBtn: { backgroundColor: '#1DB954', width: 35, height: 35, borderRadius: 18, justifyContent: 'center', alignItems: 'center', marginLeft: 15 },
+  playBtn: { backgroundColor: NEON_GREEN, width: 35, height: 35, borderRadius: 18, justifyContent: 'center', alignItems: 'center', marginLeft: 15 },
   deleteBtn: { padding: 8 },
-  fab: { position: 'absolute', bottom: 90, right: 25, backgroundColor: '#1DB954', width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', elevation: 8 },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  glassMenu: { backgroundColor: '#1c1c1e', width: '100%', borderRadius: 30, padding: 25, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  fab: { position: 'absolute', bottom: 90, right: 25, backgroundColor: NEON_GREEN, width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', elevation: 8 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  glassMenu: { backgroundColor: '#161616', width: '100%', borderRadius: 35, padding: 25, borderWidth: 1, borderColor: '#222' },
   menuTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 20, textAlign: 'center' },
-  menuOption: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.05)', padding: 18, borderRadius: 15, marginBottom: 12 },
+  menuOption: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#222', padding: 18, borderRadius: 15, marginBottom: 12 },
   menuOptionExpanded: { borderBottomLeftRadius: 0, borderBottomRightRadius: 0, marginBottom: 0 },
   menuOptionText: { color: '#fff', fontSize: 16, fontWeight: '600', marginLeft: 15 },
   chevron: { marginLeft: 'auto' },
-  expandedContainer: { backgroundColor: 'rgba(255,255,255,0.02)', padding: 15, borderBottomLeftRadius: 15, borderBottomRightRadius: 15, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', borderTopWidth: 0 },
-  expandedItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)' },
+  expandedContainer: { backgroundColor: '#1c1c1c', padding: 15, borderBottomLeftRadius: 15, borderBottomRightRadius: 15, marginBottom: 12, borderWidth: 1, borderColor: '#222', borderTopWidth: 0 },
+  expandedItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#222' },
   expandedItemName: { color: '#fff', fontSize: 15, fontWeight: 'bold' },
-  expandedItemSub: { color: '#1DB954', fontSize: 12, marginTop: 4 },
-  closeText: { color: '#b3b3b3', textAlign: 'center', fontSize: 16 },
+  expandedItemSub: { color: NEON_GREEN, fontSize: 12, marginTop: 4 },
+  closeText: { color: '#666', textAlign: 'center', fontSize: 16 },
   emptyText: { color: '#555', textAlign: 'center', marginTop: 50 },
-  nameInput: { backgroundColor: '#2c2c2e', color: '#fff', borderRadius: 12, padding: 15, fontSize: 16, marginBottom: 20, borderWidth: 1, borderColor: '#333' },
-  saveNameBtn: { backgroundColor: '#1DB954', padding: 15, borderRadius: 15, alignItems: 'center' },
+  nameInput: { backgroundColor: '#222', color: '#fff', borderRadius: 15, padding: 18, fontSize: 16, marginBottom: 20, borderWidth: 1, borderColor: '#333' },
+  saveNameBtn: { backgroundColor: NEON_GREEN, padding: 18, borderRadius: 15, alignItems: 'center' },
   saveNameBtnText: { color: '#000', fontWeight: 'bold', fontSize: 16 }
 });

@@ -35,7 +35,7 @@ const AVATAR_THEMES = {
   'a4': { color: '#FF00FF', type: 'glitch' },
 };
 
-export default function DashboardScreen({ navigation }) {
+export default function DashboardScreen({ navigation, route }) {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isMenuVisible, setMenuVisible] = useState(false);
   const [isProfileModalVisible, setProfileModalVisible] = useState(false);
@@ -61,8 +61,17 @@ export default function DashboardScreen({ navigation }) {
   const [taskType, setTaskType] = useState('manual');
   const [isPedometerAvailable, setIsPedometerAvailable] = useState(null);
   const [deviceSteps, setDeviceSteps] = useState(0);
+  const [completedWorkouts, setCompletedWorkouts] = useState([]);
+  const [isHistoryExpanded, setIsHistoryExpanded] = useState(false);
 
   const WATER_GOAL = 3000;
+
+  useEffect(() => {
+    if (route.params?.newActivityMinutes) {
+      setDailyStats(prev => ({ ...prev, activity: prev.activity + route.params.newActivityMinutes }));
+      navigation.setParams({ newActivityMinutes: undefined });
+    }
+  }, [route.params?.newActivityMinutes, navigation]);
 
   const saveStepsToSupabase = async (steps) => {
     try {
@@ -120,6 +129,39 @@ export default function DashboardScreen({ navigation }) {
       fetchProfileAndStats();
     }, [])
   );
+
+  const fetchCompletedWorkouts = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      setCompletedWorkouts([]);
+      return;
+    }
+    const weekAgo = new Date();
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    const { data } = await supabase
+      .from('workout_completions')
+      .select('id, workout_name, completed_at, duration_minutes')
+      .eq('user_id', user.id)
+      .gte('completed_at', weekAgo.toISOString())
+      .order('completed_at', { ascending: false });
+    setCompletedWorkouts(data || []);
+  }, []);
+
+  useEffect(() => {
+    if (isProfileModalVisible) fetchCompletedWorkouts();
+  }, [isProfileModalVisible, fetchCompletedWorkouts]);
+
+  const toggleHistoryExpand = () => setIsHistoryExpanded(prev => !prev);
+
+  const formatCompletedDate = (isoStr) => {
+    const d = new Date(isoStr);
+    const today = new Date();
+    const diffDays = Math.floor((today - d) / (1000 * 60 * 60 * 24));
+    if (diffDays === 0) return 'Today';
+    if (diffDays === 1) return 'Yesterday';
+    if (diffDays < 7) return `${diffDays} days ago`;
+    return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  };
 
   const fetchProfileAndStats = async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -523,12 +565,21 @@ export default function DashboardScreen({ navigation }) {
                 <View style={styles.sectionWrapper}>
                   <View style={styles.sectionHeaderRow}>
                     <Text style={styles.profileSectionTitle}>Recent Activity</Text>
-                    <TouchableOpacity><Text style={styles.seeMore}>View History</Text></TouchableOpacity>
+                    <TouchableOpacity style={styles.viewHistoryBtn} onPress={toggleHistoryExpand}>
+                      <Text style={styles.seeMore}>View History</Text>
+                      {isHistoryExpanded ? <ChevronUp color={NEON_GREEN} size={20} style={{ marginLeft: 6 }} /> : <ChevronDown color={NEON_GREEN} size={20} style={{ marginLeft: 6 }} />}
+                    </TouchableOpacity>
                   </View>
 
-                  <RecentWorkoutItem title="Push Day" date="Yesterday" duration="55 min" intensity="Hard" />
-                  <RecentWorkoutItem title="Back & Biceps" date="3 days ago" duration="42 min" intensity="Medium" />
-                  <RecentWorkoutItem title="Leg Day" date="Last week" duration="65 min" intensity="Insane" />
+                  {isHistoryExpanded && completedWorkouts.length === 0 && (
+                    <Text style={styles.historyEmptyText}>No workouts in the last 7 days.</Text>
+                  )}
+                  {isHistoryExpanded && completedWorkouts.length > 0 && completedWorkouts.map((w) => (
+                    <RecentWorkoutItem key={w.id} title={w.workout_name} date={formatCompletedDate(w.completed_at)} duration={`${w.duration_minutes} min`} />
+                  ))}
+                  {!isHistoryExpanded && completedWorkouts.length > 0 && (
+                    <RecentWorkoutItem title={completedWorkouts[0].workout_name} date={formatCompletedDate(completedWorkouts[0].completed_at)} duration={`${completedWorkouts[0].duration_minutes} min`} />
+                  )}
                 </View>
 
                 <View style={styles.sectionWrapper}>
@@ -590,9 +641,15 @@ function RecentWorkoutItem({ title, date, duration, intensity }) {
           <Text style={styles.recentSub}>{date} • {duration}</Text>
         </View>
       </View>
-      <View style={[styles.intensityTag, {borderColor: intensity === 'Hard' || intensity === 'Insane' ? '#ff4444' : NEON_GREEN}]}>
-        <Text style={styles.intensityText}>{intensity}</Text>
-      </View>
+      {intensity != null ? (
+        <View style={[styles.intensityTag, { borderColor: intensity === 'Hard' || intensity === 'Insane' ? '#ff4444' : NEON_GREEN }]}>
+          <Text style={styles.intensityText}>{intensity}</Text>
+        </View>
+      ) : (
+        <View style={[styles.intensityTag, { borderColor: NEON_GREEN }]}>
+          <Text style={styles.intensityText}>{duration}</Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -721,6 +778,8 @@ const styles = StyleSheet.create({
   sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
   profileSectionTitle: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
   seeMore: { color: NEON_GREEN, fontSize: 13, fontWeight: 'bold' },
+  viewHistoryBtn: { flexDirection: 'row', alignItems: 'center' },
+  historyEmptyText: { color: '#666', fontSize: 14, marginTop: 8 },
 
   recentItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#121212', padding: 15, borderRadius: 18, marginBottom: 10, borderWidth: 1, borderColor: '#1A1A1A' },
   recentLeft: { flexDirection: 'row', alignItems: 'center' },

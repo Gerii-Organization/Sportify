@@ -142,19 +142,31 @@ export default function StatsScreen() {
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={NEON_GREEN} />
-      </View>
+      <SafeAreaView style={styles.container}>
+        <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={NEON_GREEN} />
+          </View>
+        </LinearGradient>
+      </SafeAreaView>
     );
   }
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Analytics</Text>
-      </View>
+      <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
+        <View style={styles.header}>
+          <View style={styles.logoRow}>
+            <View style={styles.logoAndName}>
+              <View style={styles.logoMark}><Flame size={18} color="black" fill="black" /></View>
+              <Text style={styles.appName}>Sportify</Text>
+            </View>
+          </View>
+          <Text style={styles.dateText}>{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</Text>
+          <Text style={styles.title}>Analytics</Text>
+        </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
 
         {!isLoggedIn && (
           <View style={styles.guestCard}>
@@ -241,37 +253,44 @@ export default function StatsScreen() {
           <TrendingUp color="#666" size={24} />
         </View>
 
-      </ScrollView>
+        </ScrollView>
+      </LinearGradient>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
-  loadingContainer: { flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
+  gradientBg: { flex: 1 },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: { padding: 20, paddingTop: 40 },
-  title: { fontSize: 32, fontWeight: 'bold', color: '#fff' },
+  logoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  logoAndName: { flexDirection: 'row', alignItems: 'center' },
+  logoMark: { width: 32, height: 32, backgroundColor: NEON_GREEN, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
+  appName: { color: '#FFF', fontSize: 22, fontWeight: 'bold', marginLeft: 10 },
+  dateText: { color: '#666', marginTop: 15, fontSize: 14 },
+  title: { color: '#FFF', fontSize: 32, fontWeight: 'bold', marginTop: 5 },
   scrollContent: { paddingBottom: 100 },
 
-  guestCard: { backgroundColor: 'rgba(255, 68, 68, 0.1)', marginHorizontal: 20, marginBottom: 25, padding: 20, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255, 68, 68, 0.3)', alignItems: 'center' },
+  guestCard: { backgroundColor: 'rgba(255, 68, 68, 0.1)', marginHorizontal: 20, marginBottom: 25, padding: 20, borderRadius: 22, borderWidth: 1, borderColor: 'rgba(255, 68, 68, 0.3)', alignItems: 'center' },
   guestTitle: { color: '#FF4444', fontSize: 18, fontWeight: 'bold', marginBottom: 8 },
   guestText: { color: '#fff', fontSize: 14, textAlign: 'center', opacity: 0.8 },
 
-  toggleContainer: { flexDirection: 'row', backgroundColor: '#1A1A1A', marginHorizontal: 20, borderRadius: 15, padding: 5, marginBottom: 25 },
+  toggleContainer: { flexDirection: 'row', backgroundColor: CARD_BG, marginHorizontal: 20, borderRadius: 15, padding: 5, marginBottom: 25, borderWidth: 1, borderColor: '#222' },
   toggleBtn: { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 10 },
-  toggleBtnActive: { backgroundColor: '#2a2a2c' },
+  toggleBtnActive: { backgroundColor: 'rgba(30, 215, 96, 0.15)' },
   toggleText: { color: '#666', fontWeight: 'bold' },
   toggleTextActive: { color: NEON_GREEN },
 
   statsGrid: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 15 },
-  statBox: { backgroundColor: CARD_BG, width: '48%', padding: 20, borderRadius: 20, borderWidth: 1, borderColor: '#222', alignItems: 'center' },
+  statBox: { backgroundColor: CARD_BG, width: '48%', padding: 20, borderRadius: 22, borderWidth: 1, borderColor: '#222', alignItems: 'center' },
   statIconWrapper: { backgroundColor: 'rgba(255,255,255,0.05)', padding: 12, borderRadius: 15, marginBottom: 10 },
   statVal: { color: '#FFF', fontSize: 24, fontWeight: 'bold' },
   statLabel: { color: '#666', fontSize: 12, marginTop: 5, fontWeight: '600' },
 
   sectionTitle: { color: '#FFF', fontSize: 18, fontWeight: 'bold', marginLeft: 20, marginTop: 20, marginBottom: 15 },
 
-  chartCard: { backgroundColor: CARD_BG, marginHorizontal: 20, borderRadius: 20, padding: 20, borderWidth: 1, borderColor: '#222' },
+  chartCard: { backgroundColor: CARD_BG, marginHorizontal: 20, borderRadius: 22, padding: 20, borderWidth: 1, borderColor: '#222' },
   barsContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', height: 190 },
   barWrapper: { alignItems: 'center', width: width * 0.08 },
   barLabelTop: { color: '#666', fontSize: 9, marginBottom: 5, height: 12 },
@@ -279,7 +298,7 @@ const styles = StyleSheet.create({
   barFill: { width: '100%', borderRadius: 8 },
   barLabel: { color: '#888', fontSize: 12, marginTop: 10 },
 
-  muscleCard: { backgroundColor: CARD_BG, marginHorizontal: 20, borderRadius: 20, padding: 20, borderWidth: 1, borderColor: '#222', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  muscleCard: { backgroundColor: CARD_BG, marginHorizontal: 20, borderRadius: 22, padding: 20, borderWidth: 1, borderColor: '#222', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
   muscleLeft: { flexDirection: 'row', alignItems: 'center' },
   muscleTitle: { color: '#666', fontSize: 12, fontWeight: '600' },
   muscleValue: { color: '#FFF', fontSize: 20, fontWeight: 'bold', marginTop: 2 }

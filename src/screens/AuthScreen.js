@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import { 
   View, Text, TextInput, TouchableOpacity, StyleSheet, 
-  Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView 
+  Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, SafeAreaView 
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../lib/supabase';
-import { X } from 'lucide-react-native';
+import { X, Flame } from 'lucide-react-native';
 
 const NEON_GREEN = '#1ED760';
+const CARD_BG = '#121212';
 
 const GOALS = [
   { id: 'lose_weight', label: 'Slabire' },
@@ -77,15 +79,22 @@ export default function AuthScreen({ navigation }) {
   };
 
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+    <SafeAreaView style={styles.container}>
+      <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.keyboardWrap}>
+          <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
 
-        {/* Buton de Close pentru Guest Mode */}
-        <TouchableOpacity style={styles.closeBtn} onPress={() => navigation.goBack()}>
-          <X color="#FFF" size={32} />
-        </TouchableOpacity>
+            <View style={styles.header}>
+              <View style={styles.logoAndName}>
+                <View style={styles.logoMark}><Flame size={18} color="black" fill="black" /></View>
+                <Text style={styles.appName}>Sportify</Text>
+              </View>
+              <TouchableOpacity style={styles.closeBtn} onPress={() => navigation.goBack()}>
+                <X color="#FFF" size={28} />
+              </TouchableOpacity>
+            </View>
 
-        <View style={styles.card}>
+            <View style={styles.card}>
           <Text style={styles.title}>{isRegistering ? 'Hai să începem' : 'Bine ai revenit'}</Text>
 
           <View style={styles.form}>
@@ -135,8 +144,10 @@ export default function AuthScreen({ navigation }) {
             </TouchableOpacity>
           </View>
         </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </LinearGradient>
+    </SafeAreaView>
   );
 }
 
@@ -154,9 +165,15 @@ function CustomInput({ label, value, onChange, placeholder, secure, autoCap, key
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
-  closeBtn: { alignSelf: 'flex-end', marginBottom: 20, padding: 5 },
-  scrollContent: { padding: 20, paddingTop: 60, paddingBottom: 40 },
-  card: { backgroundColor: '#121212', borderRadius: 30, padding: 25, borderWidth: 1, borderColor: '#222' },
+  gradientBg: { flex: 1 },
+  keyboardWrap: { flex: 1 },
+  scrollContent: { padding: 20, paddingBottom: 40 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  logoAndName: { flexDirection: 'row', alignItems: 'center' },
+  logoMark: { width: 32, height: 32, backgroundColor: NEON_GREEN, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
+  appName: { color: '#FFF', fontSize: 22, fontWeight: 'bold', marginLeft: 10 },
+  closeBtn: { padding: 5 },
+  card: { backgroundColor: CARD_BG, borderRadius: 25, padding: 25, borderWidth: 1, borderColor: '#222' },
   title: { color: '#FFF', fontSize: 28, fontWeight: 'bold', marginBottom: 30, textAlign: 'center' },
   sectionTitle: { color: NEON_GREEN, fontSize: 16, fontWeight: 'bold', marginBottom: 10, marginTop: 10 },
   goalContainer: { flexDirection: 'row', marginBottom: 20 },
@@ -166,7 +183,7 @@ const styles = StyleSheet.create({
   chipTextActive: { color: '#000' },
   inputContainer: { marginBottom: 18 },
   label: { color: '#888', fontSize: 12, marginBottom: 8, fontWeight: '600', marginLeft: 4 },
-  input: { backgroundColor: '#1A1A1A', color: '#FFF', padding: 15, borderRadius: 12, fontSize: 16, borderWidth: 1, borderColor: '#333' },
+  input: { backgroundColor: '#222', color: '#FFF', padding: 15, borderRadius: 15, fontSize: 16, borderWidth: 1, borderColor: '#333' },
   row: { flexDirection: 'row', justifyContent: 'space-between' },
   mainButton: { backgroundColor: NEON_GREEN, padding: 18, borderRadius: 15, alignItems: 'center', marginTop: 10 },
   mainButtonText: { color: '#000', fontWeight: 'bold', fontSize: 18 },
