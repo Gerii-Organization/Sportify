@@ -182,14 +182,55 @@ export default function DashboardScreen({ navigation, route }) {
 
       const isoMidnight = new Date(year, now.getMonth(), now.getDate()).toISOString();
 
-      const { data: foodLogs } = await supabase.from('scanned_foods').select('calories').eq('user_id', user.id).gte('scanned_at', isoMidnight);
-      const totalCalories = foodLogs ? foodLogs.reduce((sum, log) => sum + (Number(log.calories) || 0), 0) : 0;
+      const { data: foodLogs } = await supabase
+        .from('scanned_foods')
+        .select('calories')
+        .eq('user_id', user.id)
+        .gte('scanned_at', isoMidnight);
+      const totalCalories = foodLogs
+        ? foodLogs.reduce((sum, log) => sum + (Number(log.calories) || 0), 0)
+        : 0;
 
-      // 🔴 CITIM MINUTELE DIN TABELUL ZILNIC
-      const { data: statLog } = await supabase.from('daily_stats').select('activity_minutes').eq('user_id', user.id).eq('date', todayStr).maybeSingle();
-      const totalActivityMinutes = statLog?.activity_minutes || 0;
+      // 🔁 Calculează minutele de activitate din TOATE antrenamentele finalizate azi
+      const { data: workoutsToday } = await supabase
+        .from('workout_completions')
+        .select('duration_minutes, completed_at')
+        .eq('user_id', user.id)
+        .gte('completed_at', isoMidnight);
 
-      setDailyStats(prev => ({ ...prev, calories: totalCalories, activity: totalActivityMinutes }));
+      const totalActivityMinutes = workoutsToday
+        ? workoutsToday.reduce(
+            (sum, w) => sum + (Number(w.duration_minutes) || 0),
+            0
+          )
+        : 0;
+
+      // Citește water_ml din daily_stats pentru afișare
+      const { data: statLog } = await supabase
+        .from('daily_stats')
+        .select('activity_minutes, water_ml')
+        .eq('user_id', user.id)
+        .eq('date', todayStr)
+        .maybeSingle();
+      const totalWaterMl = statLog?.water_ml ?? 0;
+
+      // Sincronizează daily_stats (activity din workout_completions + păstrează water_ml)
+      await supabase.from('daily_stats').upsert(
+        {
+          user_id: user.id,
+          date: todayStr,
+          activity_minutes: totalActivityMinutes,
+          water_ml: totalWaterMl,
+        },
+        { onConflict: 'user_id,date' }
+      );
+
+      setDailyStats(prev => ({
+        ...prev,
+        calories: totalCalories,
+        activity: totalActivityMinutes,
+        water: totalWaterMl,
+      }));
 
       const { data: tasksData } = await supabase.from('tasks').select('*').eq('user_id', user.id).order('created_at', { ascending: true });
       if (tasksData) setTasks(tasksData);
@@ -201,9 +242,44 @@ export default function DashboardScreen({ navigation, route }) {
     }
   };
 
-  const addWater = (amount) => {
-    setDailyStats(prev => ({ ...prev, water: prev.water + amount }));
+  const addWater = async (amount) => {
+    const newWaterValue = dailyStats.water + amount;
+    setDailyStats(prev => ({ ...prev, water: newWaterValue }));
     setWaterModalVisible(false);
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const todayStr = `${year}-${month}-${day}`;
+
+      const { data: currentStat } = await supabase
+        .from('daily_stats')
+        .select('id, water_ml, activity_minutes')
+        .eq('user_id', user.id)
+        .eq('date', todayStr)
+        .maybeSingle();
+
+      if (currentStat) {
+        await supabase
+          .from('daily_stats')
+          .update({ water_ml: (currentStat.water_ml ?? 0) + amount })
+          .eq('id', currentStat.id);
+      } else {
+        await supabase.from('daily_stats').insert([
+          {
+            user_id: user.id,
+            date: todayStr,
+            activity_minutes: 0,
+            water_ml: amount,
+          },
+        ]);
+      }
+    } catch (e) {}
   };
 
   const handleAddTask = async (type = taskType) => {
