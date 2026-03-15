@@ -35,7 +35,7 @@ const AVATAR_THEMES = {
   'a4': { color: '#FF00FF', type: 'glitch' },
 };
 
-export default function DashboardScreen({ navigation, route }) {
+export default function DashboardScreen({ navigation }) {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isMenuVisible, setMenuVisible] = useState(false);
   const [isProfileModalVisible, setProfileModalVisible] = useState(false);
@@ -63,14 +63,6 @@ export default function DashboardScreen({ navigation, route }) {
   const [deviceSteps, setDeviceSteps] = useState(0);
 
   const WATER_GOAL = 3000;
-
-  // Actualizare vizuală imediată când te întorci de la antrenament
-  useEffect(() => {
-    if (route.params?.newActivityMinutes) {
-      setDailyStats(prev => ({ ...prev, activity: prev.activity + route.params.newActivityMinutes }));
-      navigation.setParams({ newActivityMinutes: undefined });
-    }
-  }, [route.params?.newActivityMinutes]);
 
   const saveStepsToSupabase = async (steps) => {
     try {
@@ -151,13 +143,13 @@ export default function DashboardScreen({ navigation, route }) {
       const { data: foodLogs } = await supabase.from('scanned_foods').select('calories').eq('user_id', user.id).gte('scanned_at', isoMidnight);
       const totalCalories = foodLogs ? foodLogs.reduce((sum, log) => sum + (Number(log.calories) || 0), 0) : 0;
 
-      // CITIM MINUTELE DIN TABELUL ZILNIC
+      // 🔴 CITIM MINUTELE DIN TABELUL ZILNIC
       const { data: statLog } = await supabase.from('daily_stats').select('activity_minutes').eq('user_id', user.id).eq('date', todayStr).maybeSingle();
       const totalActivityMinutes = statLog?.activity_minutes || 0;
 
       setDailyStats(prev => ({ ...prev, calories: totalCalories, activity: totalActivityMinutes }));
 
-      const { data: tasksData } = await supabase.from('tasks').select('*').order('created_at', { ascending: true });
+      const { data: tasksData } = await supabase.from('tasks').select('*').eq('user_id', user.id).order('created_at', { ascending: true });
       if (tasksData) setTasks(tasksData);
     } else {
       setIsLoggedIn(false);
@@ -227,6 +219,7 @@ export default function DashboardScreen({ navigation, route }) {
     if (user) await supabase.from('tasks').update({ completed: !currentStatus }).eq('id', id);
   };
 
+  // 🔴 MAGIC Bifa automata daca task-ul este indeplinit!
   const isTaskAutoCompleted = (task) => {
     if (task.type === 'water') return (dailyStats.water / 1000) >= task.goal;
     if (task.type === 'steps') return dailyStats.steps >= task.goal;

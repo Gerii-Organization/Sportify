@@ -41,7 +41,8 @@ export default function WorkoutDetailScreen({ route, navigation }) {
   const [isExerciseSelectorVisible, setIsExerciseSelectorVisible] = useState(false);
   
   const [showSummary, setShowSummary] = useState(false);
-  const [workoutStats, setWorkoutStats] = useState({ volume: 0, time: 0, message: '', xpGained: 50, energyGained: 20, isFirstWorkoutToday: false });
+  // 🔴 Am adaugat newStreak in state pentru a-l afisa in UI
+  const [workoutStats, setWorkoutStats] = useState({ volume: 0, time: 0, message: '', xpGained: 50, energyGained: 20, isFirstWorkoutToday: false, newStreak: 0 });
 
   useEffect(() => {
     let interval;
@@ -62,7 +63,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
         .from('user_workouts')
         .update({ exercises: currentWorkout.exercises })
         .eq('id', currentWorkout.id);
-        
+
       if (error) {
         Alert.alert("Eroare la salvare", error.message);
       } else {
@@ -149,34 +150,30 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
   const handleFinishWorkout = async () => {
     const allSetsCompleted = currentWorkout.exercises.every(ex => ex.sets.every(set => set.completed));
-    
+
     if (!allSetsCompleted) {
       Alert.alert(
-        'Antrenament Incomplet', 
-        'Acest antrenament nu va fi validat! Este obligatoriu ca toate seturile să fie bifate (DONE) pentru a putea termina și salva progresul.', 
+        'Antrenament Incomplet',
+        'Acest antrenament nu va fi validat! Este obligatoriu ca toate seturile să fie bifate (DONE) pentru a putea termina și salva progresul.',
         [{ text: 'Am înțeles', style: 'cancel' }]
       );
-      return; 
+      return;
     }
 
     let totalSets = 0;
-    currentWorkout.exercises.forEach(ex => {
-      totalSets += ex.sets.length;
-    });
-
+    currentWorkout.exercises.forEach(ex => { totalSets += ex.sets.length; });
     const MIN_SECONDS_PER_SET = 60; 
     const minRequiredSeconds = totalSets * MIN_SECONDS_PER_SET;
 
     if (timer < minRequiredSeconds) {
       const minutesSpent = Math.floor(timer / 60);
       const minimumMinutes = Math.floor(minRequiredSeconds / 60);
-
       Alert.alert(
         'Antrenament Suspect de Rapid 🏃💨',
-        `Ai încercat să finalizezi ${totalSets} seturi în doar ${minutesSpent} minute.\n\nTimpul minim fizic estimat pentru acest volum este de cel puțin ~${minimumMinutes} minute.\n\nFără scurtături! Ia-ți pauzele corecte și execută exercițiile pentru a primi XP-ul.`,
+        `Ai încercat să finalizezi ${totalSets} seturi în doar ${minutesSpent} minute.\n\nTimpul minim estimat pentru acest volum este de ~${minimumMinutes} minute.\n\nNu poți păcăli sistemul! Revino când termini cu adevărat.`,
         [{ text: 'Înapoi la treabă', style: 'default' }]
       );
-      return;
+      return; 
     }
 
     processWorkoutCompletion();
@@ -196,45 +193,94 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
     const { data: { user } } = await supabase.auth.getUser();
     let isFirstWorkoutToday = false;
+    let finalStreakValue = 0;
 
     if (user) {
-      const today = new Date().toISOString().split('T')[0];
-      const { data: currentStat } = await supabase.from('daily_stats').select('activity_minutes').eq('user_id', user.id).eq('date', today).maybeSingle();
-      
-      const currentMinutes = currentStat?.activity_minutes || 0;
-      isFirstWorkoutToday = currentMinutes === 0; 
-      
-      await supabase.from('daily_stats').upsert({ user_id: user.id, date: today, activity_minutes: currentMinutes + elapsedMinutes });
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const todayStr = `${year}-${month}-${day}`;
 
-      const { data: profile } = await supabase.from('profiles').select('xp, energy_points').eq('id', user.id).single();
-      await supabase.from('profiles').update({ xp: (profile?.xp || 0) + 50, energy_points: (profile?.energy_points || 0) + 20 }).eq('id', user.id);
+      const { data: currentStat } = await supabase.from('daily_stats').select('activity_minutes').eq('user_id', user.id).eq('date', todayStr).maybeSingle();
+      const currentMinutes = currentStat?.activity_minutes || 0;
+      
+      await supabase.from('daily_stats').upsert({
+        user_id: user.id,
+        date: todayStr,
+        activity_minutes: currentMinutes + elapsedMinutes
+      });
+
+      const { data: profile } = await supabase.from('profiles').select('xp, energy_points, current_streak, last_workout_date').eq('id', user.id).single();
+
+      let newStreak = profile?.current_streak || 0;
+      let streakIncreased = false;
+
+      if (profile?.last_workout_date === todayStr) {
+        streakIncreased = false;
+      } else if (profile?.last_workout_date) {
+        const todayDate = new Date(todayStr);
+        const lastDate = new Date(profile.last_workout_date);
+        const diffTime = todayDate.getTime() - lastDate.getTime();
+        const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+
+        if (diffDays === 1) {
+          newStreak += 1;
+          streakIncreased = true;
+        } else if (diffDays > 1) {
+          newStreak = 1;
+          streakIncreased = true;
+        }
+      } else {
+        newStreak = 1;
+        streakIncreased = true;
+      }
+
+      isFirstWorkoutToday = streakIncreased;
+      finalStreakValue = newStreak; // Salvăm streak-ul pentru UI
+
+      await supabase.from('profiles').update({
+        xp: (profile?.xp || 0) + 50,
+        energy_points: (profile?.energy_points || 0) + 20,
+        current_streak: newStreak,
+        last_workout_date: todayStr
+      }).eq('id', user.id);
     }
 
-    setWorkoutStats({ volume: totalKg, time: timer, message: randomMsg, xpGained: 50 + (totalKg > 1000 ? 20 : 0), energyGained: 20, isFirstWorkoutToday });
+    setWorkoutStats({
+      volume: totalKg,
+      time: timer,
+      message: randomMsg,
+      xpGained: 50 + (totalKg > 1000 ? 20 : 0),
+      energyGained: 20,
+      isFirstWorkoutToday,
+      newStreak: finalStreakValue // Adăugat
+    });
 
     const resetExercises = currentWorkout.exercises.map(ex => ({
       ...ex,
       sets: ex.sets.map(set => ({
         ...set,
         prev: set.weight && set.reps ? `${set.weight}kg x ${set.reps}` : set.prev,
-        completed: false 
+        completed: false
       }))
     }));
 
     const finalWorkoutToSave = { ...currentWorkout, exercises: resetExercises };
-    
+
     if (user) {
       await supabase.from('user_workouts').update({ exercises: resetExercises }).eq('id', currentWorkout.id);
     }
 
-    setCurrentWorkout(finalWorkoutToSave); 
-    setShowSummary(true); 
+    setCurrentWorkout(finalWorkoutToSave);
+    setShowSummary(true);
   };
 
   const closeSummaryAndExit = () => {
     if (onSave) onSave(currentWorkout);
     setShowSummary(false);
-    navigation.navigate('MainTabs', { screen: 'Dashboard' }); 
+    const elapsedMinutes = Math.ceil(workoutStats.time / 60);
+    navigation.navigate('MainTabs', { screen: 'Dashboard', params: { newActivityMinutes: elapsedMinutes } });
   };
 
   const handleBackPress = () => {
@@ -279,10 +325,10 @@ export default function WorkoutDetailScreen({ route, navigation }) {
         <ScrollView contentContainerStyle={{ padding: 15, paddingBottom: 100 }}>
           {currentWorkout?.exercises?.map((exercise, index) => (
             <View key={exercise.id} style={styles.exerciseCard}>
-              
+
               <View style={styles.exerciseHeaderRow}>
                 <Text style={styles.exerciseName}>{exercise.name}</Text>
-                
+
                 {mode === 'editing' && (
                   <View style={styles.exerciseActionRow}>
                     <TouchableOpacity onPress={() => moveExerciseUp(index)} disabled={index === 0} style={{ opacity: index === 0 ? 0.2 : 1, paddingHorizontal: 5 }}>
@@ -297,7 +343,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
                   </View>
                 )}
               </View>
-              
+
               <View style={styles.tableHeader}>
                 <Text style={[styles.tableHeaderText, { flex: 0.5 }]}>SET</Text>
                 <Text style={[styles.tableHeaderText, { flex: 1 }]}>PREV</Text>
@@ -306,12 +352,12 @@ export default function WorkoutDetailScreen({ route, navigation }) {
                 {mode === 'started' && <Text style={[styles.tableHeaderText, { flex: 0.6 }]}>DONE</Text>}
                 {mode === 'editing' && <Text style={[styles.tableHeaderText, { flex: 0.5 }]}></Text>}
               </View>
-              
+
               {exercise.sets.map((set, setIndex) => (
                 <View key={set.id} style={[styles.setRow, set.completed && styles.setRowCompleted]}>
                   <Text style={[styles.setText, { flex: 0.5 }]}>{setIndex + 1}</Text>
                   <Text style={[styles.setText, { flex: 1, color: '#555' }]}>{set.prev}</Text>
-                  
+
                   <TextInput style={[styles.setInput, set.completed && {opacity: 0.5}]} keyboardType="numeric" value={set.weight} onChangeText={(v) => updateSetData(exercise.id, set.id, 'weight', v)} placeholder="0" placeholderTextColor="#444" editable={!set.completed} />
                   <TextInput style={[styles.setInput, set.completed && {opacity: 0.5}]} keyboardType="numeric" value={set.reps} onChangeText={(v) => updateSetData(exercise.id, set.id, 'reps', v)} placeholder="0" placeholderTextColor="#444" editable={!set.completed} />
 
@@ -390,13 +436,16 @@ export default function WorkoutDetailScreen({ route, navigation }) {
               </View>
             </View>
 
+            {/* 🔴 CARD STREAK ACTUALIZAT ESTETIC */}
             {workoutStats.isFirstWorkoutToday && (
-              <View style={[styles.duoCard, { borderColor: '#FF8800' }]}>
+              <View style={[styles.duoCard, { borderColor: '#FF8800', backgroundColor: '#1f1000' }]}>
                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <Flame color="#FF8800" size={30} fill="#FF8800" style={{ marginRight: 15 }} />
-                  <View>
-                    <Text style={styles.duoStreakTitle}>Streak Actualizat!</Text>
-                    <Text style={styles.duoStreakSub}>Ai progresat și azi. Ține-o tot așa!</Text>
+                  <View style={styles.streakCircle}>
+                    <Flame color="#FF8800" size={36} fill="#FF8800" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.duoStreakTitle}>{workoutStats.newStreak} Zile Streak! 🔥</Text>
+                    <Text style={styles.duoStreakSub}>Excelent! Ți-ai extins seria de antrenamente consecutive.</Text>
                   </View>
                 </View>
               </View>
@@ -444,11 +493,11 @@ const styles = StyleSheet.create({
   timerText: { color: '#1DB954', fontSize: 18, fontWeight: 'bold', marginLeft: 8 },
   startBigBtn: { flexDirection: 'row', backgroundColor: '#1DB954', margin: 20, padding: 18, borderRadius: 25, justifyContent: 'center', alignItems: 'center', shadowColor: '#1DB954', shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
   startBigBtnText: { color: '#000', fontWeight: 'bold', fontSize: 18, marginLeft: 10 },
-  
+
   exerciseCard: { backgroundColor: '#1c1c1e', borderRadius: 15, padding: 15, marginBottom: 20 },
   exerciseHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
   exerciseName: { color: '#1DB954', fontSize: 16, fontWeight: '700', flex: 1 },
-  exerciseActionRow: { flexDirection: 'row', alignItems: 'center' }, // Stil nou
+  exerciseActionRow: { flexDirection: 'row', alignItems: 'center' },
   
   tableHeader: { flexDirection: 'row', marginBottom: 10 },
   tableHeaderText: { color: '#666', fontSize: 12, textAlign: 'center', fontWeight: 'bold' },
@@ -489,8 +538,9 @@ const styles = StyleSheet.create({
   duoRewardTitle: { color: '#FFF', fontSize: 16, fontWeight: 'bold', textAlign: 'center', marginBottom: 20 },
   duoRewardBox: { alignItems: 'center', flex: 1 },
   
-  duoStreakTitle: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
-  duoStreakSub: { color: '#888', fontSize: 13, marginTop: 4 },
+  streakCircle: { width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(255, 136, 0, 0.1)', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
+  duoStreakTitle: { color: '#FF8800', fontSize: 20, fontWeight: '900' },
+  duoStreakSub: { color: '#FFAA44', fontSize: 13, marginTop: 4, fontWeight: '600' },
 
   duoFooter: { position: 'absolute', bottom: 0, width: '100%', padding: 20, backgroundColor: '#000', borderTopWidth: 1, borderTopColor: '#1A1A1A' },
   duoButton: { backgroundColor: '#1DB954', paddingVertical: 18, borderRadius: 16, alignItems: 'center', borderBottomWidth: 4, borderBottomColor: '#148F3D' },
