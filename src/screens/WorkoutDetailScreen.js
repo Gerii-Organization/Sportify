@@ -38,23 +38,20 @@ const MOTIVATIONAL_MESSAGES = [
 ];
 
 export default function WorkoutDetailScreen({ route, navigation }) {
-  // 🔴 1. Extragem parametrii în siguranță pentru a preveni crash-urile la Refresh
   const workout = route?.params?.workout;
   const onSave = route?.params?.onSave;
 
-  // Setăm un fallback (array gol) dacă workout este undefined
   const [currentWorkout, setCurrentWorkout] = useState(workout || { name: '', exercises: [] });
-  const [mode, setMode] = useState('idle'); 
+  const [mode, setMode] = useState('idle');
   const [timer, setTimer] = useState(0);
   const [isExerciseSelectorVisible, setIsExerciseSelectorVisible] = useState(false);
-  
-  const [showSummary, setShowSummary] = useState(false);
-  const [workoutStats, setWorkoutStats] = useState({ volume: 0, time: 0, message: '', xpGained: 50, energyGained: 20, isFirstWorkoutToday: false, newStreak: 0 });
 
-  // 🔴 2. Redirecționare de urgență dacă nu există date (după Refresh)
+  const [showSummary, setShowSummary] = useState(false);
+  const [showTooFastModal, setShowTooFastModal] = useState(false);
+  const [workoutStats, setWorkoutStats] = useState({ volume: 0, time: 0, message: '', xpGained: 50, energyGained: 0, isFirstWorkoutToday: false, newStreak: 0 });
+
   useEffect(() => {
     if (!workout) {
-      // Dacă parametrii s-au pierdut, te întoarcem pe ecranul principal imediat
       navigation.replace('MainTabs');
     }
   }, [workout, navigation]);
@@ -66,7 +63,6 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     return () => clearInterval(interval);
   }, [mode]);
 
-  // 🔴 3. Oprim randarea ecranului dacă workout nu există (pentru a evita erori roșii)
   if (!workout) {
     return <View style={styles.container} />;
   }
@@ -180,20 +176,25 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       return;
     }
 
+    if (timer < 60) {
+      setShowTooFastModal(true);
+      return;
+    }
+
     let totalSets = 0;
     currentWorkout.exercises.forEach(ex => { totalSets += ex.sets.length; });
     const MIN_SECONDS_PER_SET = 60;
     const minRequiredSeconds = totalSets * MIN_SECONDS_PER_SET;
 
-    if (timer < minRequiredSeconds) {
+    if (totalSets > 0 && timer < minRequiredSeconds) {
       const minutesSpent = Math.floor(timer / 60);
       const minimumMinutes = Math.floor(minRequiredSeconds / 60);
       Alert.alert(
-        'Antrenament Suspect de Rapid 🏃💨',
+        'Antrenament Suspect de Rapid',
         `Ai încercat să finalizezi ${totalSets} seturi în doar ${minutesSpent} minute.\n\nTimpul minim estimat pentru acest volum este de ~${minimumMinutes} minute.\n\nNu poți păcăli sistemul! Revino când termini cu adevărat.`,
         [{ text: 'Înapoi la treabă', style: 'default' }]
       );
-      return; 
+      return;
     }
 
     processWorkoutCompletion();
@@ -209,11 +210,14 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     });
 
     const randomMsg = MOTIVATIONAL_MESSAGES[Math.floor(Math.random() * MOTIVATIONAL_MESSAGES.length)];
-    const elapsedMinutes = Math.ceil(timer / 60);
+    const elapsedMinutes = Math.max(1, Math.ceil(timer / 60));
+
+    const finalEnergy = Math.min(elapsedMinutes * 5, 500);
 
     const { data: { user } } = await supabase.auth.getUser();
     let isFirstWorkoutToday = false;
     let finalStreakValue = 0;
+    let finalXP = 50 + (totalKg > 1000 ? 20 : 0);
 
     if (user) {
       const now = new Date();
@@ -231,7 +235,16 @@ export default function WorkoutDetailScreen({ route, navigation }) {
         activity_minutes: currentMinutes + elapsedMinutes
       });
 
-      const { data: profile } = await supabase.from('profiles').select('xp, energy_points, current_streak, last_workout_date').eq('id', user.id).single();
+      // Sistemul tau personalizat de workout completions
+      await supabase.from('workout_completions').insert([{
+        user_id: user.id,
+        workout_id: currentWorkout.id,
+        workout_name: currentWorkout.name || 'Workout',
+        completed_at: new Date().toISOString(),
+        duration_minutes: elapsedMinutes
+      }]);
+
+      const { data: profile } = await supabase.from('profiles').select('xp, energy_points, current_streak, previous_streak, last_workout_date, xp_boost_expires_at').eq('id', user.id).single();
 
       let newStreak = profile?.current_streak || 0;
       let streakIncreased = false;
@@ -248,7 +261,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
           newStreak += 1;
           streakIncreased = true;
         } else if (diffDays > 1) {
-          await supabase.from('profiles').update({previous_streak: profile.current_streak}).eq('id', user.id);
+          await supabase.from('profiles').update({ previous_streak: profile.current_streak }).eq('id', user.id);
           newStreak = 1;
           streakIncreased = true;
         }
@@ -260,9 +273,12 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       isFirstWorkoutToday = streakIncreased;
       finalStreakValue = newStreak;
 
+      const isBoosted = profile?.xp_boost_expires_at && new Date(profile.xp_boost_expires_at) > new Date();
+      if (isBoosted) finalXP *= 2;
+
       await supabase.from('profiles').update({
-        xp: (profile?.xp || 0) + 50,
-        energy_points: (profile?.energy_points || 0) + 20,
+        xp: (profile?.xp || 0) + finalXP,
+        energy_points: (profile?.energy_points || 0) + finalEnergy,
         current_streak: newStreak,
         last_workout_date: todayStr
       }).eq('id', user.id);
@@ -272,10 +288,10 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       volume: totalKg,
       time: timer,
       message: randomMsg,
-      xpGained: 50 + (totalKg > 1000 ? 20 : 0),
-      energyGained: 20,
+      xpGained: finalXP,
+      energyGained: finalEnergy,
       isFirstWorkoutToday,
-      newStreak: finalStreakValue 
+      newStreak: finalStreakValue
     });
 
     const resetExercises = currentWorkout.exercises.map(ex => ({
@@ -298,24 +314,25 @@ export default function WorkoutDetailScreen({ route, navigation }) {
   };
 
   const closeSummaryAndExit = () => {
+    // 1. Salvam starea
     if (onSave) onSave(currentWorkout);
+    
     setShowSummary(false);
     const elapsedMinutes = Math.ceil(workoutStats.time / 60);
-
-    // 🔴 Metoda sigură: Resetăm complet navigația.
-    // Asta distruge ecranul de antrenament blocat pe fundal și te pune direct pe Dashboard.
-    navigation.reset({
-      index: 0,
-      routes: [
-        {
-          name: 'MainTabs',
-          params: {
-            screen: 'Dashboard',
-            params: { newActivityMinutes: elapsedMinutes },
+    setTimeout(() => {
+      navigation.reset({
+        index: 0,
+        routes: [
+          {
+            name: 'MainTabs',
+            params: {
+              screen: 'Dashboard',
+              params: { newActivityMinutes: elapsedMinutes },
+            },
           },
-        },
-      ],
-    });
+        ],
+      });
+    }, 100);
   };
 
   const handleBackPress = () => {
@@ -498,6 +515,24 @@ export default function WorkoutDetailScreen({ route, navigation }) {
           </SafeAreaView>
         </Modal>
 
+        <Modal transparent visible={showTooFastModal} animationType="fade">
+          <View style={styles.modalOverlayFull}>
+            <View style={styles.modalContentTooFast}>
+              <Clock color="#ff4444" size={56} style={{ marginBottom: 20 }} />
+              <Text style={styles.modalTitle}>Wait a minute!</Text>
+              <Text style={styles.modalText}>
+                You haven't trained enough. Try training more until you complete the workout!
+              </Text>
+              <TouchableOpacity
+                style={styles.modalBtnAction}
+                onPress={() => setShowTooFastModal(false)}
+              >
+                <Text style={styles.modalBtnActionText}>Keep Training</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
         <Modal visible={isExerciseSelectorVisible} animationType="slide" transparent>
           <View style={styles.modalOverlay}>
             <View style={[styles.glassMenu, { height: '80%', padding: 20 }]}>
@@ -536,7 +571,7 @@ const styles = StyleSheet.create({
   exerciseHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
   exerciseName: { color: NEON_GREEN, fontSize: 16, fontWeight: '700', flex: 1 },
   exerciseActionRow: { flexDirection: 'row', alignItems: 'center' },
-  
+
   tableHeader: { flexDirection: 'row', marginBottom: 10 },
   tableHeaderText: { color: '#666', fontSize: 12, textAlign: 'center', fontWeight: 'bold' },
   setRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: '#333' },
@@ -551,7 +586,7 @@ const styles = StyleSheet.create({
   finishContainer: { position: 'absolute', bottom: 0, width: '100%', backgroundColor: CARD_BG, padding: 20, borderTopWidth: 1, borderTopColor: '#222' },
   finishBtn: { backgroundColor: NEON_GREEN, padding: 18, borderRadius: 30, alignItems: 'center' },
   finishBtnText: { color: '#000', fontWeight: 'bold', fontSize: 16 },
-  
+
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end', padding: 15 },
   glassMenu: { backgroundColor: '#161616', width: '100%', borderRadius: 35, padding: 25, borderWidth: 1, borderColor: '#222', paddingBottom: 40 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
@@ -565,22 +600,29 @@ const styles = StyleSheet.create({
   summaryHeader: { alignItems: 'center', marginVertical: 40 },
   summaryTitle: { color: NEON_GREEN, fontSize: 32, fontWeight: '900', textAlign: 'center', letterSpacing: 1 },
   summaryMessage: { color: '#FFF', fontSize: 16, textAlign: 'center', marginTop: 15, fontStyle: 'italic', paddingHorizontal: 20 },
-  
+
   duoCard: { backgroundColor: CARD_BG, width: '100%', borderRadius: 22, padding: 20, marginBottom: 20, borderWidth: 1, borderColor: '#222' },
   duoStatRow: { flexDirection: 'row', justifyContent: 'space-evenly', alignItems: 'center' },
   duoStatBox: { alignItems: 'center', flex: 1 },
   duoDivider: { width: 2, height: 40, backgroundColor: '#333' },
   duoStatLabel: { color: '#888', fontSize: 12, fontWeight: 'bold', marginBottom: 5 },
   duoStatValue: { color: '#FFF', fontSize: 24, fontWeight: '900' },
-  
+
   duoRewardTitle: { color: '#FFF', fontSize: 16, fontWeight: 'bold', textAlign: 'center', marginBottom: 20 },
   duoRewardBox: { alignItems: 'center', flex: 1 },
-  
+
   streakCircle: { width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(255, 136, 0, 0.1)', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
   duoStreakTitle: { color: '#FF8800', fontSize: 20, fontWeight: '900' },
   duoStreakSub: { color: '#FFAA44', fontSize: 13, marginTop: 4, fontWeight: '600' },
 
   duoFooter: { position: 'absolute', bottom: 0, width: '100%', padding: 20, backgroundColor: '#000', borderTopWidth: 1, borderTopColor: '#222' },
-  duoButton: { backgroundColor: NEON_GREEN, paddingVertical: 18, borderRadius: 16, alignItems: 'center' },
-  duoButtonText: { color: '#000', fontSize: 18, fontWeight: '900', letterSpacing: 1 }
+  duoButton: { backgroundColor: NEON_GREEN, paddingVertical: 18, borderRadius: 16, alignItems: 'center', width: '100%' },
+  duoButtonText: { color: '#000', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
+
+  modalOverlayFull: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' },
+  modalContentTooFast: { backgroundColor: CARD_BG, borderRadius: 32, padding: 30, width: '85%', alignItems: 'center', borderWidth: 1, borderColor: '#ff4444' },
+  modalTitle: { color: '#fff', fontSize: 22, fontWeight: 'bold', marginBottom: 10 },
+  modalText: { color: '#aaa', fontSize: 16, textAlign: 'center', marginBottom: 25 },
+  modalBtnAction: { backgroundColor: '#ff4444', padding: 15, borderRadius: 15, width: '100%', alignItems: 'center', marginTop: 10 },
+  modalBtnActionText: { color: '#000', fontWeight: 'bold', fontSize: 16 }
 });

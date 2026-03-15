@@ -48,7 +48,7 @@ export default function DashboardScreen({ navigation, route }) {
     steps: 0,
     calories: 0,
     activity: 0,
-    sleep: 7.5,
+    sleep: '7h 30m',
     water: 0
   });
 
@@ -84,6 +84,37 @@ export default function DashboardScreen({ navigation, route }) {
   };
 
   const WATER_GOAL = 3000;
+
+  const formatSleepDuration = (totalSleepMinutes) => {
+    const hours = Math.floor((totalSleepMinutes || 0) / 60);
+    const minutes = (totalSleepMinutes || 0) % 60;
+    return `${hours}h ${minutes}m`;
+  };
+
+  // Salvează somnul (în minute) pentru utilizatorul autentificat în tabelul daily_stats
+  const saveSleepToSupabase = async (totalSleepMinutes) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const todayStr = `${year}-${month}-${day}`;
+
+      await supabase.from('daily_stats').upsert(
+        {
+          user_id: user.id,
+          date: todayStr,
+          sleep_minutes: totalSleepMinutes,
+        },
+        { onConflict: 'user_id,date' }
+      );
+    } catch (e) {
+      console.log('saveSleepToSupabase error', e);
+    }
+  };
 
   useEffect(() => {
     if (route.params?.newActivityMinutes) {
@@ -141,6 +172,77 @@ export default function DashboardScreen({ navigation, route }) {
     };
     subscribePedometer();
     return () => { if (subscription) subscription.remove(); };
+  }, []);
+
+  // Citește somnul din Apple Health (doar pe iOS) și îl salvează în Supabase
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+
+    let isCancelled = false;
+
+    const syncSleepFromHealth = async () => {
+      try {
+        const AppleHealthKitModule = await import('react-native-health');
+        const AppleHealthKit = AppleHealthKitModule.default;
+
+        const permissions = {
+          permissions: {
+            read: [AppleHealthKit.Constants.Permissions.SleepAnalysis],
+          },
+        };
+
+        AppleHealthKit.initHealthKit(permissions, (err) => {
+          if (err || isCancelled) {
+            console.log('HealthKit permission error:', err);
+            return;
+          }
+
+          const startOfDay = new Date();
+          startOfDay.setHours(0, 0, 0, 0);
+
+          const options = {
+            startDate: startOfDay.toISOString(),
+            endDate: new Date().toISOString(),
+          };
+
+          AppleHealthKit.getSleepSamples(options, async (error, samples) => {
+            if (error || isCancelled) {
+              console.log('Sleep fetch error:', error);
+              return;
+            }
+
+            let totalSleepMinutes = 0;
+            (samples || []).forEach(sample => {
+              const start = new Date(sample.startDate);
+              const end = new Date(sample.endDate);
+              const minutes = (end - start) / (1000 * 60);
+              if (!Number.isNaN(minutes) && minutes > 0) {
+                totalSleepMinutes += minutes;
+              }
+            });
+
+            totalSleepMinutes = Math.round(totalSleepMinutes);
+
+            if (!isCancelled && totalSleepMinutes > 0) {
+              await saveSleepToSupabase(totalSleepMinutes);
+              // Actualizăm imediat UI-ul cu noua valoare
+              setDailyStats(prev => ({
+                ...prev,
+                sleep: formatSleepDuration(totalSleepMinutes),
+              }));
+            }
+          });
+        });
+      } catch (e) {
+        console.log('syncSleepFromHealth error', e);
+      }
+    };
+
+    syncSleepFromHealth();
+
+    return () => {
+      isCancelled = true;
+    };
   }, []);
 
   useFocusEffect(
@@ -222,18 +324,22 @@ export default function DashboardScreen({ navigation, route }) {
 
       const { data: statLog } = await supabase
         .from('daily_stats')
-        .select('activity_minutes, water_ml')
+        .select('activity_minutes, water_ml, sleep_minutes')
         .eq('user_id', user.id)
         .eq('date', todayStr)
         .maybeSingle();
-      const totalWaterMl = statLog?.water_ml ?? 0;
 
+      const totalWaterMl = statLog?.water_ml ?? 0;
+      const totalSleepMinutes = statLog?.sleep_minutes ?? 0;
+
+      // Nu rescriem somnul care vine din iOS Health; îl păstrăm și doar actualizăm activity + apă
       await supabase.from('daily_stats').upsert(
         {
           user_id: user.id,
           date: todayStr,
           activity_minutes: totalActivityMinutes,
           water_ml: totalWaterMl,
+          sleep_minutes: totalSleepMinutes,
         },
         { onConflict: 'user_id,date' }
       );
@@ -243,6 +349,7 @@ export default function DashboardScreen({ navigation, route }) {
         calories: totalCalories,
         activity: totalActivityMinutes,
         water: totalWaterMl,
+        sleep: formatSleepDuration(totalSleepMinutes), // ex: 7h 30m, 6h 56m
       }));
 
       const { data: tasksData } = await supabase.from('tasks').select('*').eq('user_id', user.id).order('created_at', { ascending: true });
@@ -527,7 +634,7 @@ export default function DashboardScreen({ navigation, route }) {
           <View style={styles.statsGrid}>
             <StatCardWrapper icon={<Flame size={16} color={NEON_GREEN}/>} label="CALORIES" value={dailyStats.calories} unit="kcal" color={NEON_GREEN} />
             <StatCardWrapper icon={<Clock size={16} color="#4D79FF"/>} label="ACTIVITY" value={dailyStats.activity} unit="mins" color="#4D79FF" />
-            <StatCardWrapper icon={<Moon size={16} color={SLEEP_PURPLE}/>} label="SLEEP" value={dailyStats.sleep} unit="hrs" color={SLEEP_PURPLE} />
+            <StatCardWrapper icon={<Moon size={16} color={SLEEP_PURPLE}/>} label="SLEEP" value={dailyStats.sleep} unit="" color={SLEEP_PURPLE} />
             <StatCardWrapper icon={<Droplets size={16} color={WATER_BLUE}/>} label="WATER" value={(dailyStats.water / 1000).toFixed(2)} unit="L" color={WATER_BLUE} onPress={() => setWaterModalVisible(true)} />
           </View>
 

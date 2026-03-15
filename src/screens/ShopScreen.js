@@ -40,7 +40,7 @@ const CATALOG_POWERUPS = [
 export default function ShopScreen() {
   const [loading, setLoading] = useState(true);
   const [balance, setBalance] = useState(0);
-  const [profileData, setProfileData] = useState(null); // Salvăm datele profilului pentru verificări
+  const [profileData, setProfileData] = useState(null);
   const [rings, setRings] = useState([]);
   const [avatars, setAvatars] = useState([]);
   const [badges, setBadges] = useState([]);
@@ -163,7 +163,6 @@ export default function ShopScreen() {
     if (categoryType !== 'powerup' && item.equipped) return;
 
     if (categoryType === 'powerup' && item.id === 'p2') {
-      // Verificăm dacă are sens să cumpere Streak Restore
       if (!profileData || !profileData.previous_streak || profileData.previous_streak <= profileData.current_streak) {
         Alert.alert("Inutil", "Nu ai niciun streak pierdut de recuperat în acest moment!");
         return;
@@ -206,7 +205,6 @@ export default function ShopScreen() {
         const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
         profileUpdates.xp_boost_expires_at = expiresAt;
       } else if (item.id === 'p2') {
-        // Restaurăm streak-ul vechi și resetăm memoria
         profileUpdates.current_streak = profileData.previous_streak;
         profileUpdates.previous_streak = 0;
       }

@@ -15,18 +15,14 @@ const CARD_BG = '#121212';
 
 export default function TrainingScreen({ navigation }) {
   const [myWorkouts, setMyWorkouts] = useState([]);
-  const [suggestedWorkouts, setSuggestedWorkouts] = useState([]); 
-  
+  const [suggestedWorkouts, setSuggestedWorkouts] = useState([]);
   const [mainMenuVisible, setMainMenuVisible] = useState(false);
   const [isBuiltInExpanded, setIsBuiltInExpanded] = useState(false);
   const [isNamingModalVisible, setIsNamingModalVisible] = useState(false);
   const [newWorkoutName, setNewWorkoutName] = useState('');
 
-  // 🔴 REZOLVAREA PROBLEMEI CONTURILOR MÚLTIPLE: 
-  // Folosim useFocusEffect ca să forțăm reîncărcarea datelor ori de câte ori deschidem acest tab
   useFocusEffect(
     useCallback(() => {
-      // Golește preventiv starea veche pentru a nu vedea datele contului anterior
       setMyWorkouts([]);
       setSuggestedWorkouts([]);
       

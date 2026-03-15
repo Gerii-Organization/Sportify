@@ -1,14 +1,12 @@
 import React, { useState } from 'react';
 import { 
   View, Text, TextInput, TouchableOpacity, StyleSheet, 
-  Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, SafeAreaView 
+  Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView 
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../lib/supabase';
-import { X, Flame } from 'lucide-react-native';
+import { X } from 'lucide-react-native';
 
 const NEON_GREEN = '#1ED760';
-const CARD_BG = '#121212';
 
 const GOALS = [
   { id: 'lose_weight', label: 'Slabire' },
@@ -42,59 +40,87 @@ export default function AuthScreen({ navigation }) {
   const handleAuth = async () => {
     if (!email || !password) return Alert.alert('Eroare', 'Emailul și parola sunt obligatorii.');
     if (isRegistering) {
-      if (password !== confirmPassword) return Alert.alert('Eroare', 'Parolele nu coincid!');
-      if (!firstName || !age || !weight || !goal) return Alert.alert('Eroare', 'Te rugăm să completezi datele și să alegi un scop.');
+      if (!firstName || !age || !sex || !weight || !height || !workouts || !goal) {
+        return Alert.alert('Câmpuri incomplete', 'Te rugăm să completezi toate datele și să alegi un obiectiv.');
+      }
+
+      if (password.length < 6) {
+        return Alert.alert('Format invalid', 'Parola trebuie să conțină minimum 6 caractere.');
+      }
+      if (password !== confirmPassword) {
+        return Alert.alert('Eroare', 'Parolele nu coincid!');
+      }
+
+      const parsedAge = parseInt(age);
+      if (isNaN(parsedAge) || parsedAge < 1 || parsedAge > 100) {
+        return Alert.alert('Format invalid', 'Vârsta trebuie să fie între 1 și 100 de ani.');
+      }
+
+      const upperSex = sex.trim().toUpperCase();
+      if (upperSex !== 'M' && upperSex !== 'F') {
+        return Alert.alert('Format invalid', 'Sexul introdus trebuie să fie DOAR "M" sau "F".');
+      }
+
+      const parsedHeight = parseFloat(height);
+      if (isNaN(parsedHeight) || parsedHeight < 100 || parsedHeight > 210) {
+        return Alert.alert('Format invalid', 'Înălțimea trebuie să fie între 100 și 210 cm.');
+      }
+
+      const parsedWeight = parseFloat(weight);
+      if (isNaN(parsedWeight) || parsedWeight < 30 || parsedWeight > 300) {
+        return Alert.alert('Format invalid', 'Te rugăm să introduci o greutate validă (în kg).');
+      }
+
+      const parsedWorkouts = parseInt(workouts);
+      if (isNaN(parsedWorkouts) || parsedWorkouts < 1 || parsedWorkouts > 7) {
+        return Alert.alert('Format invalid', 'Numărul de antrenamente pe săptămână trebuie să fie între 1 și 7.');
+      }
     }
 
     setLoading(true);
 
     if (isRegistering) {
       const { data: { user }, error: signUpError } = await supabase.auth.signUp({ email: email.trim(), password });
+
       if (signUpError) Alert.alert('Eroare', signUpError.message);
       else if (user) {
         const { error: profileError } = await supabase.from('profiles').insert({
           id: user.id,
-          first_name: firstName,
-          sex: sex,
+          first_name: firstName.trim(),
+          sex: sex.trim().toUpperCase(),
           age: parseInt(age),
           weight: parseFloat(weight),
           height: parseFloat(height),
           workouts_per_week: parseInt(workouts),
           goal: goal,
         });
+
         if (profileError) Alert.alert('Eroare Profil', profileError.message);
         else {
           Alert.alert('Succes', 'Cont creat! Acum te poți loga.');
-          toggleAuthMode(); // Trece automat pe modul de logare
+          toggleAuthMode();
         }
       }
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      
       if (error) Alert.alert('Eroare', error.message);
       else {
-        navigation.goBack(); // Ne intoarcem la Dashboard dupa logare cu succes
+        navigation.goBack();
       }
     }
     setLoading(false);
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.keyboardWrap}>
-          <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.container}>
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
 
-            <View style={styles.header}>
-              <View style={styles.logoAndName}>
-                <View style={styles.logoMark}><Flame size={18} color="black" fill="black" /></View>
-                <Text style={styles.appName}>Sportify</Text>
-              </View>
-              <TouchableOpacity style={styles.closeBtn} onPress={() => navigation.goBack()}>
-                <X color="#FFF" size={28} />
-              </TouchableOpacity>
-            </View>
+        <TouchableOpacity style={styles.closeBtn} onPress={() => navigation.goBack()}>
+          <X color="#FFF" size={32} />
+        </TouchableOpacity>
 
-            <View style={styles.card}>
+        <View style={styles.card}>
           <Text style={styles.title}>{isRegistering ? 'Hai să începem' : 'Bine ai revenit'}</Text>
 
           <View style={styles.form}>
@@ -104,6 +130,7 @@ export default function AuthScreen({ navigation }) {
             {isRegistering && (
               <>
                 <CustomInput label="Confirmă Parola" value={confirmPassword} onChange={setConfirmPassword} placeholder="******" secure />
+                
                 <View style={styles.divider} />
                 <Text style={styles.sectionTitle}>Obiectivul Tău</Text>
 
@@ -120,18 +147,30 @@ export default function AuthScreen({ navigation }) {
                 </ScrollView>
 
                 <Text style={styles.sectionTitle}>Detalii Personale</Text>
+                
                 <CustomInput label="Prenume" value={firstName} onChange={setFirstName} placeholder="Victor" />
+                
                 <View style={styles.row}>
-                   <View style={{flex: 1}}><CustomInput label="Vârstă" value={age} onChange={setAge} placeholder="25" keyboard="numeric" /></View>
+                   <View style={{flex: 1}}>
+                     <CustomInput label="Vârstă (1-100)" value={age} onChange={setAge} placeholder="25" keyboard="numeric" />
+                   </View>
                    <View style={{width: 15}} />
-                   <View style={{flex: 1}}><CustomInput label="Sex (M/F)" value={sex} onChange={setSex} placeholder="M" autoCap="characters" /></View>
+                   <View style={{flex: 1}}>
+                     <CustomInput label="Sex (M/F)" value={sex} onChange={setSex} placeholder="M" autoCap="characters" />
+                   </View>
                 </View>
+
                 <View style={styles.row}>
-                   <View style={{flex: 1}}><CustomInput label="Greutate (kg)" value={weight} onChange={setWeight} placeholder="80" keyboard="numeric" /></View>
+                   <View style={{flex: 1}}>
+                     <CustomInput label="Greutate (kg)" value={weight} onChange={setWeight} placeholder="80" keyboard="numeric" />
+                   </View>
                    <View style={{width: 15}} />
-                   <View style={{flex: 1}}><CustomInput label="Înălțime (cm)" value={height} onChange={setHeight} placeholder="185" keyboard="numeric" /></View>
+                   <View style={{flex: 1}}>
+                     <CustomInput label="Înălțime (cm)" value={height} onChange={setHeight} placeholder="185" keyboard="numeric" />
+                   </View>
                 </View>
-                <CustomInput label="Antrenamente / săptămână" value={workouts} onChange={setWorkouts} placeholder="4" keyboard="numeric" />
+
+                <CustomInput label="Antrenamente / săptămână (1-7)" value={workouts} onChange={setWorkouts} placeholder="4" keyboard="numeric" />
               </>
             )}
 
@@ -144,10 +183,8 @@ export default function AuthScreen({ navigation }) {
             </TouchableOpacity>
           </View>
         </View>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </LinearGradient>
-    </SafeAreaView>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -165,15 +202,9 @@ function CustomInput({ label, value, onChange, placeholder, secure, autoCap, key
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
-  gradientBg: { flex: 1 },
-  keyboardWrap: { flex: 1 },
-  scrollContent: { padding: 20, paddingBottom: 40 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-  logoAndName: { flexDirection: 'row', alignItems: 'center' },
-  logoMark: { width: 32, height: 32, backgroundColor: NEON_GREEN, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
-  appName: { color: '#FFF', fontSize: 22, fontWeight: 'bold', marginLeft: 10 },
-  closeBtn: { padding: 5 },
-  card: { backgroundColor: CARD_BG, borderRadius: 25, padding: 25, borderWidth: 1, borderColor: '#222' },
+  closeBtn: { alignSelf: 'flex-end', marginBottom: 20, padding: 5 },
+  scrollContent: { padding: 20, paddingTop: 60, paddingBottom: 40 },
+  card: { backgroundColor: '#121212', borderRadius: 30, padding: 25, borderWidth: 1, borderColor: '#222' },
   title: { color: '#FFF', fontSize: 28, fontWeight: 'bold', marginBottom: 30, textAlign: 'center' },
   sectionTitle: { color: NEON_GREEN, fontSize: 16, fontWeight: 'bold', marginBottom: 10, marginTop: 10 },
   goalContainer: { flexDirection: 'row', marginBottom: 20 },
@@ -183,7 +214,7 @@ const styles = StyleSheet.create({
   chipTextActive: { color: '#000' },
   inputContainer: { marginBottom: 18 },
   label: { color: '#888', fontSize: 12, marginBottom: 8, fontWeight: '600', marginLeft: 4 },
-  input: { backgroundColor: '#222', color: '#FFF', padding: 15, borderRadius: 15, fontSize: 16, borderWidth: 1, borderColor: '#333' },
+  input: { backgroundColor: '#1A1A1A', color: '#FFF', padding: 15, borderRadius: 12, fontSize: 16, borderWidth: 1, borderColor: '#333' },
   row: { flexDirection: 'row', justifyContent: 'space-between' },
   mainButton: { backgroundColor: NEON_GREEN, padding: 18, borderRadius: 15, alignItems: 'center', marginTop: 10 },
   mainButtonText: { color: '#000', fontWeight: 'bold', fontSize: 18 },

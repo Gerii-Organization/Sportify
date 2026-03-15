@@ -9,9 +9,14 @@ import { supabase } from '../lib/supabase';
 
 const { width } = Dimensions.get('window');
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const NEON_GREEN = '#00FF66';
 
+
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+
+
+
+const NEON_GREEN = '#00FF66';
 export default function ScannerScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState('back');
@@ -83,7 +88,7 @@ export default function ScannerScreen() {
   const processImage = async (imageUri) => {
     try {
       if (!OPENAI_API_KEY) {
-        throw new Error("Cheia API OpenAI lipsește din mediul de dezvoltare.");
+        throw new Error("Cheia API OpenAI lipsește");
       }
 
       const manipulatedImage = await ImageManipulator.manipulateAsync(
