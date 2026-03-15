@@ -235,7 +235,6 @@ export default function WorkoutDetailScreen({ route, navigation }) {
         activity_minutes: currentMinutes + elapsedMinutes
       });
 
-      // Sistemul tau personalizat de workout completions
       await supabase.from('workout_completions').insert([{
         user_id: user.id,
         workout_id: currentWorkout.id,
@@ -314,7 +313,6 @@ export default function WorkoutDetailScreen({ route, navigation }) {
   };
 
   const closeSummaryAndExit = () => {
-    // 1. Salvam starea
     if (onSave) onSave(currentWorkout);
     
     setShowSummary(false);
