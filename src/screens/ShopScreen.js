@@ -1,10 +1,12 @@
-import React, { useState, useCallback } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, SafeAreaView, ActivityIndicator, Modal, Platform, Alert } from 'react-native';
+import React, { useState, useCallback, useEffect } from 'react';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, SafeAreaView, ActivityIndicator, Modal, Platform, Alert, Dimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { useFocusEffect } from '@react-navigation/native';
-import { ShoppingBag, Zap, Circle, User, Shield, Check, Flame, Crown, Swords, Ghost, Hexagon, Triangle, ZapOff, BatteryCharging, Trophy } from 'lucide-react-native';
+import { ShoppingBag, Zap, Circle, User, Shield, Check, Flame, Crown, Swords, Ghost, Hexagon, Triangle, ZapOff, BatteryCharging, Trophy, Clock } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
+
+const { width } = Dimensions.get('window');
 
 const NEON_GREEN = '#1ED760';
 const CARD_BG = '#121212';
@@ -32,11 +34,13 @@ const CATALOG_BADGES = [
 
 const CATALOG_POWERUPS = [
   { id: 'p1', name: 'XP Boost', desc: 'Double ⚡ for 24h', price: 600, icon: 'Trophy', color: '#FFD700' },
+  { id: 'p2', name: 'Streak Restore', desc: 'Recover lost streak', price: 1000, icon: 'Flame', color: '#FF3300' },
 ];
 
 export default function ShopScreen() {
   const [loading, setLoading] = useState(true);
   const [balance, setBalance] = useState(0);
+  const [profileData, setProfileData] = useState(null); // Salvăm datele profilului pentru verificări
   const [rings, setRings] = useState([]);
   const [avatars, setAvatars] = useState([]);
   const [badges, setBadges] = useState([]);
@@ -44,6 +48,33 @@ export default function ShopScreen() {
 
   const [purchaseModalVisible, setPurchaseModalVisible] = useState(false);
   const [selectedItem, setSelectedItem] = useState(null);
+
+  const [boostExpiresAt, setBoostExpiresAt] = useState(null);
+  const [timeLeftStr, setTimeLeftStr] = useState(null);
+
+  useEffect(() => {
+    if (!boostExpiresAt) {
+      setTimeLeftStr(null);
+      return;
+    }
+    const interval = setInterval(() => {
+      const now = new Date().getTime();
+      const exp = new Date(boostExpiresAt).getTime();
+      const diff = exp - now;
+
+      if (diff <= 0) {
+        setTimeLeftStr(null);
+        setBoostExpiresAt(null);
+        clearInterval(interval);
+      } else {
+        const h = Math.floor(diff / (1000 * 60 * 60));
+        const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        const s = Math.floor((diff % (1000 * 60)) / 1000);
+        setTimeLeftStr(`${h}h ${m}m ${s}s`);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [boostExpiresAt]);
 
   useFocusEffect(
     useCallback(() => {
@@ -60,13 +91,13 @@ export default function ShopScreen() {
         setRings(CATALOG_RINGS.map(item => ({ ...item, owned: false, equipped: false })));
         setAvatars(CATALOG_AVATARS.map(item => ({ ...item, owned: false, equipped: false })));
         setBadges(CATALOG_BADGES.map(item => ({ ...item, owned: false, equipped: false })));
-        setLoading(false); // FOARTE IMPORTANT! Altfel rămâne blocat.
+        setLoading(false);
         return;
       }
 
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select('energy_points, equipped_ring, equipped_avatar, equipped_badge')
+        .select('energy_points, equipped_ring, equipped_avatar, equipped_badge, xp_boost_expires_at, current_streak, previous_streak')
         .eq('id', user.id)
         .maybeSingle();
 
@@ -80,6 +111,8 @@ export default function ShopScreen() {
         return;
       }
 
+      setProfileData(profile);
+
       const { data: inventory, error: invError } = await supabase
         .from('user_inventory')
         .select('item_id')
@@ -90,6 +123,12 @@ export default function ShopScreen() {
       const ownedItemIds = new Set(inventory.map(item => item.item_id));
 
       setBalance(profile.energy_points || 0);
+
+      if (profile.xp_boost_expires_at && new Date(profile.xp_boost_expires_at) > new Date()) {
+        setBoostExpiresAt(profile.xp_boost_expires_at);
+      } else {
+        setBoostExpiresAt(null);
+      }
 
       setRings(CATALOG_RINGS.map(item => ({
         ...item,
@@ -123,6 +162,14 @@ export default function ShopScreen() {
   const handleAction = async (item, categoryType) => {
     if (categoryType !== 'powerup' && item.equipped) return;
 
+    if (categoryType === 'powerup' && item.id === 'p2') {
+      // Verificăm dacă are sens să cumpere Streak Restore
+      if (!profileData || !profileData.previous_streak || profileData.previous_streak <= profileData.current_streak) {
+        Alert.alert("Inutil", "Nu ai niciun streak pierdut de recuperat în acest moment!");
+        return;
+      }
+    }
+
     if (item.owned && categoryType !== 'powerup') {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -153,10 +200,20 @@ export default function ShopScreen() {
       if (!user) return;
 
       const newBalance = balance - item.price;
+      let profileUpdates = { energy_points: newBalance };
+
+      if (item.id === 'p1') {
+        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+        profileUpdates.xp_boost_expires_at = expiresAt;
+      } else if (item.id === 'p2') {
+        // Restaurăm streak-ul vechi și resetăm memoria
+        profileUpdates.current_streak = profileData.previous_streak;
+        profileUpdates.previous_streak = 0;
+      }
 
       const { error: profileErr } = await supabase
         .from('profiles')
-        .update({ energy_points: newBalance })
+        .update(profileUpdates)
         .eq('id', user.id);
 
       if (profileErr) throw profileErr;
@@ -177,42 +234,8 @@ export default function ShopScreen() {
         if (invErr) throw invErr;
       }
 
-      if (item.id === 'p3') {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const { error: foodErr } = await supabase.from('scanned_foods')
-          .delete()
-          .eq('user_id', user.id)
-          .gte('scanned_at', today.toISOString());
-
-        if (foodErr) throw foodErr;
-      }
-
-      if (item.id === 'p1') {
-        const todayStr = new Date().toISOString().split('T')[0];
-
-        const { data: currentSteps, error: selectErr } = await supabase
-          .from('daily_steps')
-          .select('step_count, id')
-          .eq('user_id', user.id)
-          .eq('record_date', todayStr)
-          .maybeSingle();
-
-        if (selectErr) throw selectErr;
-
-        if (currentSteps) {
-          const { error: updateErr } = await supabase.from('daily_steps').update(
-            { step_count: currentSteps.step_count + 5000 }
-          ).eq('id', currentSteps.id);
-
-          if (updateErr) throw updateErr;
-        } else {
-          const { error: insertErr } = await supabase.from('daily_steps').insert([
-            { user_id: user.id, record_date: todayStr, step_count: 5000 }
-          ]);
-
-          if (insertErr) throw insertErr;
-        }
+      if (item.id === 'p2') {
+        Alert.alert("Succes!", "Streak-ul tău pierdut a fost restaurat cu succes!");
       }
 
       fetchShopData();
@@ -304,6 +327,7 @@ export default function ShopScreen() {
       let IconObj = BatteryCharging;
       if (item.icon === 'ZapOff') IconObj = ZapOff;
       if (item.icon === 'Trophy') IconObj = Trophy;
+      if (item.icon === 'Flame') IconObj = Flame;
 
       return (
         <View style={[styles.previewContainer, { backgroundColor: `${item.color}15`, borderRadius: 15, padding: 10 }]}>
@@ -317,12 +341,21 @@ export default function ShopScreen() {
     const isPowerup = categoryType === 'powerup';
     const isLocked = !isPowerup && !item.owned;
     const isEquipped = !isPowerup && item.equipped;
+    const isBoostActive = item.id === 'p1' && timeLeftStr;
 
     return (
       <TouchableOpacity
         key={item.id}
-        style={[styles.itemCard, isEquipped && styles.itemCardEquipped]}
-        onPress={() => handleAction(item, categoryType)}
+        style={[
+          styles.itemCard,
+          isEquipped && styles.itemCardEquipped,
+          isBoostActive && { borderColor: '#FFD700', backgroundColor: 'rgba(255, 215, 0, 0.05)' }
+        ]}
+        onPress={() => {
+          if (isBoostActive) return;
+          handleAction(item, categoryType);
+        }}
+        activeOpacity={isBoostActive ? 1 : 0.7}
       >
         <View style={styles.itemPreviewBox}>
           {renderVisualPreview(item, categoryType)}
@@ -330,10 +363,16 @@ export default function ShopScreen() {
         <View style={styles.itemInfo}>
           <Text style={styles.itemName}>{item.name}</Text>
           {isPowerup && <Text style={styles.itemDesc}>{item.desc}</Text>}
+
           {isEquipped ? (
             <View style={styles.statusBadge}>
               <Check color={NEON_GREEN} size={14} />
               <Text style={styles.statusTextEquipped}>Equipped</Text>
+            </View>
+          ) : isBoostActive ? (
+            <View style={[styles.statusBadge, { backgroundColor: 'rgba(255, 215, 0, 0.15)' }]}>
+              <Clock color="#FFD700" size={14} />
+              <Text style={[styles.statusTextEquipped, { color: '#FFD700' }]}>{timeLeftStr}</Text>
             </View>
           ) : isLocked || isPowerup ? (
             <View style={styles.priceContainer}>
@@ -425,13 +464,13 @@ export default function ShopScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   gradientBg: { flex: 1 },
-  loadingContainer: { flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: { padding: 20, paddingTop: 40 },
   logoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   logoAndName: { flexDirection: 'row', alignItems: 'center' },
   logoMark: { width: 32, height: 32, backgroundColor: NEON_GREEN, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
   appName: { color: '#FFF', fontSize: 22, fontWeight: 'bold', marginLeft: 10 },
-  screenTitle: { color: '#666', marginTop: 15, fontSize: 14 },
+  screenTitle: { color: '#666', marginTop: 15, fontSize: 14, marginLeft: 20 },
   title: { color: '#FFF', fontSize: 32, fontWeight: 'bold', marginTop: 5 },
   balanceContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255, 215, 0, 0.2)' },
   balanceText: { color: '#FFD700', fontSize: 18, fontWeight: 'bold', marginLeft: 8 },

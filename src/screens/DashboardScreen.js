@@ -1,14 +1,14 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   StyleSheet, View, Text, ScrollView, SafeAreaView,
-  Dimensions, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Alert
+  Dimensions, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Alert, Animated
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   Flame, User, LogIn, X, Bell, ShieldCheck,
   HelpCircle, Ruler, ChevronRight, Edit3, Footprints, Droplets, Clock, Moon,
   Trophy, TrendingUp, Target, Award, Activity, Crown, Dumbbell,
-  CheckCircle2, Plus, Trash2, ChevronDown, ChevronUp, Edit2, Check, Zap
+  CheckCircle2, Plus, Trash2, ChevronDown, ChevronUp, Edit2, Check, Zap, Star
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Circle, G, Polygon } from 'react-native-svg';
@@ -63,6 +63,25 @@ export default function DashboardScreen({ navigation, route }) {
   const [deviceSteps, setDeviceSteps] = useState(0);
   const [completedWorkouts, setCompletedWorkouts] = useState([]);
   const [isHistoryExpanded, setIsHistoryExpanded] = useState(false);
+
+  const [xpToast, setXpToast] = useState(null);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(-100)).current;
+
+  const showXpToast = (amount, title) => {
+    setXpToast({ amount, title });
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }),
+      Animated.spring(slideAnim, { toValue: Platform.OS === 'ios' ? 50 : 20, friction: 6, useNativeDriver: true })
+    ]).start();
+
+    setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 0, duration: 300, useNativeDriver: true }),
+        Animated.timing(slideAnim, { toValue: -100, duration: 300, useNativeDriver: true })
+      ]).start(() => setXpToast(null));
+    }, 3000);
+  };
 
   const WATER_GOAL = 3000;
 
@@ -191,7 +210,6 @@ export default function DashboardScreen({ navigation, route }) {
         ? foodLogs.reduce((sum, log) => sum + (Number(log.calories) || 0), 0)
         : 0;
 
-      // 🔁 Calculează minutele de activitate din TOATE antrenamentele finalizate azi
       const { data: workoutsToday } = await supabase
         .from('workout_completions')
         .select('duration_minutes, completed_at')
@@ -199,13 +217,9 @@ export default function DashboardScreen({ navigation, route }) {
         .gte('completed_at', isoMidnight);
 
       const totalActivityMinutes = workoutsToday
-        ? workoutsToday.reduce(
-            (sum, w) => sum + (Number(w.duration_minutes) || 0),
-            0
-          )
+        ? workoutsToday.reduce((sum, w) => sum + (Number(w.duration_minutes) || 0), 0)
         : 0;
 
-      // Citește water_ml din daily_stats pentru afișare
       const { data: statLog } = await supabase
         .from('daily_stats')
         .select('activity_minutes, water_ml')
@@ -214,7 +228,6 @@ export default function DashboardScreen({ navigation, route }) {
         .maybeSingle();
       const totalWaterMl = statLog?.water_ml ?? 0;
 
-      // Sincronizează daily_stats (activity din workout_completions + păstrează water_ml)
       await supabase.from('daily_stats').upsert(
         {
           user_id: user.id,
@@ -271,14 +284,23 @@ export default function DashboardScreen({ navigation, route }) {
           .eq('id', currentStat.id);
       } else {
         await supabase.from('daily_stats').insert([
-          {
-            user_id: user.id,
-            date: todayStr,
-            activity_minutes: 0,
-            water_ml: amount,
-          },
+          { user_id: user.id, date: todayStr, activity_minutes: 0, water_ml: amount },
         ]);
       }
+
+      const waterTask = tasks.find(t => t.type === 'water');
+      if (waterTask) {
+        const wasCompleted = (dailyStats.water / 1000) >= waterTask.goal;
+        const isCompletedNow = (newWaterValue / 1000) >= waterTask.goal;
+
+        if (!wasCompleted && isCompletedNow) {
+          const noulXp = (userProfile?.xp || 0) + 30;
+          await supabase.from('profiles').update({ xp: noulXp }).eq('id', user.id);
+          setUserProfile(prev => ({ ...prev, xp: noulXp }));
+          showXpToast(30, "Obiectiv Apă Atins! 💧");
+        }
+      }
+
     } catch (e) {}
   };
 
@@ -332,12 +354,15 @@ export default function DashboardScreen({ navigation, route }) {
 
   const toggleTask = async (id, currentStatus) => {
     if (isEditMode) return;
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: !currentStatus } : t));
+    const newStatus = !currentStatus;
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: newStatus } : t));
+
     const { data: { user } } = await supabase.auth.getUser();
-    if (user) await supabase.from('tasks').update({ completed: !currentStatus }).eq('id', id);
+    if (user) {
+      await supabase.from('tasks').update({ completed: newStatus }).eq('id', id);
+    }
   };
 
-  // 🔴 MAGIC Bifa automata daca task-ul este indeplinit!
   const isTaskAutoCompleted = (task) => {
     if (task.type === 'water') return (dailyStats.water / 1000) >= task.goal;
     if (task.type === 'steps') return dailyStats.steps >= task.goal;
@@ -410,8 +435,28 @@ export default function DashboardScreen({ navigation, route }) {
     );
   };
 
+  const totalXp = userProfile?.xp || 0;
+  const currentLevel = Math.floor(totalXp / 100) + 1;
+  const currentLevelXp = totalXp % 100;
+  const xpPercentage = `${currentLevelXp}%`;
+
   return (
     <SafeAreaView style={styles.container}>
+
+      {xpToast && (
+        <Animated.View style={[styles.xpToastContainer, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
+          <View style={styles.xpToastContent}>
+            <View style={styles.xpToastIconBg}>
+              <Star color="#3b82f6" size={24} fill="#3b82f6" />
+            </View>
+            <View style={{ marginLeft: 15 }}>
+              <Text style={styles.xpToastTitle}>{xpToast.title}</Text>
+              <Text style={styles.xpToastAmount}>+{xpToast.amount} XP</Text>
+            </View>
+          </View>
+        </Animated.View>
+      )}
+
       <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
 
@@ -536,12 +581,18 @@ export default function DashboardScreen({ navigation, route }) {
           <View style={styles.sideMenuContent}>
             <View style={styles.sidebarProfileSection}>
               {renderAvatar(56, 30)}
-              <View style={{ marginLeft: 15 }}>
+              <View style={{ marginLeft: 15, flex: 1 }}>
                 <Text style={styles.sidebarName}>{isLoggedIn ? (userProfile?.first_name || 'User') : 'Guest'}</Text>
                 {isLoggedIn ? (
-                  <TouchableOpacity onPress={() => { setMenuVisible(false); setProfileModalVisible(true); }}>
-                    <Text style={styles.viewProfileSidebar}>View Profile</Text>
-                  </TouchableOpacity>
+                  <View>
+                    <TouchableOpacity onPress={() => { setMenuVisible(false); setProfileModalVisible(true); }}>
+                      <Text style={styles.viewProfileSidebar}>View Profile</Text>
+                    </TouchableOpacity>
+                    <View style={styles.sidebarXpBarBg}>
+                      <View style={[styles.sidebarXpBarFill, { width: xpPercentage }]} />
+                    </View>
+                    <Text style={styles.sidebarXpText}>Lvl {currentLevel} • {currentLevelXp}/100 XP</Text>
+                  </View>
                 ) : (
                   <Text style={[styles.viewProfileSidebar, { color: '#888' }]}>Neautentificat</Text>
                 )}
@@ -606,11 +657,22 @@ export default function DashboardScreen({ navigation, route }) {
                   <View style={styles.bigAvatarContainer}>
                     {renderAvatar(110, 60)}
                     <View style={styles.levelBadge}>
-                      <Text style={styles.levelText}>LVL 12</Text>
+                      <Text style={styles.levelText}>LVL {currentLevel}</Text>
                     </View>
                   </View>
                   <Text style={styles.userNameBig}>{userProfile?.first_name || 'Athlete'}</Text>
-                  <Text style={styles.userBio}>"Dedication has no off-season."</Text>
+
+                  <View style={styles.xpBarContainer}>
+                    <View style={styles.xpBarHeader}>
+                      <Text style={styles.xpBarText}>{totalXp} Total XP</Text>
+                      <Text style={styles.xpBarText}>{currentLevelXp} / 100 XP</Text>
+                    </View>
+                    <View style={styles.xpBarBackground}>
+                      <View style={[styles.xpBarFill, { width: xpPercentage }]} />
+                    </View>
+                  </View>
+
+                  <Text style={[styles.userBio, { marginTop: 15 }]}>"Dedication has no off-season."</Text>
                 </View>
 
                 <View style={styles.streakCard}>
@@ -714,7 +776,7 @@ function RecentWorkoutItem({ title, date, duration, intensity }) {
         <View style={styles.recentIconBox}><TrendingUp color={NEON_GREEN} size={18}/></View>
         <View>
           <Text style={styles.recentTitle}>{title}</Text>
-          <Text style={styles.recentSub}>{date} • {duration}</Text>
+          <Text style={styles.recentSub}>{date}</Text>
         </View>
       </View>
       {intensity != null ? (
@@ -750,6 +812,12 @@ const styles = StyleSheet.create({
   appName: { color: '#FFF', fontSize: 22, fontWeight: 'bold', marginLeft: 10 },
   dateText: { color: '#666', marginTop: 15, fontSize: 14 },
   welcomeText: { color: '#FFF', fontSize: 32, fontWeight: 'bold' },
+
+  xpToastContainer: { position: 'absolute', top: 0, left: 20, right: 20, zIndex: 9999, alignItems: 'center' },
+  xpToastContent: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1A1A1A', padding: 15, borderRadius: 20, borderWidth: 1, borderColor: '#3b82f6', shadowColor: '#3b82f6', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10, elevation: 8, width: '100%' },
+  xpToastIconBg: { backgroundColor: 'rgba(59, 130, 246, 0.2)', padding: 10, borderRadius: 15 },
+  xpToastTitle: { color: '#FFF', fontSize: 16, fontWeight: 'bold' },
+  xpToastAmount: { color: '#3b82f6', fontSize: 14, fontWeight: '900', marginTop: 2 },
 
   progressContainer: { alignItems: 'center', marginVertical: 40, justifyContent: 'center' },
   ringWrapper: { width: 220, height: 220, justifyContent: 'center', alignItems: 'center' },
@@ -801,6 +869,11 @@ const styles = StyleSheet.create({
   sidebarProfileSection: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
   sidebarName: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
   viewProfileSidebar: { color: NEON_GREEN, fontSize: 12, fontWeight: '600', marginTop: 2 },
+
+  sidebarXpBarBg: { height: 4, backgroundColor: '#222', borderRadius: 2, marginTop: 8, width: 100, overflow: 'hidden' },
+  sidebarXpBarFill: { height: '100%', backgroundColor: NEON_GREEN },
+  sidebarXpText: { color: '#666', fontSize: 10, marginTop: 4, fontWeight: 'bold' },
+
   menuDivider: { height: 1, backgroundColor: '#222', marginVertical: 20 },
   menuGroupTitle: { color: '#444', fontSize: 10, fontWeight: 'bold', textTransform: 'uppercase', marginBottom: 15 },
   menuOption: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 15 },
@@ -836,6 +909,13 @@ const styles = StyleSheet.create({
   levelBadge: { position: 'absolute', bottom: -5, right: -5, backgroundColor: NEON_GREEN, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10 },
   levelText: { color: '#000', fontSize: 10, fontWeight: 'bold' },
   userNameBig: { color: '#FFF', fontSize: 32, fontWeight: 'bold', marginTop: 15 },
+
+  xpBarContainer: { width: '80%', marginTop: 15 },
+  xpBarHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
+  xpBarText: { color: NEON_GREEN, fontSize: 12, fontWeight: 'bold' },
+  xpBarBackground: { height: 10, backgroundColor: '#1A1A1A', borderRadius: 5, overflow: 'hidden' },
+  xpBarFill: { height: '100%', backgroundColor: NEON_GREEN },
+
   userBio: { color: '#666', fontSize: 14, fontStyle: 'italic', marginTop: 5 },
 
   streakCard: { marginHorizontal: 20, marginBottom: 25, borderRadius: 25, overflow: 'hidden', backgroundColor: '#121212', borderWidth: 1, borderColor: 'rgba(30, 215, 96, 0.3)' },

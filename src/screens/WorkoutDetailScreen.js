@@ -38,15 +38,26 @@ const MOTIVATIONAL_MESSAGES = [
 ];
 
 export default function WorkoutDetailScreen({ route, navigation }) {
-  const { workout, onSave } = route.params;
-  const [currentWorkout, setCurrentWorkout] = useState(workout);
+  // 🔴 1. Extragem parametrii în siguranță pentru a preveni crash-urile la Refresh
+  const workout = route?.params?.workout;
+  const onSave = route?.params?.onSave;
+
+  // Setăm un fallback (array gol) dacă workout este undefined
+  const [currentWorkout, setCurrentWorkout] = useState(workout || { name: '', exercises: [] });
   const [mode, setMode] = useState('idle'); 
   const [timer, setTimer] = useState(0);
   const [isExerciseSelectorVisible, setIsExerciseSelectorVisible] = useState(false);
   
   const [showSummary, setShowSummary] = useState(false);
-  // 🔴 Am adaugat newStreak in state pentru a-l afisa in UI
   const [workoutStats, setWorkoutStats] = useState({ volume: 0, time: 0, message: '', xpGained: 50, energyGained: 20, isFirstWorkoutToday: false, newStreak: 0 });
+
+  // 🔴 2. Redirecționare de urgență dacă nu există date (după Refresh)
+  useEffect(() => {
+    if (!workout) {
+      // Dacă parametrii s-au pierdut, te întoarcem pe ecranul principal imediat
+      navigation.replace('MainTabs');
+    }
+  }, [workout, navigation]);
 
   useEffect(() => {
     let interval;
@@ -54,6 +65,11 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     else clearInterval(interval);
     return () => clearInterval(interval);
   }, [mode]);
+
+  // 🔴 3. Oprim randarea ecranului dacă workout nu există (pentru a evita erori roșii)
+  if (!workout) {
+    return <View style={styles.container} />;
+  }
 
   const formatTime = (totalSeconds) => {
     const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
@@ -166,7 +182,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
     let totalSets = 0;
     currentWorkout.exercises.forEach(ex => { totalSets += ex.sets.length; });
-    const MIN_SECONDS_PER_SET = 60; 
+    const MIN_SECONDS_PER_SET = 60;
     const minRequiredSeconds = totalSets * MIN_SECONDS_PER_SET;
 
     if (timer < minRequiredSeconds) {
@@ -208,20 +224,12 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
       const { data: currentStat } = await supabase.from('daily_stats').select('activity_minutes').eq('user_id', user.id).eq('date', todayStr).maybeSingle();
       const currentMinutes = currentStat?.activity_minutes || 0;
-      
+
       await supabase.from('daily_stats').upsert({
         user_id: user.id,
         date: todayStr,
         activity_minutes: currentMinutes + elapsedMinutes
       });
-
-      await supabase.from('workout_completions').insert([{
-        user_id: user.id,
-        workout_id: currentWorkout.id,
-        workout_name: currentWorkout.name || 'Workout',
-        completed_at: new Date().toISOString(),
-        duration_minutes: elapsedMinutes
-      }]);
 
       const { data: profile } = await supabase.from('profiles').select('xp, energy_points, current_streak, last_workout_date').eq('id', user.id).single();
 
@@ -240,6 +248,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
           newStreak += 1;
           streakIncreased = true;
         } else if (diffDays > 1) {
+          await supabase.from('profiles').update({previous_streak: profile.current_streak}).eq('id', user.id);
           newStreak = 1;
           streakIncreased = true;
         }
@@ -249,7 +258,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       }
 
       isFirstWorkoutToday = streakIncreased;
-      finalStreakValue = newStreak; // Salvăm streak-ul pentru UI
+      finalStreakValue = newStreak;
 
       await supabase.from('profiles').update({
         xp: (profile?.xp || 0) + 50,
@@ -266,7 +275,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       xpGained: 50 + (totalKg > 1000 ? 20 : 0),
       energyGained: 20,
       isFirstWorkoutToday,
-      newStreak: finalStreakValue // Adăugat
+      newStreak: finalStreakValue 
     });
 
     const resetExercises = currentWorkout.exercises.map(ex => ({
@@ -292,7 +301,21 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     if (onSave) onSave(currentWorkout);
     setShowSummary(false);
     const elapsedMinutes = Math.ceil(workoutStats.time / 60);
-    navigation.navigate('MainTabs', { screen: 'Dashboard', params: { newActivityMinutes: elapsedMinutes } });
+
+    // 🔴 Metoda sigură: Resetăm complet navigația.
+    // Asta distruge ecranul de antrenament blocat pe fundal și te pune direct pe Dashboard.
+    navigation.reset({
+      index: 0,
+      routes: [
+        {
+          name: 'MainTabs',
+          params: {
+            screen: 'Dashboard',
+            params: { newActivityMinutes: elapsedMinutes },
+          },
+        },
+      ],
+    });
   };
 
   const handleBackPress = () => {
@@ -419,7 +442,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
               <View style={styles.summaryHeader}>
                 <CheckCircle2 color={NEON_GREEN} size={80} style={{ marginBottom: 20 }} />
                 <Text style={styles.summaryTitle}>ANTRENAMENT{'\n'}FINALIZAT!</Text>
-              <Text style={styles.summaryMessage}>{workoutStats.message}</Text>
+                <Text style={styles.summaryMessage}>{workoutStats.message}</Text>
             </View>
 
             <View style={styles.duoCard}>
@@ -450,7 +473,6 @@ export default function WorkoutDetailScreen({ route, navigation }) {
               </View>
             </View>
 
-            {/* 🔴 CARD STREAK ACTUALIZAT ESTETIC */}
             {workoutStats.isFirstWorkoutToday && (
               <View style={[styles.duoCard, { borderColor: '#FF8800', backgroundColor: '#1f1000' }]}>
                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
