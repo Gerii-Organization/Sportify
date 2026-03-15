@@ -25,7 +25,7 @@ export default function StatsScreen() {
     totalCalories: 0,
     currentStreak: 0,
     weeklySteps: [0, 0, 0, 0, 0, 0, 0],
-    topMuscle: 'N/A'
+    topMuscle: 'More data needed'
   });
 
   useFocusEffect(
@@ -43,7 +43,7 @@ export default function StatsScreen() {
         setIsLoggedIn(false);
         setStats({
           totalWorkouts: 0, totalVolume: 0, totalCalories: 0,
-          currentStreak: 0, weeklySteps: [0, 0, 0, 0, 0, 0, 0], topMuscle: 'N/A'
+          currentStreak: 0, weeklySteps: [0, 0, 0, 0, 0, 0, 0], topMuscle: 'More data needed'
         });
         setLoading(false);
         return;
@@ -107,7 +107,7 @@ export default function StatsScreen() {
         });
       }
 
-      let topMuscle = 'N/A';
+      let topMuscle = 'More data needed';
       let maxCount = 0;
       Object.keys(muscleCount).forEach(m => {
         if (muscleCount[m] > maxCount) {
@@ -148,7 +148,7 @@ export default function StatsScreen() {
   };
 
   const maxSteps = Math.max(...stats.weeklySteps, 5000);
-  const daysOfWeek = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
+  const daysOfWeek = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
   if (loading) {
     return (
@@ -182,8 +182,8 @@ export default function StatsScreen() {
           <View style={styles.glassContainerGuest}>
             <BlurView intensity={40} tint="dark" style={styles.glassBlur}>
               <Lock color="#FF4444" size={32} style={{ marginBottom: 10 }} />
-              <Text style={styles.guestTitle}>Mod Vizitator</Text>
-              <Text style={styles.guestText}>Creează un cont pentru a-ți salva și vizualiza statisticile, istoricul și progresul.</Text>
+              <Text style={styles.guestTitle}>Guest Mode</Text>
+              <Text style={styles.guestText}>Create an account to save and view your stats, history, and progress.</Text>
             </BlurView>
           </View>
         )}
@@ -194,13 +194,13 @@ export default function StatsScreen() {
               style={[styles.toggleBtn, timeframe === 'week' && styles.toggleBtnActive]}
               onPress={() => setTimeframe('week')}
             >
-              <Text style={[styles.toggleText, timeframe === 'week' && styles.toggleTextActive]}>Ultimele 7 Zile</Text>
+              <Text style={[styles.toggleText, timeframe === 'week' && styles.toggleTextActive]}>Last 7 Days</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.toggleBtn, timeframe === 'all' && styles.toggleBtnActive]}
               onPress={() => setTimeframe('all')}
             >
-              <Text style={[styles.toggleText, timeframe === 'all' && styles.toggleTextActive]}>Dintotdeauna</Text>
+              <Text style={[styles.toggleText, timeframe === 'all' && styles.toggleTextActive]}>All Time</Text>
             </TouchableOpacity>
           </BlurView>
         </View>
@@ -212,7 +212,7 @@ export default function StatsScreen() {
                 <Flame color="#FF8800" size={26} style={styles.iconGlowOrange} />
               </View>
               <Text style={styles.statVal}>{stats.totalCalories.toLocaleString()}</Text>
-              <Text style={styles.statLabel}>Kcal Arse</Text>
+              <Text style={styles.statLabel}>Calories Burned</Text>
             </BlurView>
           </View>
 
@@ -222,7 +222,7 @@ export default function StatsScreen() {
                 <Dumbbell color={NEON_GREEN} size={26} style={styles.iconGlowGreen} />
               </View>
               <Text style={styles.statVal}>{(stats.totalVolume / 1000).toFixed(1)}k</Text>
-              <Text style={styles.statLabel}>Tonaj (Kg)</Text>
+              <Text style={styles.statLabel}>Weight lifted (kg)</Text>
             </BlurView>
           </View>
         </View>
@@ -234,7 +234,7 @@ export default function StatsScreen() {
                 <Activity color="#00EAFF" size={26} style={styles.iconGlowBlue} />
               </View>
               <Text style={styles.statVal}>{stats.totalWorkouts}</Text>
-              <Text style={styles.statLabel}>Antrenamente</Text>
+              <Text style={styles.statLabel}>Workouts</Text>
             </BlurView>
           </View>
 
@@ -244,12 +244,12 @@ export default function StatsScreen() {
                 <Trophy color="#FFD700" size={26} style={styles.iconGlowYellow} />
               </View>
               <Text style={styles.statVal}>{stats.currentStreak}</Text>
-              <Text style={styles.statLabel}>Zile Streak</Text>
+              <Text style={styles.statLabel}>Streak Days</Text>
             </BlurView>
           </View>
         </View>
 
-        <Text style={styles.sectionTitle}>Activitate Pași (Săptămânal)</Text>
+        <Text style={styles.sectionTitle}>Weekly Step Activity</Text>
         <View style={styles.chartCardWrapper}>
           <BlurView intensity={30} tint="dark" style={styles.glassBlurChart}>
             <View style={styles.barsContainer}>
@@ -275,7 +275,7 @@ export default function StatsScreen() {
           </BlurView>
         </View>
 
-        <Text style={styles.sectionTitle}>Focus Muscular</Text>
+        <Text style={styles.sectionTitle}>Muscle Focus</Text>
         <View style={styles.muscleCardWrapper}>
           <BlurView intensity={40} tint="dark" style={styles.glassBlurMuscle}>
             <LinearGradient colors={['rgba(30, 215, 96, 0.1)', 'transparent']} start={{x: 0, y: 0}} end={{x: 1, y: 0}} style={styles.muscleGradient}>
@@ -284,7 +284,7 @@ export default function StatsScreen() {
                   <Target color={NEON_GREEN} size={32} style={styles.iconGlowGreen} />
                 </View>
                 <View style={{ marginLeft: 15 }}>
-                  <Text style={styles.muscleTitle}>Grupa Principală</Text>
+                  <Text style={styles.muscleTitle}>Primary Muscle Group</Text>
                   <Text style={styles.muscleValue}>{stats.topMuscle}</Text>
                 </View>
               </View>

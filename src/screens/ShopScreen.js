@@ -33,7 +33,7 @@ const CATALOG_BADGES = [
 ];
 
 const CATALOG_POWERUPS = [
-  { id: 'p1', name: 'XP Boost', desc: 'Double ⚡ for 24h', price: 600, icon: 'Trophy', color: '#FFD700' },
+  { id: 'p1', name: 'XP Boost', desc: 'Double XP for 24h', price: 600, icon: 'Trophy', color: '#FFD700' },
   { id: 'p2', name: 'Streak Restore', desc: 'Recover lost streak', price: 1000, icon: 'Flame', color: '#FF3300' },
 ];
 
@@ -164,7 +164,7 @@ export default function ShopScreen() {
 
     if (categoryType === 'powerup' && item.id === 'p2') {
       if (!profileData || !profileData.previous_streak || profileData.previous_streak <= profileData.current_streak) {
-        Alert.alert("Inutil", "Nu ai niciun streak pierdut de recuperat în acest moment!");
+        Alert.alert("Not Available", "You don't have any lost streak to restore right now.");
         return;
       }
     }
@@ -233,7 +233,7 @@ export default function ShopScreen() {
       }
 
       if (item.id === 'p2') {
-        Alert.alert("Succes!", "Streak-ul tău pierdut a fost restaurat cu succes!");
+        Alert.alert("Success", "Your lost streak has been successfully restored.");
       }
 
       fetchShopData();
@@ -413,7 +413,7 @@ export default function ShopScreen() {
               <Text style={styles.balanceText}>{balance}</Text>
             </BlurView>
           </View>
-          <Text style={styles.screenTitle}>Shop</Text>
+          <Text style={styles.screenTitle}></Text>
         </View>
 
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>

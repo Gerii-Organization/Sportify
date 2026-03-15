@@ -42,9 +42,9 @@ export default function ScannerScreen() {
   if (!permission.granted) {
     return (
       <View style={styles.permissionContainer}>
-        <Text style={styles.permissionText}>Avem nevoie de permisiunea ta pentru cameră</Text>
+        <Text style={styles.permissionText}>We need your permission to use the camera.</Text>
         <TouchableOpacity style={styles.btn} onPress={requestPermission}>
-          <Text style={styles.btnText}>Permite Accesul</Text>
+          <Text style={styles.btnText}>Allow Access</Text>
         </TouchableOpacity>
       </View>
     );
@@ -76,7 +76,7 @@ export default function ScannerScreen() {
         setHistoryList(data || []);
       }
     } catch (error) {
-      Alert.alert("Eroare", "Nu s-a putut încărca istoricul.");
+      Alert.alert("Error", "Could not load scan history.");
     }
   };
 
@@ -88,7 +88,7 @@ export default function ScannerScreen() {
   const processImage = async (imageUri) => {
     try {
       if (!OPENAI_API_KEY) {
-        throw new Error("Cheia API OpenAI lipsește");
+        throw new Error("Missing OpenAI API key.");
       }
 
       const manipulatedImage = await ImageManipulator.manipulateAsync(
@@ -133,7 +133,7 @@ export default function ScannerScreen() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error?.message || "Eroare la serverul OpenAI.");
+        throw new Error(data.error?.message || "Error from OpenAI server.");
       }
 
       const aiMessage = data.choices[0].message.content;
@@ -145,12 +145,12 @@ export default function ScannerScreen() {
         if (parsedData.meals && Array.isArray(parsedData.meals)) {
           setGeneratedMeals(parsedData.meals.map((m, i) => ({ id: Date.now() + i, ...m })));
         } else {
-          throw new Error("Formatul rețetelor returnate este invalid.");
+          throw new Error("Returned meal format is invalid.");
         }
       }
 
     } catch (error) {
-      Alert.alert("Eroare Analiză", error.message || "A apărut o problemă la procesarea imaginii.");
+      Alert.alert("Analysis Error", error.message || "There was a problem processing the image.");
     } finally {
       setIsScanning(false);
     }
@@ -167,7 +167,7 @@ export default function ScannerScreen() {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.5 });
       await processImage(photo.uri);
     } catch (error) {
-      Alert.alert("Eroare Camera", "Nu am putut capta imaginea.");
+      Alert.alert("Camera Error", "Could not capture the image.");
       setIsScanning(false);
     }
   };
@@ -189,7 +189,7 @@ export default function ScannerScreen() {
         await processImage(result.assets[0].uri);
       }
     } catch (error) {
-      Alert.alert("Eroare Galerie", "Nu am putut deschide galeria.");
+      Alert.alert("Gallery Error", "Could not open the gallery.");
       setIsScanning(false);
     }
   };
@@ -210,7 +210,7 @@ export default function ScannerScreen() {
         if (error) throw error;
       }
 
-      Alert.alert("Succes", `${item.name} a fost salvat în baza de date!`);
+      Alert.alert("Success", `${item.name} has been saved to your history.`);
 
       if (mode === 'scan') {
         setScannedFood(null);
@@ -219,7 +219,7 @@ export default function ScannerScreen() {
       }
       setExpandedItem(null);
     } catch (error) {
-      Alert.alert("Eroare", "Nu s-a putut salva alimentul în baza de date.");
+      Alert.alert("Error", "Could not save this food to the database.");
     }
   };
 
@@ -310,7 +310,7 @@ export default function ScannerScreen() {
                  <View style={styles.scanningCenter}>
                    <BlurView intensity={50} tint="dark" style={styles.scanningPill}>
                      <Scan color={NEON_GREEN} size={24} />
-                     <Text style={styles.scanningText}>Analizăm imaginea...</Text>
+                     <Text style={styles.scanningText}>Analyzing image...</Text>
                      <View style={styles.progressBar}>
                        <View style={styles.progressFill} />
                      </View>
@@ -401,7 +401,7 @@ export default function ScannerScreen() {
 
               {expandedItem?.ingredients && expandedItem.ingredients.length > 0 && (
                 <View style={styles.expandedIngredientsContainer}>
-                  <Text style={styles.expandedIngredientsTitle}>Ingrediente:</Text>
+                  <Text style={styles.expandedIngredientsTitle}>Ingredients:</Text>
                   <ScrollView style={{ maxHeight: 150 }} showsVerticalScrollIndicator={false}>
                     {expandedItem.ingredients.map((ing, idx) => (
                       <View key={idx} style={styles.ingredientRow}>
@@ -414,7 +414,7 @@ export default function ScannerScreen() {
               )}
 
               <TouchableOpacity style={styles.expandedAddBtn} onPress={() => saveToDatabase(expandedItem)}>
-                <Text style={styles.expandedAddBtnText}>Adaugă în listă</Text>
+                <Text style={styles.expandedAddBtnText}>Add to history</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -423,10 +423,10 @@ export default function ScannerScreen() {
         <Modal visible={isManualModalVisible} transparent animationType="fade">
           <View style={styles.modalOverlayCenter}>
             <View style={styles.manualModal}>
-              <Text style={styles.manualTitle}>Adaugă ingredient</Text>
+              <Text style={styles.manualTitle}>Add ingredient</Text>
               <TextInput
                 style={styles.manualInput}
-                placeholder="Ex: Roșii, Pui, Ouă..."
+                placeholder="E.g. Tomatoes, Chicken, Eggs..."
                 placeholderTextColor="#666"
                 value={manualInput}
                 onChangeText={setManualInput}
@@ -434,10 +434,10 @@ export default function ScannerScreen() {
               />
               <View style={styles.manualBtns}>
                 <TouchableOpacity onPress={() => setIsManualModalVisible(false)} style={styles.manualBtnClose}>
-                  <Text style={styles.manualBtnTextClose}>Anulează</Text>
+                  <Text style={styles.manualBtnTextClose}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity onPress={handleAddManualIngredient} style={styles.manualBtnAdd}>
-                  <Text style={styles.manualBtnTextAdd}>Adaugă</Text>
+                  <Text style={styles.manualBtnTextAdd}>Add</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -448,7 +448,7 @@ export default function ScannerScreen() {
           <View style={styles.modalOverlayFull}>
             <View style={styles.historyContainer}>
               <View style={styles.historyHeader}>
-                <Text style={styles.historyTitle}>Istoric Scanări</Text>
+                <Text style={styles.historyTitle}>Scan History</Text>
                 <TouchableOpacity onPress={() => setIsHistoryVisible(false)}>
                   <X color={NEON_GREEN} size={28} />
                 </TouchableOpacity>
@@ -468,7 +468,7 @@ export default function ScannerScreen() {
                     <Text style={styles.historyItemCals}>{item.calories} kcal</Text>
                   </View>
                 )}
-                ListEmptyComponent={<Text style={styles.emptyText}>Nu ai nicio scanare încă.</Text>}
+                ListEmptyComponent={<Text style={styles.emptyText}>You don't have any scans yet.</Text>}
                 showsVerticalScrollIndicator={false}
               />
             </View>

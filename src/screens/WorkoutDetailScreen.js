@@ -29,12 +29,16 @@ const EXERCISE_DB = [
 ];
 
 const MOTIVATIONAL_MESSAGES = [
-  "Incredibil! Ai fost o bestie azi! 🦍",
-  "Fiecare repetare te aduce mai aproape de obiectiv! 🚀",
-  "Antrenament legendar finalizat! 🏆",
-  "Transpirația de azi e forța de mâine! 💪",
-  "Bufnița Duo ar fi mândră de streak-ul tău! 🦉🔥",
-  "Nicio scuză, doar rezultate! Genial! ⚡"
+  "You showed up today. That already puts you ahead.",
+  "Consistency beats intensity. This session is one more brick.",
+  "Strong habits are built one finished workout at a time.",
+  "You're not chasing perfection, you're chasing progress.",
+  "Future you is grateful you didn't skip this.",
+  "The hard part is starting. You did that.",
+  "Tiny improvements stacked over time become strength.",
+  "You don't have to feel motivated, you just have to show up.",
+  "Discipline is doing what you said you'd do. You did it.",
+  "Every rep was a vote for the person you want to become."
 ];
 
 export default function WorkoutDetailScreen({ route, navigation }) {
@@ -81,7 +85,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
         .eq('id', currentWorkout.id);
 
       if (error) {
-        Alert.alert("Eroare la salvare", error.message);
+        Alert.alert("Save Error", error.message);
       } else {
         setMode('idle');
         if (onSave) onSave(currentWorkout);
@@ -136,16 +140,16 @@ export default function WorkoutDetailScreen({ route, navigation }) {
   };
 
   const confirmDeleteExercise = (exId) => {
-    Alert.alert("Ștergere", "Elimini acest exercițiu din antrenament?", [
-      { text: "Anulează", style: "cancel" },
-      { text: "Șterge", style: "destructive", onPress: () => setCurrentWorkout({ ...currentWorkout, exercises: currentWorkout.exercises.filter(ex => ex.id !== exId) }) }
+    Alert.alert("Remove Exercise", "Remove this exercise from the workout?", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Remove", style: "destructive", onPress: () => setCurrentWorkout({ ...currentWorkout, exercises: currentWorkout.exercises.filter(ex => ex.id !== exId) }) }
     ]);
   };
 
   const confirmDeleteSet = (exId, setId) => {
-    Alert.alert("Ștergere", "Ștergi acest set?", [
-      { text: "Anulează", style: "cancel" },
-      { text: "Șterge", style: "destructive", onPress: () => {
+    Alert.alert("Remove Set", "Delete this set?", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: () => {
         const updated = currentWorkout.exercises.map(ex => {
           if (ex.id === exId) return { ...ex, sets: ex.sets.filter(s => s.id !== setId) };
           return ex;
@@ -169,9 +173,9 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
     if (!allSetsCompleted) {
       Alert.alert(
-        'Antrenament Incomplet',
-        'Acest antrenament nu va fi validat! Este obligatoriu ca toate seturile să fie bifate (DONE) pentru a putea termina și salva progresul.',
-        [{ text: 'Am înțeles', style: 'cancel' }]
+        'Incomplete Workout',
+        'This workout cannot be validated. All sets must be marked as DONE before you can finish and save your progress.',
+        [{ text: 'Got it', style: 'cancel' }]
       );
       return;
     }
@@ -190,9 +194,9 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       const minutesSpent = Math.floor(timer / 60);
       const minimumMinutes = Math.floor(minRequiredSeconds / 60);
       Alert.alert(
-        'Antrenament Suspect de Rapid',
-        `Ai încercat să finalizezi ${totalSets} seturi în doar ${minutesSpent} minute.\n\nTimpul minim estimat pentru acest volum este de ~${minimumMinutes} minute.\n\nNu poți păcăli sistemul! Revino când termini cu adevărat.`,
-        [{ text: 'Înapoi la treabă', style: 'default' }]
+        'Workout Too Fast',
+        `You tried to complete ${totalSets} sets in just ${minutesSpent} minutes.\n\nThe minimum estimated time for this volume is ~${minimumMinutes} minutes.\n\nYou can’t cheat the system—come back when you’re really done.`,
+        [{ text: 'Back to work', style: 'default' }]
       );
       return;
     }
@@ -335,14 +339,14 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
   const handleBackPress = () => {
     if (mode === 'started') {
-      Alert.alert('Antrenament în curs', 'Dacă părăsești acum, antrenamentul va fi anulat!', [
-        { text: 'Rămâi', style: 'cancel' },
-        { text: 'Ieși', style: 'destructive', onPress: () => navigation.goBack() }
+      Alert.alert('Workout in Progress', 'If you leave now, this workout will be discarded.', [
+        { text: 'Stay', style: 'cancel' },
+        { text: 'Leave', style: 'destructive', onPress: () => navigation.goBack() }
       ]);
     } else if (mode === 'editing') {
-      Alert.alert('Modificări nesalvate', 'Ai modificări pe care nu le-ai salvat. Vrei să ieși oricum?', [
-        { text: 'Nu, înapoi la editare', style: 'cancel' },
-        { text: 'Da, renunță', style: 'destructive', onPress: () => navigation.goBack() }
+      Alert.alert('Unsaved Changes', 'You have unsaved edits. Do you still want to leave?', [
+        { text: 'Back to editing', style: 'cancel' },
+        { text: 'Leave without saving', style: 'destructive', onPress: () => navigation.goBack() }
       ]);
     } else {
       if (onSave) onSave(currentWorkout);
@@ -427,7 +431,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
               {mode === 'editing' && (
                 <TouchableOpacity style={styles.addSetBtn} onPress={() => addSetToExercise(exercise.id)}>
-                  <Text style={styles.addSetText}>+ Adaugă Set</Text>
+                  <Text style={styles.addSetText}>+ Add Set</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -436,7 +440,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
           {mode === 'editing' && (
             <TouchableOpacity style={styles.addExerciseBtn} onPress={() => setIsExerciseSelectorVisible(true)}>
               <Plus color={NEON_GREEN} size={24} />
-              <Text style={styles.addExerciseText}>Adaugă Exercițiu</Text>
+              <Text style={styles.addExerciseText}>Add Exercise</Text>
             </TouchableOpacity>
           )}
         </ScrollView>
@@ -456,26 +460,26 @@ export default function WorkoutDetailScreen({ route, navigation }) {
             <ScrollView contentContainerStyle={styles.summaryScroll}>
               <View style={styles.summaryHeader}>
                 <CheckCircle2 color={NEON_GREEN} size={80} style={{ marginBottom: 20 }} />
-                <Text style={styles.summaryTitle}>ANTRENAMENT{'\n'}FINALIZAT!</Text>
+                <Text style={styles.summaryTitle}>WORKOUT{'\n'}COMPLETED!</Text>
                 <Text style={styles.summaryMessage}>{workoutStats.message}</Text>
             </View>
 
             <View style={styles.duoCard}>
               <View style={styles.duoStatRow}>
                 <View style={styles.duoStatBox}>
-                  <Text style={styles.duoStatLabel}>TIMP TOTAL</Text>
+                  <Text style={styles.duoStatLabel}>TOTAL TIME</Text>
                   <Text style={styles.duoStatValue}>{formatTime(workoutStats.time)}</Text>
                 </View>
                 <View style={styles.duoDivider} />
                 <View style={styles.duoStatBox}>
-                  <Text style={styles.duoStatLabel}>VOLUM RIDICAT</Text>
+                  <Text style={styles.duoStatLabel}>TOTAL VOLUME</Text>
                   <Text style={styles.duoStatValue}>{workoutStats.volume} kg</Text>
                 </View>
               </View>
             </View>
 
             <View style={styles.duoCard}>
-              <Text style={styles.duoRewardTitle}>Recompense Obținute</Text>
+              <Text style={styles.duoRewardTitle}>Rewards Earned</Text>
               <View style={styles.duoStatRow}>
                 <View style={styles.duoRewardBox}>
                   <Star color="#3b82f6" size={32} fill="#3b82f6" />
@@ -495,8 +499,8 @@ export default function WorkoutDetailScreen({ route, navigation }) {
                     <Flame color="#FF8800" size={36} fill="#FF8800" />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.duoStreakTitle}>{workoutStats.newStreak} Zile Streak! 🔥</Text>
-                    <Text style={styles.duoStreakSub}>Excelent! Ți-ai extins seria de antrenamente consecutive.</Text>
+                    <Text style={styles.duoStreakTitle}>{workoutStats.newStreak}-Day Streak! 🔥</Text>
+                    <Text style={styles.duoStreakSub}>Great work. You’ve extended your training streak.</Text>
                   </View>
                 </View>
               </View>
@@ -506,7 +510,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
             <View style={styles.duoFooter}>
               <TouchableOpacity style={styles.duoButton} onPress={closeSummaryAndExit}>
-                <Text style={styles.duoButtonText}>CONTINUĂ</Text>
+                <Text style={styles.duoButtonText}>CONTINUE</Text>
               </TouchableOpacity>
             </View>
             </LinearGradient>
@@ -535,7 +539,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
           <View style={styles.modalOverlay}>
             <View style={[styles.glassMenu, { height: '80%', padding: 20 }]}>
               <View style={styles.modalHeader}>
-                <Text style={styles.menuTitle}>Alege Exercițiul</Text>
+                <Text style={styles.menuTitle}>Choose an exercise</Text>
                 <TouchableOpacity onPress={() => setIsExerciseSelectorVisible(false)}><X color="#fff" size={24} /></TouchableOpacity>
               </View>
               <FlatList
@@ -581,7 +585,7 @@ const styles = StyleSheet.create({
   addSetText: { color: '#888', fontSize: 14, fontWeight: '600' },
   addExerciseBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(30, 215, 96, 0.1)', padding: 15, borderRadius: 15, marginBottom: 30, borderWidth: 1, borderColor: NEON_GREEN + 'AA' },
   addExerciseText: { color: NEON_GREEN, fontWeight: 'bold', fontSize: 16, marginLeft: 10 },
-  finishContainer: { position: 'absolute', bottom: 0, width: '100%', backgroundColor: CARD_BG, padding: 20, borderTopWidth: 1, borderTopColor: '#222' },
+  finishContainer: { position: 'absolute', bottom: Platform.OS === 'ios' ? 10 : 0, width: '100%', backgroundColor: CARD_BG, padding: 20, borderTopWidth: 1, borderTopColor: '#222' },
   finishBtn: { backgroundColor: NEON_GREEN, padding: 18, borderRadius: 30, alignItems: 'center' },
   finishBtnText: { color: '#000', fontWeight: 'bold', fontSize: 16 },
 
@@ -613,7 +617,7 @@ const styles = StyleSheet.create({
   duoStreakTitle: { color: '#FF8800', fontSize: 20, fontWeight: '900' },
   duoStreakSub: { color: '#FFAA44', fontSize: 13, marginTop: 4, fontWeight: '600' },
 
-  duoFooter: { position: 'absolute', bottom: 0, width: '100%', padding: 20, backgroundColor: '#000', borderTopWidth: 1, borderTopColor: '#222' },
+  duoFooter: { position: 'absolute', bottom: Platform.OS === 'ios' ? 10 : 0, width: '100%', padding: 20, backgroundColor: '#000', borderTopWidth: 1, borderTopColor: '#222' },
   duoButton: { backgroundColor: NEON_GREEN, paddingVertical: 18, borderRadius: 16, alignItems: 'center', width: '100%' },
   duoButtonText: { color: '#000', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
 

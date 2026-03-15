@@ -273,14 +273,14 @@ export default function TrainingScreen({ navigation }) {
             <Text style={styles.appName}>Sportify</Text>
           </View>
           <Text style={styles.dateText}>{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</Text>
-          <Text style={styles.title}>Your Library</Text>
+          <Text style={styles.title}>Workouts</Text>
         </View>
 
         <FlatList
         data={myWorkouts}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.listContent}
-        ListEmptyComponent={<Text style={styles.emptyText}>Nu ai antrenamente salvate. Apasă + pentru a adăuga.</Text>}
+        ListEmptyComponent={<Text style={styles.emptyText}>No workouts yet.</Text>}
         renderItem={({ item }) => (
           <View style={styles.glassCard}>
             <TouchableOpacity style={styles.workoutMain} onPress={() => openWorkoutDetail(item)}>
@@ -309,10 +309,10 @@ export default function TrainingScreen({ navigation }) {
       <Modal visible={mainMenuVisible} transparent animationType="fade">
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={closeMainMenu}>
           <TouchableOpacity activeOpacity={1} style={styles.glassMenu}>
-            <Text style={styles.menuTitle}>Alege o opțiune</Text>
+            <Text style={styles.menuTitle}>Choose a workout</Text>
             
             <TouchableOpacity style={styles.menuOption} onPress={triggerCustomWorkoutCreation}>
-              <Zap color={NEON_GREEN} size={22} /><Text style={styles.menuOptionText}>Creare Manuală</Text>
+              <Zap color={NEON_GREEN} size={22} /><Text style={styles.menuOptionText}>Create a custom workout</Text>
             </TouchableOpacity>
             
             <TouchableOpacity 
@@ -320,7 +320,7 @@ export default function TrainingScreen({ navigation }) {
               onPress={() => setIsBuiltInExpanded(!isBuiltInExpanded)}
             >
               <Layout color={NEON_GREEN} size={22} />
-              <Text style={styles.menuOptionText}>Antrenamente Generate (AI)</Text>
+              <Text style={styles.menuOptionText}>Suggested Workouts</Text>
               {isBuiltInExpanded ? <ChevronUp color="#666" size={20} style={styles.chevron} /> : <ChevronDown color="#666" size={20} style={styles.chevron} />}
             </TouchableOpacity>
             
@@ -339,7 +339,7 @@ export default function TrainingScreen({ navigation }) {
             )}
             
             <TouchableOpacity onPress={closeMainMenu} style={{ marginTop: 20 }}>
-              <Text style={styles.closeText}>Anulează</Text>
+              <Text style={styles.closeText}>Cancel</Text>
             </TouchableOpacity>
           </TouchableOpacity>
         </TouchableOpacity>
@@ -348,16 +348,16 @@ export default function TrainingScreen({ navigation }) {
       <Modal visible={isNamingModalVisible} transparent animationType="fade">
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
           <View style={styles.glassMenu}>
-            <Text style={styles.menuTitle}>Numește Antrenamentul</Text>
+            <Text style={styles.menuTitle}>Pick a workout name:</Text>
             <TextInput 
-              style={styles.nameInput} placeholder="Ex: Leg Day Killer" placeholderTextColor="#666"
+              style={styles.nameInput} placeholder="Ex: Leg Day" placeholderTextColor="#666"
               value={newWorkoutName} onChangeText={setNewWorkoutName} autoFocus
             />
             <TouchableOpacity style={styles.saveNameBtn} onPress={handleCreateNamedWorkout}>
-              <Text style={styles.saveNameBtnText}>Creează și Editează</Text>
+              <Text style={styles.saveNameBtnText}>Create</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => setIsNamingModalVisible(false)} style={{ marginTop: 20 }}>
-              <Text style={styles.closeText}>Anulează</Text>
+              <Text style={styles.closeText}>Cancel</Text>
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>

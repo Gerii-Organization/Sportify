@@ -9,10 +9,10 @@ import { X } from 'lucide-react-native';
 const NEON_GREEN = '#1ED760';
 
 const GOALS = [
-  { id: 'lose_weight', label: 'Slabire' },
-  { id: 'build_muscle', label: 'Masa musculara' },
-  { id: 'maintain', label: 'Mentinere' },
-  { id: 'gain_strength', label: 'Forta' }
+  { id: 'lose_weight', label: 'Fat Loss' },
+  { id: 'build_muscle', label: 'Muscle Gain' },
+  { id: 'maintain', label: 'Maintenance' },
+  { id: 'gain_strength', label: 'Strength' }
 ];
 
 export default function AuthScreen({ navigation }) {
@@ -38,42 +38,42 @@ export default function AuthScreen({ navigation }) {
   };
 
   const handleAuth = async () => {
-    if (!email || !password) return Alert.alert('Eroare', 'Emailul și parola sunt obligatorii.');
+    if (!email || !password) return Alert.alert('Error', 'Email and password are required.');
     if (isRegistering) {
       if (!firstName || !age || !sex || !weight || !height || !workouts || !goal) {
-        return Alert.alert('Câmpuri incomplete', 'Te rugăm să completezi toate datele și să alegi un obiectiv.');
+        return Alert.alert('Missing fields', 'Please fill in all details and choose a goal.');
       }
 
       if (password.length < 6) {
-        return Alert.alert('Format invalid', 'Parola trebuie să conțină minimum 6 caractere.');
+        return Alert.alert('Invalid format', 'Password must be at least 6 characters long.');
       }
       if (password !== confirmPassword) {
-        return Alert.alert('Eroare', 'Parolele nu coincid!');
+        return Alert.alert('Error', 'Passwords do not match.');
       }
 
       const parsedAge = parseInt(age);
       if (isNaN(parsedAge) || parsedAge < 1 || parsedAge > 100) {
-        return Alert.alert('Format invalid', 'Vârsta trebuie să fie între 1 și 100 de ani.');
+        return Alert.alert('Invalid format', 'Age must be between 1 and 100.');
       }
 
       const upperSex = sex.trim().toUpperCase();
       if (upperSex !== 'M' && upperSex !== 'F') {
-        return Alert.alert('Format invalid', 'Sexul introdus trebuie să fie DOAR "M" sau "F".');
+        return Alert.alert('Invalid format', 'Sex must be only "M" or "F".');
       }
 
       const parsedHeight = parseFloat(height);
       if (isNaN(parsedHeight) || parsedHeight < 100 || parsedHeight > 210) {
-        return Alert.alert('Format invalid', 'Înălțimea trebuie să fie între 100 și 210 cm.');
+        return Alert.alert('Invalid format', 'Height must be between 100 and 210 cm.');
       }
 
       const parsedWeight = parseFloat(weight);
       if (isNaN(parsedWeight) || parsedWeight < 30 || parsedWeight > 300) {
-        return Alert.alert('Format invalid', 'Te rugăm să introduci o greutate validă (în kg).');
+        return Alert.alert('Invalid format', 'Please enter a valid weight (in kg).');
       }
 
       const parsedWorkouts = parseInt(workouts);
       if (isNaN(parsedWorkouts) || parsedWorkouts < 1 || parsedWorkouts > 7) {
-        return Alert.alert('Format invalid', 'Numărul de antrenamente pe săptămână trebuie să fie între 1 și 7.');
+        return Alert.alert('Invalid format', 'Workouts per week must be between 1 and 7.');
       }
     }
 
@@ -95,16 +95,16 @@ export default function AuthScreen({ navigation }) {
           goal: goal,
         });
 
-        if (profileError) Alert.alert('Eroare Profil', profileError.message);
+        if (profileError) Alert.alert('Profile Error', profileError.message);
         else {
-          Alert.alert('Succes', 'Cont creat! Acum te poți loga.');
+          Alert.alert('Success', 'Account created! You can now log in.');
           toggleAuthMode();
         }
       }
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       
-      if (error) Alert.alert('Eroare', error.message);
+      if (error) Alert.alert('Error', error.message);
       else {
         navigation.goBack();
       }
@@ -121,18 +121,18 @@ export default function AuthScreen({ navigation }) {
         </TouchableOpacity>
 
         <View style={styles.card}>
-          <Text style={styles.title}>{isRegistering ? 'Hai să începem' : 'Bine ai revenit'}</Text>
+          <Text style={styles.title}>{isRegistering ? "Let's get started" : 'Welcome back'}</Text>
 
           <View style={styles.form}>
             <CustomInput label="Email" value={email} onChange={setEmail} placeholder="vic@test.com" autoCap="none" />
-            <CustomInput label="Parolă" value={password} onChange={setPassword} placeholder="******" secure />
+            <CustomInput label="Password" value={password} onChange={setPassword} placeholder="******" secure />
 
             {isRegistering && (
               <>
-                <CustomInput label="Confirmă Parola" value={confirmPassword} onChange={setConfirmPassword} placeholder="******" secure />
+                <CustomInput label="Confirm Password" value={confirmPassword} onChange={setConfirmPassword} placeholder="******" secure />
                 
                 <View style={styles.divider} />
-                <Text style={styles.sectionTitle}>Obiectivul Tău</Text>
+                <Text style={styles.sectionTitle}>Your Goal</Text>
 
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.goalContainer}>
                   {GOALS.map(g => (
@@ -146,13 +146,13 @@ export default function AuthScreen({ navigation }) {
                   ))}
                 </ScrollView>
 
-                <Text style={styles.sectionTitle}>Detalii Personale</Text>
+                <Text style={styles.sectionTitle}>Personal Details</Text>
                 
-                <CustomInput label="Prenume" value={firstName} onChange={setFirstName} placeholder="Victor" />
+                <CustomInput label="First Name" value={firstName} onChange={setFirstName} placeholder="Victor" />
                 
                 <View style={styles.row}>
                    <View style={{flex: 1}}>
-                     <CustomInput label="Vârstă (1-100)" value={age} onChange={setAge} placeholder="25" keyboard="numeric" />
+                     <CustomInput label="Age (1-100)" value={age} onChange={setAge} placeholder="25" keyboard="numeric" />
                    </View>
                    <View style={{width: 15}} />
                    <View style={{flex: 1}}>
@@ -162,24 +162,24 @@ export default function AuthScreen({ navigation }) {
 
                 <View style={styles.row}>
                    <View style={{flex: 1}}>
-                     <CustomInput label="Greutate (kg)" value={weight} onChange={setWeight} placeholder="80" keyboard="numeric" />
+                     <CustomInput label="Weight (kg)" value={weight} onChange={setWeight} placeholder="80" keyboard="numeric" />
                    </View>
                    <View style={{width: 15}} />
                    <View style={{flex: 1}}>
-                     <CustomInput label="Înălțime (cm)" value={height} onChange={setHeight} placeholder="185" keyboard="numeric" />
+                     <CustomInput label="Height (cm)" value={height} onChange={setHeight} placeholder="185" keyboard="numeric" />
                    </View>
                 </View>
 
-                <CustomInput label="Antrenamente / săptămână (1-7)" value={workouts} onChange={setWorkouts} placeholder="4" keyboard="numeric" />
+                <CustomInput label="Workouts / week (1-7)" value={workouts} onChange={setWorkouts} placeholder="4" keyboard="numeric" />
               </>
             )}
 
             <TouchableOpacity style={styles.mainButton} onPress={handleAuth} disabled={loading}>
-              {loading ? <ActivityIndicator color="#000" /> : <Text style={styles.mainButtonText}>{isRegistering ? 'Creează Cont' : 'Autentificare'}</Text>}
+              {loading ? <ActivityIndicator color="#000" /> : <Text style={styles.mainButtonText}>{isRegistering ? 'Create Account' : 'Log In'}</Text>}
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.switchButton} onPress={toggleAuthMode}>
-              <Text style={styles.switchText}>{isRegistering ? 'Ai deja cont? Loghează-te' : 'Nu ai cont? Înregistrează-te gratuit'}</Text>
+              <Text style={styles.switchText}>{isRegistering ? 'Already have an account? Log in' : "Don't have an account? Sign up for free"}</Text>
             </TouchableOpacity>
           </View>
         </View>

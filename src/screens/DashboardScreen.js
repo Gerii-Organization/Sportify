@@ -404,7 +404,7 @@ export default function DashboardScreen({ navigation, route }) {
           const noulXp = (userProfile?.xp || 0) + 30;
           await supabase.from('profiles').update({ xp: noulXp }).eq('id', user.id);
           setUserProfile(prev => ({ ...prev, xp: noulXp }));
-          showXpToast(30, "Obiectiv Apă Atins! 💧");
+          showXpToast(30, "Water Goal Reached! 💧");
         }
       }
 
@@ -585,7 +585,7 @@ export default function DashboardScreen({ navigation, route }) {
 
           <View style={styles.sectionHeader}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Text style={styles.sectionTitle}>Today's Focus</Text>
+              <Text style={styles.sectionTitle}>Daily Quests</Text>
               {tasks.length > 2 && (
                 <TouchableOpacity onPress={() => setIsTasksCollapsed(!isTasksCollapsed)} style={{ marginLeft: 12 }}>
                   {isTasksCollapsed ? <ChevronDown color={NEON_GREEN} size={22} /> : <ChevronUp color={NEON_GREEN} size={22} />}
@@ -701,7 +701,7 @@ export default function DashboardScreen({ navigation, route }) {
                     <Text style={styles.sidebarXpText}>Lvl {currentLevel} • {currentLevelXp}/100 XP</Text>
                   </View>
                 ) : (
-                  <Text style={[styles.viewProfileSidebar, { color: '#888' }]}>Neautentificat</Text>
+                  <Text style={[styles.viewProfileSidebar, { color: '#888' }]}>Not logged in</Text>
                 )}
               </View>
             </View>
@@ -792,7 +792,7 @@ export default function DashboardScreen({ navigation, route }) {
                       <Flame size={40} color={NEON_GREEN} fill={NEON_GREEN} />
                     </View>
                     <View>
-                      <Text style={styles.streakValue}>{userProfile?.current_streak || 0} Zile</Text>
+                      <Text style={styles.streakValue}>{userProfile?.current_streak || 0} days</Text>
                       <Text style={styles.streakLabel}>Current Streak</Text>
                     </View>
                     <View style={styles.streakChartPlaceholder}>
