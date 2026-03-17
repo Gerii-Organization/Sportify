@@ -216,12 +216,11 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     const randomMsg = MOTIVATIONAL_MESSAGES[Math.floor(Math.random() * MOTIVATIONAL_MESSAGES.length)];
     const elapsedMinutes = Math.max(1, Math.ceil(timer / 60));
 
-    const finalEnergy = Math.min(elapsedMinutes * 5, 500);
-
     const { data: { user } } = await supabase.auth.getUser();
     let isFirstWorkoutToday = false;
     let finalStreakValue = 0;
     let finalXP = 50 + (totalKg > 1000 ? 20 : 0);
+    let finalEnergy = 0;
 
     if (user) {
       const now = new Date();
@@ -247,7 +246,17 @@ export default function WorkoutDetailScreen({ route, navigation }) {
         duration_minutes: elapsedMinutes
       }]);
 
-      const { data: profile } = await supabase.from('profiles').select('xp, energy_points, current_streak, previous_streak, last_workout_date, xp_boost_expires_at').eq('id', user.id).single();
+      const { data: profile } = await supabase.from('profiles').select('xp, energy_points, current_streak, previous_streak, last_workout_date, xp_boost_expires_at, coin_boost_active').eq('id', user.id).single();
+
+      // 🔴 CALCUL PENTRU COIN BOOST (+50% Coins)
+      let boostMultiplier = 1.0;
+      let resetCoinBoost = false;
+      if (profile?.coin_boost_active) {
+         boostMultiplier = 1.5;
+         resetCoinBoost = true;
+      }
+      
+      finalEnergy = Math.min(Math.floor((elapsedMinutes * 5) * boostMultiplier), 500);
 
       let newStreak = profile?.current_streak || 0;
       let streakIncreased = false;
@@ -279,12 +288,18 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       const isBoosted = profile?.xp_boost_expires_at && new Date(profile.xp_boost_expires_at) > new Date();
       if (isBoosted) finalXP *= 2;
 
-      await supabase.from('profiles').update({
+      let updatesProfile = {
         xp: (profile?.xp || 0) + finalXP,
         energy_points: (profile?.energy_points || 0) + finalEnergy,
         current_streak: newStreak,
         last_workout_date: todayStr
-      }).eq('id', user.id);
+      };
+
+      if (resetCoinBoost) {
+        updatesProfile.coin_boost_active = false;
+      }
+
+      await supabase.from('profiles').update(updatesProfile).eq('id', user.id);
     }
 
     setWorkoutStats({
@@ -318,7 +333,6 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
   const closeSummaryAndExit = () => {
     if (onSave) onSave(currentWorkout);
-    
     setShowSummary(false);
     const elapsedMinutes = Math.ceil(workoutStats.time / 60);
     setTimeout(() => {
@@ -334,7 +348,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
           },
         ],
       });
-    }, 100);
+    }, 300);
   };
 
   const handleBackPress = () => {

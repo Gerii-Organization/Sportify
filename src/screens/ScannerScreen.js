@@ -9,14 +9,9 @@ import { supabase } from '../lib/supabase';
 
 const { width } = Dimensions.get('window');
 
-
-
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-
-
-
-
+const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
 const NEON_GREEN = '#00FF66';
+
 export default function ScannerScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState('back');
@@ -176,6 +171,12 @@ export default function ScannerScreen() {
     if (isScanning) return;
 
     try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'We need access to your gallery to analyze photos.');
+        return;
+      }
+
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
@@ -275,8 +276,9 @@ export default function ScannerScreen() {
 
   return (
     <View style={styles.container}>
-      <CameraView style={styles.camera} facing={facing} ref={cameraRef}>
+      <CameraView style={StyleSheet.absoluteFillObject} facing={facing} ref={cameraRef} />
 
+      <View style={StyleSheet.absoluteFillObject}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.iconButton} onPress={openHistory}>
             <Clock color={NEON_GREEN} size={22} />
@@ -475,7 +477,7 @@ export default function ScannerScreen() {
           </View>
         </Modal>
 
-      </CameraView>
+      </View>
     </View>
   );
 }
@@ -486,7 +488,6 @@ const styles = StyleSheet.create({
   permissionText: { color: '#fff', marginBottom: 20 },
   btn: { backgroundColor: NEON_GREEN, padding: 15, borderRadius: 10 },
   btnText: { color: '#000', fontWeight: 'bold' },
-  camera: { flex: 1 },
   header: {
     position: 'absolute',
     top: 50,
@@ -605,7 +606,7 @@ const styles = StyleSheet.create({
   },
   foodCard: {
     position: 'absolute',
-    bottom: 220,
+    bottom: 190, // 🔴 Modificat aici (ridicat)
     left: 20,
     right: 20,
     borderRadius: 24,
@@ -618,7 +619,7 @@ const styles = StyleSheet.create({
   },
   mealsListWrapper: {
     position: 'absolute',
-    bottom: 220,
+    bottom: 190, // 🔴 Modificat aici (ridicat)
     width: '100%',
   },
   mealsListContent: {
@@ -683,7 +684,7 @@ const styles = StyleSheet.create({
   },
   cameraControls: {
     position: 'absolute',
-    bottom: 110,
+    bottom: 100, // 🔴 Modificat aici (ridicat peste footer)
     width: '100%',
     flexDirection: 'row',
     justifyContent: 'space-around',

@@ -3,11 +3,10 @@ import { StyleSheet, Text, View, ScrollView, TouchableOpacity, SafeAreaView, Act
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { useFocusEffect } from '@react-navigation/native';
-import { ShoppingBag, Zap, Circle, User, Shield, Check, Flame, Crown, Swords, Ghost, Hexagon, Triangle, ZapOff, BatteryCharging, Trophy, Clock } from 'lucide-react-native';
+import { ShoppingBag, Zap, Circle, User, Shield, Check, Flame, Crown, Swords, Ghost, Hexagon, Triangle, ZapOff, BatteryCharging, Trophy, Clock, Gift, Tag } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 
 const { width } = Dimensions.get('window');
-
 const NEON_GREEN = '#1ED760';
 const CARD_BG = '#121212';
 
@@ -32,18 +31,28 @@ const CATALOG_BADGES = [
   { id: 'b4', name: 'Overlord', price: 5000, icon: 'Crown', color: '#FFD700' },
 ];
 
+const CATALOG_TITLES = [
+  { id: 'Gym Rat', price: 100, desc: 'For the dedicated' },
+  { id: 'Beast Mode', price: 250, desc: 'Unleash the beast' },
+  { id: 'Iron Lifter', price: 500, desc: 'Heavy weights only' },
+  { id: 'Olympian', price: 1000, desc: 'God-like status' },
+];
+
 const CATALOG_POWERUPS = [
   { id: 'p1', name: 'XP Boost', desc: 'Double XP for 24h', price: 600, icon: 'Trophy', color: '#FFD700' },
   { id: 'p2', name: 'Streak Restore', desc: 'Recover lost streak', price: 1000, icon: 'Flame', color: '#FF3300' },
+  { id: 'p3', name: 'Coin Boost', desc: '+50% Energy for next workout', price: 50, icon: 'Zap', color: '#FFD700' }
 ];
 
 export default function ShopScreen() {
   const [loading, setLoading] = useState(true);
   const [balance, setBalance] = useState(0);
   const [profileData, setProfileData] = useState(null);
+  
   const [rings, setRings] = useState([]);
   const [avatars, setAvatars] = useState([]);
   const [badges, setBadges] = useState([]);
+  const [titles, setTitles] = useState([]);
   const [powerups, setPowerups] = useState(CATALOG_POWERUPS);
 
   const [purchaseModalVisible, setPurchaseModalVisible] = useState(false);
@@ -91,36 +100,27 @@ export default function ShopScreen() {
         setRings(CATALOG_RINGS.map(item => ({ ...item, owned: false, equipped: false })));
         setAvatars(CATALOG_AVATARS.map(item => ({ ...item, owned: false, equipped: false })));
         setBadges(CATALOG_BADGES.map(item => ({ ...item, owned: false, equipped: false })));
+        setTitles(CATALOG_TITLES.map(item => ({ ...item, owned: false, equipped: false })));
         setLoading(false);
         return;
       }
 
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select('energy_points, equipped_ring, equipped_avatar, equipped_badge, xp_boost_expires_at, current_streak, previous_streak')
+        .select('energy_points, equipped_ring, equipped_avatar, equipped_badge, equipped_title, owned_titles, coin_boost_active, last_spin_date, xp_boost_expires_at, current_streak, previous_streak')
         .eq('id', user.id)
         .maybeSingle();
 
       if (profileError) throw profileError;
-
-      if (!profile) {
-        setBalance(0);
-        setRings(CATALOG_RINGS.map(item => ({ ...item, owned: false, equipped: false })));
-        setAvatars(CATALOG_AVATARS.map(item => ({ ...item, owned: false, equipped: false })));
-        setBadges(CATALOG_BADGES.map(item => ({ ...item, owned: false, equipped: false })));
-        return;
-      }
+      if (!profile) return;
 
       setProfileData(profile);
 
-      const { data: inventory, error: invError } = await supabase
-        .from('user_inventory')
-        .select('item_id')
-        .eq('user_id', user.id);
-
+      const { data: inventory, error: invError } = await supabase.from('user_inventory').select('item_id').eq('user_id', user.id);
       if (invError) throw invError;
 
       const ownedItemIds = new Set(inventory.map(item => item.item_id));
+      const ownedTitleIds = new Set(profile.owned_titles || ['Novice']);
 
       setBalance(profile.energy_points || 0);
 
@@ -148,15 +148,47 @@ export default function ShopScreen() {
         equipped: profile.equipped_badge === item.id
       })));
 
+      setTitles(CATALOG_TITLES.map(item => ({
+        ...item,
+        owned: ownedTitleIds.has(item.id),
+        equipped: profile.equipped_title === item.id
+      })));
+
     } catch (error) {
-      if (Platform.OS === 'web') {
-        window.alert(error.message);
-      } else {
-        Alert.alert("Error", error.message);
-      }
+      Alert.alert("Error", error.message);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleDailySpin = async () => {
+    const today = new Date().toISOString().split('T')[0];
+    if (profileData?.last_spin_date === today) {
+      return Alert.alert('Come Back Tomorrow', 'You have already used your daily spin today!');
+    }
+
+    setLoading(true);
+    const random = Math.random();
+    let rewardText = "";
+    let energyWon = 0;
+    let xpWon = 0;
+
+    if (random > 0.9) { xpWon = 150; rewardText = "JACKPOT! +150 XP 🔥"; }
+    else if (random > 0.6) { energyWon = 100; rewardText = "+100 Energy ⚡"; }
+    else { energyWon = 30; rewardText = "+30 Energy ⚡"; }
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      await supabase.from('profiles').update({
+        energy_points: (profileData.energy_points || 0) + energyWon,
+        xp: (profileData.xp || 0) + xpWon,
+        last_spin_date: today
+      }).eq('id', user.id);
+
+      Alert.alert('🎰 Lucky Spin!', `You won: ${rewardText}`);
+      fetchShopData();
+    } catch (e) {}
+    setLoading(false);
   };
 
   const handleAction = async (item, categoryType) => {
@@ -169,6 +201,13 @@ export default function ShopScreen() {
       }
     }
 
+    if (categoryType === 'powerup' && item.id === 'p3') {
+      if (profileData?.coin_boost_active) {
+        Alert.alert('Active', 'Coin Boost is already active for your next workout!');
+        return;
+      }
+    }
+
     if (item.owned && categoryType !== 'powerup') {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -177,9 +216,9 @@ export default function ShopScreen() {
       if (categoryType === 'ring') updateField = 'equipped_ring';
       if (categoryType === 'avatar') updateField = 'equipped_avatar';
       if (categoryType === 'badge') updateField = 'equipped_badge';
+      if (categoryType === 'title') updateField = 'equipped_title';
 
       const { error } = await supabase.from('profiles').update({ [updateField]: item.id }).eq('id', user.id);
-
       if (!error) fetchShopData();
     } else {
       if (balance >= item.price) {
@@ -207,42 +246,33 @@ export default function ShopScreen() {
       } else if (item.id === 'p2') {
         profileUpdates.current_streak = profileData.previous_streak;
         profileUpdates.previous_streak = 0;
+      } else if (item.id === 'p3') {
+        profileUpdates.coin_boost_active = true;
       }
 
-      const { error: profileErr } = await supabase
-        .from('profiles')
-        .update(profileUpdates)
-        .eq('id', user.id);
+      if (categoryType === 'title') {
+        const currentOwned = profileData.owned_titles || ['Novice'];
+        profileUpdates.owned_titles = [...currentOwned, item.id];
+        profileUpdates.equipped_title = item.id;
+      }
 
+      const { error: profileErr } = await supabase.from('profiles').update(profileUpdates).eq('id', user.id);
       if (profileErr) throw profileErr;
 
-      if (categoryType !== 'powerup') {
-        const { error: invErr } = await supabase
-          .from('user_inventory')
-          .upsert(
-            {
-              user_id: user.id,
-              item_id: item.id,
-              item_type: categoryType,
-              purchased_at: new Date().toISOString()
-            },
+      if (categoryType !== 'powerup' && categoryType !== 'title') {
+        const { error: invErr } = await supabase.from('user_inventory').upsert(
+            { user_id: user.id, item_id: item.id, item_type: categoryType, purchased_at: new Date().toISOString() },
             { onConflict: 'user_id,item_id' }
           );
-
         if (invErr) throw invErr;
       }
 
-      if (item.id === 'p2') {
-        Alert.alert("Success", "Your lost streak has been successfully restored.");
-      }
+      if (item.id === 'p2') Alert.alert("Success", "Your lost streak has been successfully restored.");
+      if (item.id === 'p3') Alert.alert("Success", "Coin Boost active for the next workout!");
 
       fetchShopData();
     } catch (err) {
-      if (Platform.OS === 'web') {
-        window.alert(err.message);
-      } else {
-        Alert.alert("Purchase Error", err.message);
-      }
+      Alert.alert("Purchase Error", err.message);
     }
   };
 
@@ -321,9 +351,17 @@ export default function ShopScreen() {
       );
     }
 
+    if (categoryType === 'title') {
+      return (
+        <View style={[styles.previewContainer, { backgroundColor: `rgba(30, 215, 96, 0.1)`, borderRadius: 15 }]}>
+          <Tag color={NEON_GREEN} size={32} />
+        </View>
+      );
+    }
+
     if (categoryType === 'powerup') {
       let IconObj = BatteryCharging;
-      if (item.icon === 'ZapOff') IconObj = ZapOff;
+      if (item.icon === 'Zap') IconObj = Zap;
       if (item.icon === 'Trophy') IconObj = Trophy;
       if (item.icon === 'Flame') IconObj = Flame;
 
@@ -339,7 +377,9 @@ export default function ShopScreen() {
     const isPowerup = categoryType === 'powerup';
     const isLocked = !isPowerup && !item.owned;
     const isEquipped = !isPowerup && item.equipped;
-    const isBoostActive = item.id === 'p1' && timeLeftStr;
+    
+    // Starea Boostului de XP sau Coins
+    const isBoostActive = (item.id === 'p1' && timeLeftStr) || (item.id === 'p3' && profileData?.coin_boost_active);
 
     return (
       <TouchableOpacity
@@ -359,8 +399,8 @@ export default function ShopScreen() {
           {renderVisualPreview(item, categoryType)}
         </View>
         <View style={styles.itemInfo}>
-          <Text style={styles.itemName}>{item.name}</Text>
-          {isPowerup && <Text style={styles.itemDesc}>{item.desc}</Text>}
+          <Text style={styles.itemName}>{item.name || item.id}</Text>
+          {item.desc && <Text style={styles.itemDesc}>{item.desc}</Text>}
 
           {isEquipped ? (
             <View style={styles.statusBadge}>
@@ -370,7 +410,7 @@ export default function ShopScreen() {
           ) : isBoostActive ? (
             <View style={[styles.statusBadge, { backgroundColor: 'rgba(255, 215, 0, 0.15)' }]}>
               <Clock color="#FFD700" size={14} />
-              <Text style={[styles.statusTextEquipped, { color: '#FFD700' }]}>{timeLeftStr}</Text>
+              <Text style={[styles.statusTextEquipped, { color: '#FFD700' }]}>{item.id === 'p3' ? 'Ready for Workout' : timeLeftStr}</Text>
             </View>
           ) : isLocked || isPowerup ? (
             <View style={styles.priceContainer}>
@@ -413,25 +453,41 @@ export default function ShopScreen() {
               <Text style={styles.balanceText}>{balance}</Text>
             </BlurView>
           </View>
-          <Text style={styles.screenTitle}></Text>
         </View>
 
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
 
-        <Text style={styles.sectionTitle}>Power-Ups</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
-          {powerups.map(powerup => renderItemCard(powerup, 'powerup'))}
-        </ScrollView>
+          {/* 🎰 DAILY SPIN */}
+          <Text style={styles.sectionTitle}>Daily Reward</Text>
+          <TouchableOpacity style={styles.spinCard} onPress={handleDailySpin}>
+            <LinearGradient colors={['#ff8a00', '#e52e71']} style={styles.spinGradient}>
+              <Gift color="#FFF" size={40} />
+              <View style={{ marginLeft: 15 }}>
+                <Text style={styles.spinTitle}>Daily Lucky Spin 🎰</Text>
+                <Text style={styles.spinSub}>Testează-ți norocul zilnic gratuit!</Text>
+              </View>
+            </LinearGradient>
+          </TouchableOpacity>
 
-        <Text style={styles.sectionTitle}>Progress Bar Themes</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
-          {rings.map(ring => renderItemCard(ring, 'ring'))}
-        </ScrollView>
+          <Text style={styles.sectionTitle}>Power-Ups</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
+            {powerups.map(powerup => renderItemCard(powerup, 'powerup'))}
+          </ScrollView>
 
-        <Text style={styles.sectionTitle}>Avatar Border Themes</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
-          {avatars.map(avatar => renderItemCard(avatar, 'avatar'))}
-        </ScrollView>
+          <Text style={styles.sectionTitle}>Profile Titles</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
+            {titles.map(title => renderItemCard(title, 'title'))}
+          </ScrollView>
+
+          <Text style={styles.sectionTitle}>Progress Bar Themes</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
+            {rings.map(ring => renderItemCard(ring, 'ring'))}
+          </ScrollView>
+
+          <Text style={styles.sectionTitle}>Avatar Border Themes</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
+            {avatars.map(avatar => renderItemCard(avatar, 'avatar'))}
+          </ScrollView>
 
         </ScrollView>
 
@@ -441,7 +497,7 @@ export default function ShopScreen() {
             <ShoppingBag size={48} color={NEON_GREEN} style={{ marginBottom: 20 }} />
             <Text style={styles.modalTitle}>Confirm Purchase</Text>
             <Text style={styles.modalText}>
-              Do you want to buy {selectedItem?.item.name} for <Text style={{color: '#FFD700', fontWeight: 'bold'}}>{selectedItem?.item.price} ⚡</Text>?
+              Do you want to buy {selectedItem?.item.name || selectedItem?.item.id} for <Text style={{color: '#FFD700', fontWeight: 'bold'}}>{selectedItem?.item.price} ⚡</Text>?
             </Text>
             <View style={styles.modalActions}>
               <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setPurchaseModalVisible(false)}>
@@ -468,13 +524,17 @@ const styles = StyleSheet.create({
   logoAndName: { flexDirection: 'row', alignItems: 'center' },
   logoMark: { width: 32, height: 32, backgroundColor: NEON_GREEN, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
   appName: { color: '#FFF', fontSize: 22, fontWeight: 'bold', marginLeft: 10 },
-  screenTitle: { color: '#666', marginTop: 15, fontSize: 14, marginLeft: 20 },
-  title: { color: '#FFF', fontSize: 32, fontWeight: 'bold', marginTop: 5 },
   balanceContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255, 215, 0, 0.2)' },
   balanceText: { color: '#FFD700', fontSize: 18, fontWeight: 'bold', marginLeft: 8 },
   scrollContent: { paddingBottom: 120 },
   sectionTitle: { color: '#FFF', fontSize: 20, fontWeight: 'bold', marginLeft: 20, marginTop: 20, marginBottom: 15 },
   horizontalScroll: { paddingHorizontal: 15, paddingRight: 30 },
+  
+  spinCard: { borderRadius: 20, overflow: 'hidden', marginBottom: 20, marginHorizontal: 20 },
+  spinGradient: { flexDirection: 'row', alignItems: 'center', padding: 25 },
+  spinTitle: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
+  spinSub: { color: 'rgba(255,255,255,0.8)', fontSize: 13, marginTop: 4 },
+
   itemCard: { backgroundColor: CARD_BG, width: 140, borderRadius: 22, padding: 15, marginRight: 15, borderWidth: 1, borderColor: '#222', alignItems: 'center' },
   itemCardEquipped: { borderColor: NEON_GREEN + 'AA', backgroundColor: 'rgba(30, 215, 96, 0.05)', shadowColor: NEON_GREEN, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.3, shadowRadius: 10, elevation: 5 },
   itemPreviewBox: { width: 70, height: 70, borderRadius: 35, backgroundColor: 'rgba(255,255,255,0.02)', justifyContent: 'center', alignItems: 'center', marginBottom: 15 },
@@ -502,6 +562,5 @@ const styles = StyleSheet.create({
   modalActions: { flexDirection: 'row', justifyContent: 'space-between', width: '100%' },
   modalCancelBtn: { flex: 1, padding: 15, backgroundColor: '#1A1A1A', borderRadius: 15, marginRight: 10, alignItems: 'center' },
   modalCancelText: { color: '#fff', fontWeight: 'bold' },
-  modalBuyBtn: { flex: 1, padding: 15, backgroundColor: NEON_GREEN, borderRadius: 15, marginLeft: 10, alignItems: 'center', shadowColor: NEON_GREEN, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.4, shadowRadius: 8, elevation: 4 },
-  modalBuyText: { color: '#000', fontWeight: 'bold' }
+  modalBuyBtn: { flex: 1, padding: 15, backgroundColor: NEON_GREEN, borderRadius: 15, marginLeft: 10, alignItems: 'center' }
 });

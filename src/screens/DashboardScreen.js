@@ -68,6 +68,11 @@ export default function DashboardScreen({ navigation, route }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(-100)).current;
 
+  const totalXp = userProfile?.xp || 0;
+  const currentLevel = Math.floor(totalXp / 100) + 1;
+  const currentLevelXp = totalXp % 100;
+  const xpPercentage = `${currentLevelXp}%`;
+
   const showXpToast = (amount, title) => {
     setXpToast({ amount, title });
     Animated.parallel([
@@ -83,37 +88,25 @@ export default function DashboardScreen({ navigation, route }) {
     }, 3000);
   };
 
-  const WATER_GOAL = 3000;
-
   const formatSleepDuration = (totalSleepMinutes) => {
     const hours = Math.floor((totalSleepMinutes || 0) / 60);
     const minutes = (totalSleepMinutes || 0) % 60;
     return `${hours}h ${minutes}m`;
   };
 
-  // Salvează somnul (în minute) pentru utilizatorul autentificat în tabelul daily_stats
   const saveSleepToSupabase = async (totalSleepMinutes) => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
       const now = new Date();
-      const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const day = String(now.getDate()).padStart(2, '0');
-      const todayStr = `${year}-${month}-${day}`;
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
       await supabase.from('daily_stats').upsert(
-        {
-          user_id: user.id,
-          date: todayStr,
-          sleep_minutes: totalSleepMinutes,
-        },
+        { user_id: user.id, date: todayStr, sleep_minutes: totalSleepMinutes },
         { onConflict: 'user_id,date' }
       );
-    } catch (e) {
-      console.log('saveSleepToSupabase error', e);
-    }
+    } catch (e) { }
   };
 
   useEffect(() => {
@@ -127,16 +120,11 @@ export default function DashboardScreen({ navigation, route }) {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-
       const todayStr = new Date().toISOString().split('T')[0];
-
       const { data: existing } = await supabase.from('daily_steps').select('id').eq('user_id', user.id).eq('record_date', todayStr).maybeSingle();
 
-      if (existing) {
-        await supabase.from('daily_steps').update({ step_count: steps }).eq('id', existing.id);
-      } else {
-        await supabase.from('daily_steps').insert([{ user_id: user.id, record_date: todayStr, step_count: steps }]);
-      }
+      if (existing) await supabase.from('daily_steps').update({ step_count: steps }).eq('id', existing.id);
+      else await supabase.from('daily_steps').insert([{ user_id: user.id, record_date: todayStr, step_count: steps }]);
     } catch (e) { }
   };
 
@@ -166,105 +154,55 @@ export default function DashboardScreen({ navigation, route }) {
             return updated;
           });
         });
-      } catch (e) {
-        setIsPedometerAvailable(false);
-      }
+      } catch (e) { setIsPedometerAvailable(false); }
     };
     subscribePedometer();
     return () => { if (subscription) subscription.remove(); };
   }, []);
 
-  // Citește somnul din Apple Health (doar pe iOS) și îl salvează în Supabase
   useEffect(() => {
     if (Platform.OS !== 'ios') return;
-
     let isCancelled = false;
-
     const syncSleepFromHealth = async () => {
       try {
         const AppleHealthKitModule = await import('react-native-health');
         const AppleHealthKit = AppleHealthKitModule.default;
-
-        const permissions = {
-          permissions: {
-            read: [AppleHealthKit.Constants.Permissions.SleepAnalysis],
-          },
-        };
+        const permissions = { permissions: { read: [AppleHealthKit.Constants.Permissions.SleepAnalysis] } };
 
         AppleHealthKit.initHealthKit(permissions, (err) => {
-          if (err || isCancelled) {
-            console.log('HealthKit permission error:', err);
-            return;
-          }
-
-          const startOfDay = new Date();
-          startOfDay.setHours(0, 0, 0, 0);
-
-          const options = {
-            startDate: startOfDay.toISOString(),
-            endDate: new Date().toISOString(),
-          };
+          if (err || isCancelled) return;
+          const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
+          const options = { startDate: startOfDay.toISOString(), endDate: new Date().toISOString() };
 
           AppleHealthKit.getSleepSamples(options, async (error, samples) => {
-            if (error || isCancelled) {
-              console.log('Sleep fetch error:', error);
-              return;
-            }
-
+            if (error || isCancelled) return;
             let totalSleepMinutes = 0;
             (samples || []).forEach(sample => {
               const start = new Date(sample.startDate);
               const end = new Date(sample.endDate);
               const minutes = (end - start) / (1000 * 60);
-              if (!Number.isNaN(minutes) && minutes > 0) {
-                totalSleepMinutes += minutes;
-              }
+              if (!Number.isNaN(minutes) && minutes > 0) totalSleepMinutes += minutes;
             });
-
             totalSleepMinutes = Math.round(totalSleepMinutes);
-
             if (!isCancelled && totalSleepMinutes > 0) {
               await saveSleepToSupabase(totalSleepMinutes);
-              // Actualizăm imediat UI-ul cu noua valoare
-              setDailyStats(prev => ({
-                ...prev,
-                sleep: formatSleepDuration(totalSleepMinutes),
-              }));
+              setDailyStats(prev => ({ ...prev, sleep: formatSleepDuration(totalSleepMinutes) }));
             }
           });
         });
-      } catch (e) {
-        console.log('syncSleepFromHealth error', e);
-      }
+      } catch (e) { }
     };
-
     syncSleepFromHealth();
-
-    return () => {
-      isCancelled = true;
-    };
+    return () => { isCancelled = true; };
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchProfileAndStats();
-    }, [])
-  );
+  useFocusEffect(useCallback(() => { fetchProfileAndStats(); }, []));
 
   const fetchCompletedWorkouts = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      setCompletedWorkouts([]);
-      return;
-    }
-    const weekAgo = new Date();
-    weekAgo.setDate(weekAgo.getDate() - 7);
-    const { data } = await supabase
-      .from('workout_completions')
-      .select('id, workout_name, completed_at, duration_minutes')
-      .eq('user_id', user.id)
-      .gte('completed_at', weekAgo.toISOString())
-      .order('completed_at', { ascending: false });
+    if (!user) { setCompletedWorkouts([]); return; }
+    const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
+    const { data } = await supabase.from('workout_completions').select('id, workout_name, completed_at, duration_minutes').eq('user_id', user.id).gte('completed_at', weekAgo.toISOString()).order('completed_at', { ascending: false });
     setCompletedWorkouts(data || []);
   }, []);
 
@@ -276,8 +214,7 @@ export default function DashboardScreen({ navigation, route }) {
 
   const formatCompletedDate = (isoStr) => {
     const d = new Date(isoStr);
-    const today = new Date();
-    const diffDays = Math.floor((today - d) / (1000 * 60 * 60 * 24));
+    const diffDays = Math.floor((new Date() - d) / (1000 * 60 * 60 * 24));
     if (diffDays === 0) return 'Today';
     if (diffDays === 1) return 'Yesterday';
     if (diffDays < 7) return `${diffDays} days ago`;
@@ -286,7 +223,6 @@ export default function DashboardScreen({ navigation, route }) {
 
   const fetchProfileAndStats = async () => {
     const { data: { user } } = await supabase.auth.getUser();
-
     if (user) {
       setIsLoggedIn(true);
       const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
@@ -296,69 +232,31 @@ export default function DashboardScreen({ navigation, route }) {
       }
 
       const now = new Date();
-      const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const day = String(now.getDate()).padStart(2, '0');
-      const todayStr = `${year}-${month}-${day}`;
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const isoMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
 
-      const isoMidnight = new Date(year, now.getMonth(), now.getDate()).toISOString();
+      const { data: foodLogs } = await supabase.from('scanned_foods').select('calories').eq('user_id', user.id).gte('scanned_at', isoMidnight);
+      const totalCalories = foodLogs ? foodLogs.reduce((sum, log) => sum + (Number(log.calories) || 0), 0) : 0;
 
-      const { data: foodLogs } = await supabase
-        .from('scanned_foods')
-        .select('calories')
-        .eq('user_id', user.id)
-        .gte('scanned_at', isoMidnight);
-      const totalCalories = foodLogs
-        ? foodLogs.reduce((sum, log) => sum + (Number(log.calories) || 0), 0)
-        : 0;
+      const { data: workoutsToday } = await supabase.from('workout_completions').select('duration_minutes').eq('user_id', user.id).gte('completed_at', isoMidnight);
+      const totalActivityMinutes = workoutsToday ? workoutsToday.reduce((sum, w) => sum + (Number(w.duration_minutes) || 0), 0) : 0;
 
-      const { data: workoutsToday } = await supabase
-        .from('workout_completions')
-        .select('duration_minutes, completed_at')
-        .eq('user_id', user.id)
-        .gte('completed_at', isoMidnight);
-
-      const totalActivityMinutes = workoutsToday
-        ? workoutsToday.reduce((sum, w) => sum + (Number(w.duration_minutes) || 0), 0)
-        : 0;
-
-      const { data: statLog } = await supabase
-        .from('daily_stats')
-        .select('activity_minutes, water_ml, sleep_minutes')
-        .eq('user_id', user.id)
-        .eq('date', todayStr)
-        .maybeSingle();
-
+      const { data: statLog } = await supabase.from('daily_stats').select('activity_minutes, water_ml, sleep_minutes').eq('user_id', user.id).eq('date', todayStr).maybeSingle();
       const totalWaterMl = statLog?.water_ml ?? 0;
       const totalSleepMinutes = statLog?.sleep_minutes ?? 0;
 
-      // Nu rescriem somnul care vine din iOS Health; îl păstrăm și doar actualizăm activity + apă
       await supabase.from('daily_stats').upsert(
-        {
-          user_id: user.id,
-          date: todayStr,
-          activity_minutes: totalActivityMinutes,
-          water_ml: totalWaterMl,
-          sleep_minutes: totalSleepMinutes,
-        },
+        { user_id: user.id, date: todayStr, activity_minutes: totalActivityMinutes, water_ml: totalWaterMl, sleep_minutes: totalSleepMinutes },
         { onConflict: 'user_id,date' }
       );
 
-      setDailyStats(prev => ({
-        ...prev,
-        calories: totalCalories,
-        activity: totalActivityMinutes,
-        water: totalWaterMl,
-        sleep: formatSleepDuration(totalSleepMinutes), // ex: 7h 30m, 6h 56m
-      }));
+      setDailyStats(prev => ({ ...prev, calories: totalCalories, activity: totalActivityMinutes, water: totalWaterMl, sleep: formatSleepDuration(totalSleepMinutes) }));
 
       const { data: tasksData } = await supabase.from('tasks').select('*').eq('user_id', user.id).order('created_at', { ascending: true });
       if (tasksData) setTasks(tasksData);
     } else {
-      setIsLoggedIn(false);
-      setUserProfile(null);
-      setDailyStats(prev => ({ ...prev, calories: 0, activity: 0, sleep: 7.5, water: 0 }));
-      setTasks([]);
+      setIsLoggedIn(false); setUserProfile(null);
+      setDailyStats(prev => ({ ...prev, calories: 0, activity: 0, sleep: 7.5, water: 0 })); setTasks([]);
     }
   };
 
@@ -370,36 +268,17 @@ export default function DashboardScreen({ navigation, route }) {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+      const todayStr = new Date().toISOString().split('T')[0];
 
-      const now = new Date();
-      const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const day = String(now.getDate()).padStart(2, '0');
-      const todayStr = `${year}-${month}-${day}`;
+      const { data: currentStat } = await supabase.from('daily_stats').select('id, water_ml').eq('user_id', user.id).eq('date', todayStr).maybeSingle();
 
-      const { data: currentStat } = await supabase
-        .from('daily_stats')
-        .select('id, water_ml, activity_minutes')
-        .eq('user_id', user.id)
-        .eq('date', todayStr)
-        .maybeSingle();
-
-      if (currentStat) {
-        await supabase
-          .from('daily_stats')
-          .update({ water_ml: (currentStat.water_ml ?? 0) + amount })
-          .eq('id', currentStat.id);
-      } else {
-        await supabase.from('daily_stats').insert([
-          { user_id: user.id, date: todayStr, activity_minutes: 0, water_ml: amount },
-        ]);
-      }
+      if (currentStat) await supabase.from('daily_stats').update({ water_ml: (currentStat.water_ml ?? 0) + amount }).eq('id', currentStat.id);
+      else await supabase.from('daily_stats').insert([{ user_id: user.id, date: todayStr, activity_minutes: 0, water_ml: amount }]);
 
       const waterTask = tasks.find(t => t.type === 'water');
       if (waterTask) {
         const wasCompleted = (dailyStats.water / 1000) >= waterTask.goal;
         const isCompletedNow = (newWaterValue / 1000) >= waterTask.goal;
-
         if (!wasCompleted && isCompletedNow) {
           const noulXp = (userProfile?.xp || 0) + 30;
           await supabase.from('profiles').update({ xp: noulXp }).eq('id', user.id);
@@ -407,7 +286,6 @@ export default function DashboardScreen({ navigation, route }) {
           showXpToast(30, "Water Goal Reached! 💧");
         }
       }
-
     } catch (e) {}
   };
 
@@ -415,42 +293,26 @@ export default function DashboardScreen({ navigation, route }) {
     let finalTitle = "";
     let finalGoal = parseFloat(newTaskGoal) || 0;
 
-    if (type === 'manual') {
-      if (!newTaskTitle.trim()) return;
-      finalTitle = newTaskTitle;
-    } else if (type === 'water') {
-      if (!finalGoal) return;
-      finalTitle = `Drink ${finalGoal}L Water`;
-    } else if (type === 'gym') {
-      if (!finalGoal) return;
-      finalTitle = `GYM for ${finalGoal.toLocaleString()} min`;
-    }
+    if (type === 'manual') { if (!newTaskTitle.trim()) return; finalTitle = newTaskTitle; } 
+    else if (type === 'water') { if (!finalGoal) return; finalTitle = `Drink ${finalGoal}L Water`; } 
+    else if (type === 'gym') { if (!finalGoal) return; finalTitle = `GYM for ${finalGoal.toLocaleString()} min`; }
 
     const tempId = Date.now().toString();
     const newTask = { id: tempId, title: finalTitle, goal: finalGoal, type: type, completed: false };
-
     setTasks(prev => [...prev, newTask]);
     resetAndCloseModal();
 
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
       try {
-        const { data } = await supabase.from('tasks').insert([{
-          user_id: user.id, title: newTask.title, goal: newTask.goal, type: newTask.type, completed: false
-        }]).select();
-        if (data && data.length > 0) {
-          setTasks(prev => prev.map(t => t.id === tempId ? data[0] : t));
-        }
+        const { data } = await supabase.from('tasks').insert([{ user_id: user.id, title: newTask.title, goal: newTask.goal, type: newTask.type, completed: false }]).select();
+        if (data && data.length > 0) setTasks(prev => prev.map(t => t.id === tempId ? data[0] : t));
       } catch (err) {}
     }
   };
 
   const resetAndCloseModal = () => {
-    setAddTaskModalVisible(false);
-    setIsCustomExpanded(false);
-    setNewTaskTitle('');
-    setNewTaskGoal('');
-    setTaskType('manual');
+    setAddTaskModalVisible(false); setIsCustomExpanded(false); setNewTaskTitle(''); setNewTaskGoal(''); setTaskType('manual');
   };
 
   const deleteTask = async (id) => {
@@ -463,11 +325,8 @@ export default function DashboardScreen({ navigation, route }) {
     if (isEditMode) return;
     const newStatus = !currentStatus;
     setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: newStatus } : t));
-
     const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      await supabase.from('tasks').update({ completed: newStatus }).eq('id', id);
-    }
+    if (user) await supabase.from('tasks').update({ completed: newStatus }).eq('id', id);
   };
 
   const isTaskAutoCompleted = (task) => {
@@ -475,6 +334,37 @@ export default function DashboardScreen({ navigation, route }) {
     if (task.type === 'steps') return dailyStats.steps >= task.goal;
     if (task.type === 'gym') return dailyStats.activity >= task.goal;
     return task.completed;
+  };
+
+  // 🔥 LOGICA PENTRU RAME ÎN FUNCȚIE DE NIVEL
+  const renderAvatar = (size, iconSize) => {
+    const theme = AVATAR_THEMES[userProfile?.equipped_avatar] || AVATAR_THEMES['a1'];
+    let strokeColor = isLoggedIn ? theme.color : '#444';
+    let borderWidth = 1;
+    let extraStyles = {};
+
+    if (isLoggedIn) {
+      if (currentLevel >= 40) { strokeColor = '#FF00FF'; borderWidth = 4; extraStyles = { shadowColor: '#FF00FF', shadowOpacity: 0.8, shadowRadius: 10 }; } // Legendary
+      else if (currentLevel >= 30) { strokeColor = '#00FFFF'; borderWidth = 3; extraStyles = { shadowColor: '#00FFFF', shadowOpacity: 0.5 }; } // Diamond
+      else if (currentLevel >= 20) { strokeColor = '#FFD700'; borderWidth = 3; } // Gold
+      else if (currentLevel >= 10) { strokeColor = '#C0C0C0'; borderWidth = 2; } // Silver
+      else if (currentLevel >= 5) { strokeColor = '#CD7F32'; borderWidth = 2; } // Bronze
+    }
+
+    return (
+      <View style={[
+        styles.avatarBase,
+        { width: size, height: size, borderRadius: size / 2, borderColor: strokeColor, borderWidth },
+        extraStyles,
+        isLoggedIn && theme.type === 'demon' && { borderStyle: 'dashed' },
+        isLoggedIn && theme.type === 'glitch' && { borderRadius: size / 4 }
+      ]}>
+        <User size={iconSize} color={isLoggedIn ? (theme.type === 'glitch' ? '#00EAFF' : theme.color) : '#888'} />
+        {isLoggedIn && theme.type === 'royal' && <Crown color={theme.color} size={iconSize * 0.8} style={styles.avatarCrown} fill="rgba(255, 215, 0, 0.3)" />}
+        {isLoggedIn && theme.type === 'demon' && <Flame color={theme.color} size={size * 0.8} style={styles.avatarFlameBack} />}
+        {isLoggedIn && theme.type === 'glitch' && <User size={iconSize} color="#FF00FF" style={styles.avatarGlitchOverlay} />}
+      </View>
+    );
   };
 
   const renderProgressShape = () => {
@@ -503,7 +393,6 @@ export default function DashboardScreen({ navigation, route }) {
               </G>
             )}
           </Svg>
-
           {theme.type === 'inferno' && (
             <>
               <Flame color="#FF8800" size={35} style={[styles.absoluteIcon, { top: -15 }]} fill="#FF8800" />
@@ -511,7 +400,6 @@ export default function DashboardScreen({ navigation, route }) {
             </>
           )}
         </View>
-
         <View style={styles.stepsInfoContainer}>
           <Footprints size={24} color={theme.color} />
           <Text style={styles.stepCount}>{dailyStats.steps}</Text>
@@ -521,41 +409,13 @@ export default function DashboardScreen({ navigation, route }) {
     );
   };
 
-  const renderAvatar = (size, iconSize) => {
-    const theme = AVATAR_THEMES[userProfile?.equipped_avatar] || AVATAR_THEMES['a1'];
-    const strokeColor = isLoggedIn ? theme.color : '#444';
-
-    return (
-      <View style={[
-        styles.avatarBase,
-        { width: size, height: size, borderRadius: size / 2, borderColor: strokeColor },
-        isLoggedIn && theme.type === 'royal' && { borderWidth: 3 },
-        isLoggedIn && theme.type === 'demon' && { borderWidth: 2, borderStyle: 'dashed' },
-        isLoggedIn && theme.type === 'glitch' && { borderWidth: 2, borderRadius: size / 4 },
-        isLoggedIn && theme.type === 'standard' && { borderWidth: 1 }
-      ]}>
-        <User size={iconSize} color={isLoggedIn ? (theme.type === 'glitch' ? '#00EAFF' : theme.color) : '#888'} />
-        {isLoggedIn && theme.type === 'royal' && <Crown color={theme.color} size={iconSize * 0.8} style={styles.avatarCrown} fill="rgba(255, 215, 0, 0.3)" />}
-        {isLoggedIn && theme.type === 'demon' && <Flame color={theme.color} size={size * 0.8} style={styles.avatarFlameBack} />}
-        {isLoggedIn && theme.type === 'glitch' && <User size={iconSize} color="#FF00FF" style={styles.avatarGlitchOverlay} />}
-      </View>
-    );
-  };
-
-  const totalXp = userProfile?.xp || 0;
-  const currentLevel = Math.floor(totalXp / 100) + 1;
-  const currentLevelXp = totalXp % 100;
-  const xpPercentage = `${currentLevelXp}%`;
-
   return (
     <SafeAreaView style={styles.container}>
 
       {xpToast && (
         <Animated.View style={[styles.xpToastContainer, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
           <View style={styles.xpToastContent}>
-            <View style={styles.xpToastIconBg}>
-              <Star color="#3b82f6" size={24} fill="#3b82f6" />
-            </View>
+            <View style={styles.xpToastIconBg}><Star color="#3b82f6" size={24} fill="#3b82f6" /></View>
             <View style={{ marginLeft: 15 }}>
               <Text style={styles.xpToastTitle}>{xpToast.title}</Text>
               <Text style={styles.xpToastAmount}>+{xpToast.amount} XP</Text>
@@ -637,7 +497,6 @@ export default function DashboardScreen({ navigation, route }) {
             <StatCardWrapper icon={<Moon size={16} color={SLEEP_PURPLE}/>} label="SLEEP" value={dailyStats.sleep} unit="" color={SLEEP_PURPLE} />
             <StatCardWrapper icon={<Droplets size={16} color={WATER_BLUE}/>} label="WATER" value={(dailyStats.water / 1000).toFixed(2)} unit="L" color={WATER_BLUE} onPress={() => setWaterModalVisible(true)} />
           </View>
-
         </ScrollView>
       </LinearGradient>
 
@@ -690,6 +549,12 @@ export default function DashboardScreen({ navigation, route }) {
               {renderAvatar(56, 30)}
               <View style={{ marginLeft: 15, flex: 1 }}>
                 <Text style={styles.sidebarName}>{isLoggedIn ? (userProfile?.first_name || 'User') : 'Guest'}</Text>
+                
+                {/* 🔴 AFIȘARE TITLU CURENT */}
+                {isLoggedIn && userProfile?.equipped_title && (
+                   <Text style={{color: NEON_GREEN, fontSize: 12, fontWeight: 'bold', marginBottom: 5}}>{userProfile.equipped_title}</Text>
+                )}
+
                 {isLoggedIn ? (
                   <View>
                     <TouchableOpacity onPress={() => { setMenuVisible(false); setProfileModalVisible(true); }}>
@@ -768,6 +633,11 @@ export default function DashboardScreen({ navigation, route }) {
                     </View>
                   </View>
                   <Text style={styles.userNameBig}>{userProfile?.first_name || 'Athlete'}</Text>
+                  
+                  {/* 🔴 AFIȘARE TITLU CURENT */}
+                  {userProfile?.equipped_title && (
+                    <Text style={{color: NEON_GREEN, fontSize: 16, fontWeight: 'bold', marginTop: 5}}>{userProfile.equipped_title}</Text>
+                  )}
 
                   <View style={styles.xpBarContainer}>
                     <View style={styles.xpBarHeader}>
@@ -930,7 +800,7 @@ const styles = StyleSheet.create({
   ringWrapper: { width: 220, height: 220, justifyContent: 'center', alignItems: 'center' },
   absoluteIcon: { position: 'absolute' },
   stepsInfoContainer: { position: 'absolute', alignItems: 'center' },
-  stepCount: { color: '#FFF', fontSize: 42, fontWeight: 'bold' },
+  stepCount: { color: '#ffffff', fontSize: 42, fontWeight: 'bold' },
   stepGoal: { color: '#666', fontSize: 14 },
 
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 15, alignItems: 'center' },
