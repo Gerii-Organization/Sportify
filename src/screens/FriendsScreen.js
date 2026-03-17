@@ -4,7 +4,7 @@ import {
   TextInput, Modal, ActivityIndicator, Alert, KeyboardAvoidingView, Platform 
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useNavigation,useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { 
   Users, Trophy, UserPlus, Search, X, Check, Flame, Crown, User, Clock 
 } from 'lucide-react-native';
@@ -21,16 +21,13 @@ const AVATAR_THEMES = {
 };
 
 export default function FriendsScreen() {
-  const [activeTab, setActiveTab] = useState('friends'); 
   const [loading, setLoading] = useState(true);
   const [myId, setMyId] = useState(null);
   const navigation = useNavigation();
 
-  // 🔴 Liste de date actualizate
   const [friends, setFriends] = useState([]);
   const [receivedRequests, setReceivedRequests] = useState([]);
   const [sentRequests, setSentRequests] = useState([]);
-  const [globalLeaderboard, setGlobalLeaderboard] = useState([]);
 
   const [searchModalVisible, setSearchModalVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -40,7 +37,7 @@ export default function FriendsScreen() {
   useFocusEffect(
     useCallback(() => {
       fetchData();
-    }, [activeTab])
+    }, [])
   );
 
   const fetchData = async () => {
@@ -48,12 +45,7 @@ export default function FriendsScreen() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
     setMyId(user.id);
-
-    if (activeTab === 'friends') {
-      await fetchFriendsData(user.id);
-    } else {
-      await fetchGlobalLeaderboard();
-    }
+    await fetchFriendsData(user.id);
     setLoading(false);
   };
 
@@ -65,8 +57,8 @@ export default function FriendsScreen() {
     if (error || !fData) return;
 
     const acceptedIds = [];
-    const pendingIn = [];  // Cereri primite
-    const pendingOutIds = []; // Cereri trimise
+    const pendingIn = [];
+    const pendingOutIds = [];
     const fMap = {}; 
 
     fData.forEach(f => {
@@ -75,24 +67,21 @@ export default function FriendsScreen() {
       
       if (f.status === 'accepted') acceptedIds.push(otherId);
       else if (f.status === 'pending') {
-        if (f.friend_id === userId) pendingIn.push(otherId); // Eu am primit
-        else pendingOutIds.push(otherId); // Eu am trimis
+        if (f.friend_id === userId) pendingIn.push(otherId);
+        else pendingOutIds.push(otherId);
       }
     });
 
-    // 1. Prieteni
     if (acceptedIds.length > 0) {
       const { data: pData } = await supabase.from('profiles').select('*').in('id', acceptedIds).order('xp', { ascending: false });
       setFriends(pData || []);
     } else setFriends([]);
 
-    // 2. 🔴 Cereri Primite (Received)
     if (pendingIn.length > 0) {
       const { data: pData } = await supabase.from('profiles').select('*').in('id', pendingIn);
       setReceivedRequests((pData || []).map(p => ({ ...p, friendship_id: fMap[p.id] })));
     } else setReceivedRequests([]);
 
-    // 3. 🔴 Cereri Trimise (Sent)
     if (pendingOutIds.length > 0) {
       const { data: pData } = await supabase.from('profiles').select('*').in('id', pendingOutIds);
       setSentRequests((pData || []).map(p => ({ ...p, friendship_id: fMap[p.id] })));
@@ -125,7 +114,7 @@ export default function FriendsScreen() {
       setSearchModalVisible(false);
       setSearchQuery('');
       setSearchResults([]);
-      fetchData(); // Reîmprospătăm listele ca să apară la "Sent Requests"
+      fetchData(); 
     }
   };
 
@@ -134,21 +123,12 @@ export default function FriendsScreen() {
     fetchData(); 
   };
 
-  // Folosit și pentru a respinge o cerere primită, și pentru a anula una trimisă
   const removeRequest = async (friendshipId) => {
     await supabase.from('friendships').delete().eq('id', friendshipId);
     fetchData(); 
   };
 
-  const fetchGlobalLeaderboard = async () => {
-    const { data } = await supabase.from('profiles')
-      .select('*')
-      .order('xp', { ascending: false })
-      .limit(50);
-    setGlobalLeaderboard(data || []);
-  };
-
-  const renderMiniAvatar = (profile, rank) => {
+  const renderMiniAvatar = (profile) => {
     const xp = profile?.xp || 0;
     const level = Math.floor(xp / 100) + 1;
     const theme = AVATAR_THEMES[profile?.equipped_avatar] || AVATAR_THEMES['a1'];
@@ -162,48 +142,31 @@ export default function FriendsScreen() {
     else if (level >= 10) { strokeColor = '#C0C0C0'; borderWidth = 2; }
     else if (level >= 5) { strokeColor = '#CD7F32'; borderWidth = 2; }
 
-    let crownColor = null;
-    if (activeTab === 'global' && rank === 1) crownColor = '#FFD700'; 
-    if (activeTab === 'global' && rank === 2) crownColor = '#C0C0C0'; 
-    if (activeTab === 'global' && rank === 3) crownColor = '#CD7F32'; 
-
     return (
       <View style={[styles.avatarBase, { borderColor: strokeColor, borderWidth }]}>
         <User size={20} color={theme.type === 'glitch' ? '#00EAFF' : theme.color} />
-        {crownColor && <Crown color={crownColor} size={20} fill={crownColor} style={styles.crownRank} />}
       </View>
     );
   };
 
-  // 🔴 Aici controlăm ce butoane apar în funcție de tipul listei
-  const renderUserItem = (item, index, listType = 'friend') => {
+  const renderUserItem = (item, listType = 'friend') => {
     const level = Math.floor((item.xp || 0) / 100) + 1;
-    const isMe = item.id === myId;
 
     return (
-        <TouchableOpacity 
-        key={item.id || index} 
-        style={[styles.userCard, isMe && styles.myUserCard]}
+      <TouchableOpacity 
+        key={item.id} 
+        style={styles.userCard}
         onPress={() => navigation.navigate('PublicProfileScreen', { userId: item.id })}
         activeOpacity={0.7}
-        >
-
-        <View style={styles.rankBox}>
-          {listType === 'friend' || listType === 'global' ? (
-            <Text style={styles.rankText}>#{index + 1}</Text>
-          ) : (
-            <User color="#666" size={20} />
-          )}
-        </View>
-
-        {renderMiniAvatar(item, index + 1)}
+      >
+        {renderMiniAvatar(item)}
 
         <View style={styles.userInfo}>
-          <Text style={styles.userName}>{item.first_name || 'Athlete'} {isMe && '(Tu)'}</Text>
+          <Text style={styles.userName}>{item.first_name || 'Athlete'}</Text>
           <Text style={styles.userTitle}>{item.equipped_title || 'Novice'} • Lvl {level}</Text>
         </View>
 
-        {listType === 'friend' || listType === 'global' ? (
+        {listType === 'friend' ? (
           <View style={styles.userStats}>
             <View style={styles.statChip}>
               <Flame color="#FF8800" size={14} fill="#FF8800" />
@@ -242,24 +205,14 @@ export default function FriendsScreen() {
       <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
         
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>Friends</Text>
-          <View style={styles.toggleContainer}>
-            <TouchableOpacity 
-              style={[styles.toggleBtn, activeTab === 'friends' && styles.toggleBtnActive]}
-              onPress={() => setActiveTab('friends')}
-            >
-              <Users color={activeTab === 'friends' ? '#000' : '#888'} size={18} />
-              <Text style={[styles.toggleText, activeTab === 'friends' && styles.toggleTextActive]}>Friends</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={[styles.toggleBtn, activeTab === 'global' && styles.toggleBtnActive]}
-              onPress={() => setActiveTab('global')}
-            >
-              <Trophy color={activeTab === 'global' ? '#000' : '#888'} size={18} />
-              <Text style={[styles.toggleText, activeTab === 'global' && styles.toggleTextActive]}>Global Top</Text>
-            </TouchableOpacity>
-          </View>
+          <Text style={styles.headerTitle}>Social</Text>
+          <TouchableOpacity 
+            style={styles.leaderboardBtn}
+            onPress={() => navigation.navigate('LeaderboardScreen')}
+          >
+            <Trophy color="#000" size={16} fill="#000" />
+            <Text style={styles.leaderboardBtnText}>Leaderboard</Text>
+          </TouchableOpacity>
         </View>
 
         {loading ? (
@@ -269,52 +222,39 @@ export default function FriendsScreen() {
         ) : (
           <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
             
-            {activeTab === 'friends' && (
-              <>
-                {/* 🔴 Secțiunea Cereri Primite */}
-                {receivedRequests.length > 0 && (
-                  <View style={{ marginBottom: 25 }}>
-                    <Text style={styles.sectionTitle}>Received Requests</Text>
-                    {receivedRequests.map((req, idx) => renderUserItem(req, idx, 'received'))}
-                  </View>
-                )}
-
-                {/* 🔴 Secțiunea Cereri Trimise */}
-                {sentRequests.length > 0 && (
-                  <View style={{ marginBottom: 25 }}>
-                    <Text style={styles.sectionTitle}>Sent Requests</Text>
-                    {sentRequests.map((req, idx) => renderUserItem(req, idx, 'sent'))}
-                  </View>
-                )}
-
-                <View style={styles.sectionHeaderRow}>
-                  <Text style={styles.sectionTitle}>My Friends</Text>
-                  <TouchableOpacity style={styles.addFriendBtn} onPress={() => setSearchModalVisible(true)}>
-                    <UserPlus color={NEON_GREEN} size={18} />
-                    <Text style={styles.addFriendText}>Add</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {friends.length === 0 ? (
-                  <View style={styles.emptyContainer}>
-                    <Users color="#333" size={60} style={{ marginBottom: 15 }} />
-                    <Text style={styles.emptyTitle}>Niciun prieten încă</Text>
-                    <Text style={styles.emptySub}>Caută prieteni pentru a vă întrece în XP și Streak-uri!</Text>
-                    <TouchableOpacity style={styles.bigAddBtn} onPress={() => setSearchModalVisible(true)}>
-                      <Text style={styles.bigAddBtnText}>Găsește Prieteni</Text>
-                    </TouchableOpacity>
-                  </View>
-                ) : (
-                  friends.map((friend, index) => renderUserItem(friend, index, 'friend'))
-                )}
-              </>
+            {receivedRequests.length > 0 && (
+              <View style={{ marginBottom: 25 }}>
+                <Text style={styles.sectionTitle}>Received Requests</Text>
+                {receivedRequests.map(req => renderUserItem(req, 'received'))}
+              </View>
             )}
 
-            {activeTab === 'global' && (
-              <>
-                <Text style={[styles.sectionTitle, { marginBottom: 15 }]}>Top 50 Athletes</Text>
-                {globalLeaderboard.map((user, index) => renderUserItem(user, index, 'global'))}
-              </>
+            {sentRequests.length > 0 && (
+              <View style={{ marginBottom: 25 }}>
+                <Text style={styles.sectionTitle}>Sent Requests</Text>
+                {sentRequests.map(req => renderUserItem(req, 'sent'))}
+              </View>
+            )}
+
+            <View style={styles.sectionHeaderRow}>
+              <Text style={styles.sectionTitle}>My Friends</Text>
+              <TouchableOpacity style={styles.addFriendBtn} onPress={() => setSearchModalVisible(true)}>
+                <UserPlus color={NEON_GREEN} size={18} />
+                <Text style={styles.addFriendText}>Add</Text>
+              </TouchableOpacity>
+            </View>
+
+            {friends.length === 0 ? (
+              <View style={styles.emptyContainer}>
+                <Users color="#333" size={60} style={{ marginBottom: 15 }} />
+                <Text style={styles.emptyTitle}>Niciun prieten încă</Text>
+                <Text style={styles.emptySub}>Caută prieteni pentru a vă întrece în XP și Streak-uri!</Text>
+                <TouchableOpacity style={styles.bigAddBtn} onPress={() => setSearchModalVisible(true)}>
+                  <Text style={styles.bigAddBtnText}>Găsește Prieteni</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              friends.map(friend => renderUserItem(friend, 'friend'))
             )}
 
           </ScrollView>
@@ -351,10 +291,11 @@ export default function FriendsScreen() {
                 ) : (
                   searchResults.map(res => (
                     <TouchableOpacity 
-                        key={res.id} 
-                        style={styles.searchResultItem}
-                        onPress={() => navigation.navigate('PublicProfileScreen', { userId: res.id })}
-                        activeOpacity={0.7}>
+                      key={res.id} 
+                      style={styles.searchResultItem}
+                      onPress={() => navigation.navigate('PublicProfileScreen', { userId: res.id })}
+                      activeOpacity={0.7}
+                    >
                       <View style={[styles.avatarBase, { width: 40, height: 40, borderRadius: 20 }]}><User color="#888" size={20} /></View>
                       <View style={{ marginLeft: 15, flex: 1 }}>
                         <Text style={styles.userName}>{res.first_name}</Text>
@@ -379,13 +320,10 @@ export default function FriendsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   gradientBg: { flex: 1 },
-  header: { padding: 20, paddingTop: Platform.OS === 'android' ? 40 : 20 },
-  headerTitle: { color: '#FFF', fontSize: 28, fontWeight: 'bold', marginBottom: 15 },
-  toggleContainer: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 15, padding: 5 },
-  toggleBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 12 },
-  toggleBtnActive: { backgroundColor: NEON_GREEN },
-  toggleText: { color: '#888', fontWeight: 'bold', marginLeft: 8 },
-  toggleTextActive: { color: '#000' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: Platform.OS === 'android' ? 40 : 20 },
+  headerTitle: { color: '#FFF', fontSize: 28, fontWeight: 'bold' },
+  leaderboardBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: NEON_GREEN, paddingHorizontal: 15, paddingVertical: 10, borderRadius: 15 },
+  leaderboardBtnText: { color: '#000', fontWeight: 'bold', marginLeft: 8 },
   
   centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   scrollContent: { padding: 20, paddingBottom: 100 },
@@ -395,12 +333,8 @@ const styles = StyleSheet.create({
   addFriendText: { color: NEON_GREEN, fontWeight: 'bold', marginLeft: 5, fontSize: 12 },
 
   userCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: CARD_BG, padding: 15, borderRadius: 20, marginBottom: 10, borderWidth: 1, borderColor: '#222' },
-  myUserCard: { borderColor: NEON_GREEN + '55', backgroundColor: 'rgba(30, 215, 96, 0.05)' },
-  rankBox: { width: 30, alignItems: 'center' },
-  rankText: { color: '#666', fontWeight: 'bold', fontSize: 14 },
   
-  avatarBase: { width: 46, height: 46, borderRadius: 23, backgroundColor: '#1A1A1A', justifyContent: 'center', alignItems: 'center', marginLeft: 10 },
-  crownRank: { position: 'absolute', top: -14, left: -6, transform: [{rotate: '-15deg'}] },
+  avatarBase: { width: 46, height: 46, borderRadius: 23, backgroundColor: '#1A1A1A', justifyContent: 'center', alignItems: 'center' },
   
   userInfo: { flex: 1, marginLeft: 15 },
   userName: { color: '#FFF', fontSize: 16, fontWeight: 'bold' },

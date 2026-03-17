@@ -10,11 +10,13 @@ import DashboardScreen from './src/screens/DashboardScreen';
 import ScannerScreen from './src/screens/ScannerScreen';
 import TrainingScreen from './src/screens/TrainingScreen';
 import WorkoutDetailScreen from './src/screens/WorkoutDetailScreen';
-import FriendsScreen from './src/screens/FriendsScreen'; // ✅ Importat corect
+import FriendsScreen from './src/screens/FriendsScreen';
 import ShopScreen from './src/screens/ShopScreen';
 import PublicProfileScreen from './src/screens/PublicProfileScreen';
+import LeaderboardScreen from './src/screens/LeaderboardScreen';
+import ChatScreen from './src/screens/ChatScreen';
 
-import { LayoutDashboard, ScanLine, Dumbbell, Users, ShoppingBag } from 'lucide-react-native'; // ✅ Users importat
+import { LayoutDashboard, ScanLine, Dumbbell, Users, ShoppingBag } from 'lucide-react-native';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -64,9 +66,8 @@ function MainTabs() {
         component={TrainingScreen}
         options={{ tabBarIcon: ({color}) => <Dumbbell color={color} size={24} /> }}
       />
-      {/* 🔴 Aici am reparat: Am adăugat componenta de Prieteni și iconița Users */}
       <Tab.Screen
-        name="Friends"
+        name="Social"
         component={FriendsScreen}
         options={{ tabBarIcon: ({color}) => <Users color={color} size={24} /> }}
       />
@@ -97,7 +98,17 @@ export default function App() {
         <Stack.Screen
           name="PublicProfileScreen"
           component={PublicProfileScreen}
-          options={{ presentation: 'card' }} // Ofera animatia clasica de back (slide din stanga-dreapta)
+          options={{ presentation: 'card' }}
+        />
+        <Stack.Screen
+          name="LeaderboardScreen"
+          component={LeaderboardScreen}
+          options={{ presentation: 'card' }} 
+        />
+        <Stack.Screen
+          name="ChatScreen"
+          component={ChatScreen}
+          options={{ presentation: 'card' }} 
         />
       </Stack.Navigator>
     </NavigationContainer>

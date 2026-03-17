@@ -23,14 +23,13 @@ const AVATAR_THEMES = {
 };
 
 export default function PublicProfileScreen({ route, navigation }) {
-  const { userId } = route.params; // ID-ul persoanei pe care am apasat
+  const { userId } = route.params;
   const [myId, setMyId] = useState(null);
   
   const [profile, setProfile] = useState(null);
   const [recentWorkouts, setRecentWorkouts] = useState([]);
   const [loading, setLoading] = useState(true);
   
-  // 'none' | 'friends' | 'pending_sent' | 'pending_received' | 'self'
   const [friendStatus, setFriendStatus] = useState('none'); 
   const [friendshipId, setFriendshipId] = useState(null);
 
@@ -50,11 +49,9 @@ export default function PublicProfileScreen({ route, navigation }) {
       setFriendStatus('self');
     }
 
-    // 1. Aducem datele profilului
     const { data: pData } = await supabase.from('profiles').select('*').eq('id', userId).single();
     setProfile(pData);
 
-    // 2. Aducem activitatea recenta (ultimele 5 antrenamente)
     const { data: wData } = await supabase.from('workout_completions')
       .select('id, workout_name, completed_at, duration_minutes')
       .eq('user_id', userId)
@@ -62,7 +59,6 @@ export default function PublicProfileScreen({ route, navigation }) {
       .limit(5);
     setRecentWorkouts(wData || []);
 
-    // 3. Verificăm statusul prieteniei (daca nu sunt pe propriul profil)
     if (user.id !== userId) {
       const { data: fData } = await supabase.from('friendships')
         .select('*')
@@ -85,21 +81,21 @@ export default function PublicProfileScreen({ route, navigation }) {
 
   const handleAction = async () => {
     if (friendStatus === 'none') {
-      // Send Request
       const { error } = await supabase.from('friendships').insert([{ user_id: myId, friend_id: userId, status: 'pending' }]);
       if (!error) {
         setFriendStatus('pending_sent');
         Alert.alert("Succes", "Cerere trimisă!");
       }
     } else if (friendStatus === 'pending_received') {
-      // Accept Request
       const { error } = await supabase.from('friendships').update({ status: 'accepted' }).eq('id', friendshipId);
       if (!error) {
         setFriendStatus('friends');
       }
     } else if (friendStatus === 'friends') {
-      // Message (Placeholder)
-      Alert.alert("Chat", "Funcția de mesagerie va fi adăugată în curând!");
+      navigation.navigate('ChatScreen', { 
+        friendId: userId, 
+        friendName: profile.first_name 
+      });
     }
   };
 
@@ -134,7 +130,6 @@ export default function PublicProfileScreen({ route, navigation }) {
 
   const level = Math.floor((profile.xp || 0) / 100) + 1;
 
-  // Setări pentru butonul principal
   let btnText = '';
   let BtnIcon = null;
   let btnStyle = styles.actionBtnPrimary;
@@ -148,7 +143,6 @@ export default function PublicProfileScreen({ route, navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       
-      {/* HEADER NAV */}
       <View style={styles.navHeader}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
           <ChevronLeft color="#FFF" size={28} />
@@ -157,7 +151,6 @@ export default function PublicProfileScreen({ route, navigation }) {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         
-        {/* TOP PROFILE SECTION */}
         <View style={styles.profileHeader}>
           <LinearGradient colors={['rgba(30, 215, 96, 0.15)', 'transparent']} style={styles.gradientHeader} />
           
@@ -183,7 +176,6 @@ export default function PublicProfileScreen({ route, navigation }) {
           )}
         </View>
 
-        {/* STATS ROW */}
         <View style={styles.statsRow}>
           <View style={styles.statBox}>
             <Flame color="#FF8800" size={28} fill="#FF8800" />
@@ -204,7 +196,6 @@ export default function PublicProfileScreen({ route, navigation }) {
           </View>
         </View>
 
-        {/* RECENT ACTIVITY */}
         <View style={styles.sectionContainer}>
           <Text style={styles.sectionTitle}>Recent Activity</Text>
           
