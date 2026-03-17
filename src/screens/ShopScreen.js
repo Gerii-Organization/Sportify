@@ -15,6 +15,9 @@ const CATALOG_RINGS = [
   { id: 'r2', name: 'Hellfire Ring', price: 800, type: 'inferno', color: '#FF3300' },
   { id: 'r3', name: 'Cyber Hex', price: 1200, type: 'cyber', color: '#00EAFF' },
   { id: 'r4', name: 'Toxic Triangle', price: 1500, type: 'toxic', color: '#39FF14' },
+  { id: 'r5', name: 'Neon Pulse', price: 2000, type: 'pulse', color: '#FF00AA' },
+  { id: 'r6', name: 'Golden Diamond', price: 2500, type: 'diamond', color: '#FFD700' },
+  { id: 'r7', name: 'Quantum Core', price: 3500, type: 'quantum', color: '#7400FF' },
 ];
 
 const CATALOG_AVATARS = [
@@ -22,6 +25,9 @@ const CATALOG_AVATARS = [
   { id: 'a2', name: 'Golden King', price: 1500, type: 'royal', color: '#FFD700' },
   { id: 'a3', name: 'Demon Aura', price: 2000, type: 'demon', color: '#9900FF' },
   { id: 'a4', name: 'Electric Glitch', price: 2500, type: 'glitch', color: '#FF00FF' },
+  { id: 'a5', name: 'Holographic', price: 3000, type: 'holo', color: '#00FFFF' },
+  { id: 'a6', name: 'Hellfire', price: 3500, type: 'inferno_avatar', color: '#FF4400' },
+  { id: 'a7', name: 'The Void', price: 5000, type: 'void', color: '#333333' },
 ];
 
 const CATALOG_BADGES = [
@@ -48,7 +54,7 @@ export default function ShopScreen() {
   const [loading, setLoading] = useState(true);
   const [balance, setBalance] = useState(0);
   const [profileData, setProfileData] = useState(null);
-  
+
   const [rings, setRings] = useState([]);
   const [avatars, setAvatars] = useState([]);
   const [badges, setBadges] = useState([]);
@@ -303,6 +309,29 @@ export default function ShopScreen() {
           </View>
         );
       }
+      if (item.type === 'pulse') {
+        return (
+          <View style={styles.previewContainer}>
+            <Circle color={item.color} size={40} strokeWidth={2} />
+            <Circle color={item.color} size={28} strokeWidth={2} opacity={0.5} style={styles.absoluteCenter} />
+          </View>
+        );
+      }
+      if (item.type === 'diamond') {
+        return (
+          <View style={[styles.previewContainer, { transform: [{rotate: '45deg'}] }]}>
+            <View style={{ width: 32, height: 32, borderWidth: 3, borderColor: item.color }} />
+          </View>
+        );
+      }
+      if (item.type === 'quantum') {
+        return (
+          <View style={styles.previewContainer}>
+            <Hexagon color={item.color} size={46} strokeWidth={2} style={{ transform: [{rotate: '30deg'}] }} />
+            <Hexagon color={item.color} size={46} strokeWidth={2} style={{ position: 'absolute', transform: [{rotate: '60deg'}] }} />
+          </View>
+        );
+      }
       return <Circle color={item.color} size={36} strokeWidth={4} />;
     }
 
@@ -315,9 +344,9 @@ export default function ShopScreen() {
           </View>
         );
       }
-      if (item.type === 'demon') {
+      if (item.type === 'demon' || item.type === 'inferno_avatar') {
         return (
-          <View style={[styles.avatarFrame, { borderColor: item.color, borderWidth: 2, borderStyle: 'dashed' }]}>
+          <View style={[styles.avatarFrame, { borderColor: item.color, borderWidth: 2, borderStyle: item.type === 'demon' ? 'dashed' : 'solid', shadowColor: item.color, shadowOpacity: 0.8, shadowRadius: 8 }]}>
             <User color="#fff" size={24} />
             <Flame color={item.color} size={30} style={styles.absoluteBackground} />
           </View>
@@ -328,6 +357,20 @@ export default function ShopScreen() {
           <View style={[styles.avatarFrame, { borderColor: item.color, borderWidth: 2, borderRadius: 10 }]}>
             <User color="#00EAFF" size={26} style={{ marginLeft: -2 }} />
             <User color="#FF00FF" size={26} style={styles.absoluteCenterOffset} />
+          </View>
+        );
+      }
+      if (item.type === 'holo') {
+        return (
+          <View style={[styles.avatarFrame, { borderColor: item.color, borderWidth: 2, shadowColor: item.color, shadowOpacity: 1, shadowRadius: 15 }]}>
+            <User color={item.color} size={24} />
+          </View>
+        );
+      }
+      if (item.type === 'void') {
+        return (
+          <View style={[styles.avatarFrame, { borderColor: item.color, borderWidth: 4, shadowColor: '#fff', shadowOpacity: 0.2, shadowRadius: 5 }]}>
+            <User color="#555" size={24} />
           </View>
         );
       }
@@ -377,7 +420,7 @@ export default function ShopScreen() {
     const isPowerup = categoryType === 'powerup';
     const isLocked = !isPowerup && !item.owned;
     const isEquipped = !isPowerup && item.equipped;
-    
+
     // Starea Boostului de XP sau Coins
     const isBoostActive = (item.id === 'p1' && timeLeftStr) || (item.id === 'p3' && profileData?.coin_boost_active);
 
@@ -453,6 +496,7 @@ export default function ShopScreen() {
               <Text style={styles.balanceText}>{balance}</Text>
             </BlurView>
           </View>
+          <Text style={styles.screenTitle}>Shop</Text>
         </View>
 
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
@@ -464,7 +508,7 @@ export default function ShopScreen() {
               <Gift color="#FFF" size={40} />
               <View style={{ marginLeft: 15 }}>
                 <Text style={styles.spinTitle}>Daily Lucky Spin 🎰</Text>
-                <Text style={styles.spinSub}>Testează-ți norocul zilnic gratuit!</Text>
+                <Text style={styles.spinSub}>Test your luck for free today!</Text>
               </View>
             </LinearGradient>
           </TouchableOpacity>
@@ -524,12 +568,13 @@ const styles = StyleSheet.create({
   logoAndName: { flexDirection: 'row', alignItems: 'center' },
   logoMark: { width: 32, height: 32, backgroundColor: NEON_GREEN, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
   appName: { color: '#FFF', fontSize: 22, fontWeight: 'bold', marginLeft: 10 },
+  screenTitle: { color: '#666', marginTop: 15, fontSize: 14, marginLeft: 20 },
   balanceContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255, 215, 0, 0.2)' },
   balanceText: { color: '#FFD700', fontSize: 18, fontWeight: 'bold', marginLeft: 8 },
   scrollContent: { paddingBottom: 120 },
   sectionTitle: { color: '#FFF', fontSize: 20, fontWeight: 'bold', marginLeft: 20, marginTop: 20, marginBottom: 15 },
   horizontalScroll: { paddingHorizontal: 15, paddingRight: 30 },
-  
+
   spinCard: { borderRadius: 20, overflow: 'hidden', marginBottom: 20, marginHorizontal: 20 },
   spinGradient: { flexDirection: 'row', alignItems: 'center', padding: 25 },
   spinTitle: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },

@@ -15,7 +15,6 @@ import Svg, { Circle, G, Polygon } from 'react-native-svg';
 import { supabase } from '../lib/supabase';
 import { Pedometer } from 'expo-sensors';
 
-
 const { width } = Dimensions.get('window');
 const NEON_GREEN = '#1ED760';
 const WATER_BLUE = '#3b82f6';
@@ -27,6 +26,9 @@ const RING_THEMES = {
   'r2': { color: '#FF3300', type: 'inferno', perimeter: 283 },
   'r3': { color: '#00EAFF', type: 'cyber', perimeter: 268 },
   'r4': { color: '#39FF14', type: 'toxic', perimeter: 274 },
+  'r5': { color: '#FF00AA', type: 'pulse', perimeter: 283 }, // La fel ca standard, dar pulseaza
+  'r6': { color: '#FFD700', type: 'diamond', perimeter: 255 },
+  'r7': { color: '#7400FF', type: 'quantum', perimeter: 302 },
 };
 
 const AVATAR_THEMES = {
@@ -34,10 +36,13 @@ const AVATAR_THEMES = {
   'a2': { color: '#FFD700', type: 'royal' },
   'a3': { color: '#9900FF', type: 'demon' },
   'a4': { color: '#FF00FF', type: 'glitch' },
+  'a5': { color: '#00FFFF', type: 'holo' },
+  'a6': { color: '#FF4400', type: 'inferno_avatar' },
+  'a7': { color: '#333333', type: 'void' },
 };
 
 export default function DashboardScreen({ navigation, route }) {
-  const scrollViewRef = useRef(null); // 🔴 Ref pentru Scroll to Top
+  const scrollViewRef = useRef(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isMenuVisible, setMenuVisible] = useState(false);
   const [isProfileModalVisible, setProfileModalVisible] = useState(false);
@@ -199,13 +204,11 @@ export default function DashboardScreen({ navigation, route }) {
     return () => { isCancelled = true; };
   }, []);
 
-  // 🔴 Scroll to top și Fetch la focus
-  useFocusEffect(useCallback(() => { 
+  useFocusEffect(useCallback(() => {
     scrollViewRef.current?.scrollTo({ y: 0, animated: true });
-    fetchProfileAndStats(); 
+    fetchProfileAndStats();
   }, []));
 
-  // 🔴 ALGORITM CALORII ZILNICE (100% Accurate)
   const getRecommendedCalories = () => {
     if (!userProfile) return 2000;
     const weight = parseFloat(userProfile.weight) || 70;
@@ -215,11 +218,9 @@ export default function DashboardScreen({ navigation, route }) {
     const goal = userProfile.goal || 'maintain';
     const workouts = parseInt(userProfile.workouts_per_week) || 3;
 
-    // Ecuația Mifflin-St Jeor
     let bmr = (10 * weight) + (6.25 * height) - (5 * age);
     bmr = sex === 'M' ? bmr + 5 : bmr - 161;
 
-    // Multiplicator Activitate
     let multiplier = 1.2;
     if (workouts >= 6) multiplier = 1.725;
     else if (workouts >= 3) multiplier = 1.55;
@@ -227,11 +228,10 @@ export default function DashboardScreen({ navigation, route }) {
 
     let tdee = bmr * multiplier;
 
-    // Ajustare pentru Goal
     if (goal === 'lose_weight') tdee -= 500;
     else if (goal === 'build_muscle' || goal === 'gain_strength') tdee += 300;
 
-    return Math.max(1200, Math.round(tdee)); // Minimum 1200 per siguranță
+    return Math.max(1200, Math.round(tdee));
   };
 
   const fetchCompletedWorkouts = useCallback(async () => {
@@ -329,8 +329,8 @@ export default function DashboardScreen({ navigation, route }) {
     let finalTitle = "";
     let finalGoal = parseFloat(newTaskGoal) || 0;
 
-    if (type === 'manual') { if (!newTaskTitle.trim()) return; finalTitle = newTaskTitle; } 
-    else if (type === 'water') { if (!finalGoal) return; finalTitle = `Drink ${finalGoal}L Water`; } 
+    if (type === 'manual') { if (!newTaskTitle.trim()) return; finalTitle = newTaskTitle; }
+    else if (type === 'water') { if (!finalGoal) return; finalTitle = `Drink ${finalGoal}L Water`; }
     else if (type === 'gym') { if (!finalGoal) return; finalTitle = `GYM for ${finalGoal.toLocaleString()} min`; }
 
     resetAndCloseModal();
@@ -338,7 +338,6 @@ export default function DashboardScreen({ navigation, route }) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    // Prevenirea creării de task-uri duplicate pentru Gym sau Water
     const existing = tasks.find(t => t.type === type);
     if ((type === 'gym' || type === 'water') && existing) {
       setTasks(prev => prev.map(t => t.id === existing.id ? { ...t, title: finalTitle, goal: finalGoal } : t));
@@ -388,11 +387,22 @@ export default function DashboardScreen({ navigation, route }) {
     let extraStyles = {};
 
     if (isLoggedIn) {
-      if (currentLevel >= 40) { strokeColor = '#FF00FF'; borderWidth = 4; extraStyles = { shadowColor: '#FF00FF', shadowOpacity: 0.8, shadowRadius: 10 }; }
-      else if (currentLevel >= 30) { strokeColor = '#00FFFF'; borderWidth = 3; extraStyles = { shadowColor: '#00FFFF', shadowOpacity: 0.5 }; }
-      else if (currentLevel >= 20) { strokeColor = '#FFD700'; borderWidth = 3; }
-      else if (currentLevel >= 10) { strokeColor = '#C0C0C0'; borderWidth = 2; }
-      else if (currentLevel >= 5) { strokeColor = '#CD7F32'; borderWidth = 2; }
+      if (theme.type === 'holo') {
+        borderWidth = 2;
+        extraStyles = { shadowColor: theme.color, shadowOpacity: 1, shadowRadius: 15 };
+      } else if (theme.type === 'inferno_avatar') {
+        borderWidth = 2;
+        extraStyles = { shadowColor: theme.color, shadowOpacity: 0.8, shadowRadius: 8 };
+      } else if (theme.type === 'void') {
+        borderWidth = 3;
+        extraStyles = { shadowColor: '#fff', shadowOpacity: 0.2, shadowRadius: 5 };
+      } else {
+        if (currentLevel >= 40) { strokeColor = '#FF00FF'; borderWidth = 4; extraStyles = { shadowColor: '#FF00FF', shadowOpacity: 0.8, shadowRadius: 10 }; }
+        else if (currentLevel >= 30) { strokeColor = '#00FFFF'; borderWidth = 3; extraStyles = { shadowColor: '#00FFFF', shadowOpacity: 0.5 }; }
+        else if (currentLevel >= 20) { strokeColor = '#FFD700'; borderWidth = 3; }
+        else if (currentLevel >= 10) { strokeColor = '#C0C0C0'; borderWidth = 2; }
+        else if (currentLevel >= 5) { strokeColor = '#CD7F32'; borderWidth = 2; }
+      }
     }
 
     return (
@@ -405,7 +415,7 @@ export default function DashboardScreen({ navigation, route }) {
       ]}>
         <User size={iconSize} color={isLoggedIn ? (theme.type === 'glitch' ? '#00EAFF' : theme.color) : '#888'} />
         {isLoggedIn && theme.type === 'royal' && <Crown color={theme.color} size={iconSize * 0.8} style={styles.avatarCrown} fill="rgba(255, 215, 0, 0.3)" />}
-        {isLoggedIn && theme.type === 'demon' && <Flame color={theme.color} size={size * 0.8} style={styles.avatarFlameBack} />}
+        {isLoggedIn && (theme.type === 'demon' || theme.type === 'inferno_avatar') && <Flame color={theme.color} size={size * 0.8} style={styles.avatarFlameBack} />}
         {isLoggedIn && theme.type === 'glitch' && <User size={iconSize} color="#FF00FF" style={styles.avatarGlitchOverlay} />}
       </View>
     );
@@ -422,18 +432,32 @@ export default function DashboardScreen({ navigation, route }) {
           <Svg height={220} width={220} viewBox="0 0 100 100">
             {theme.type === 'toxic' ? (
               <G>
-                <Polygon points="50,5 95,85 5,85" stroke="#1A1A1A" strokeWidth="4" fill="transparent" />
-                <Polygon points="50,5 95,85 5,85" stroke={theme.color} strokeWidth="4" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" />
+                <Polygon points="50,5 95,85 5,85" stroke="#1A1A1A" strokeWidth="4" fill="transparent" strokeLinejoin="round" />
+                <Polygon points="50,5 95,85 5,85" stroke={theme.color} strokeWidth="4" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" strokeLinejoin="round" />
               </G>
             ) : theme.type === 'cyber' ? (
               <G>
-                <Polygon points="50,5 90,25 90,75 50,95 10,75 10,25" stroke="#1A1A1A" strokeWidth="4" fill="transparent" />
-                <Polygon points="50,5 90,25 90,75 50,95 10,75 10,25" stroke={theme.color} strokeWidth="4" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" />
+                <Polygon points="50,5 90,25 90,75 50,95 10,75 10,25" stroke="#1A1A1A" strokeWidth="4" fill="transparent" strokeLinejoin="round" />
+                <Polygon points="50,5 90,25 90,75 50,95 10,75 10,25" stroke={theme.color} strokeWidth="4" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" strokeLinejoin="round" />
+              </G>
+            ) : theme.type === 'diamond' ? (
+              <G>
+                <Polygon points="50,5 95,50 50,95 5,50" stroke="#1A1A1A" strokeWidth="4" fill="transparent" strokeLinejoin="round" />
+                <Polygon points="50,5 95,50 50,95 5,50" stroke={theme.color} strokeWidth="4" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" strokeLinejoin="round" />
+              </G>
+            ) : theme.type === 'quantum' ? (
+              <G>
+                {/* Un octogon modern */}
+                <Polygon points="30,5 70,5 95,30 95,70 70,95 30,95 5,70 5,30" stroke="#1A1A1A" strokeWidth="3" fill="transparent" strokeLinejoin="round" />
+                <Polygon points="30,5 70,5 95,30 95,70 70,95 30,95 5,70 5,30" stroke={theme.color} strokeWidth="4" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" strokeLinejoin="round" />
               </G>
             ) : (
               <G transform="rotate(-90 50 50)">
                 <Circle cx="50" cy="50" r="45" stroke="#1A1A1A" strokeWidth="6" fill="transparent" />
                 <Circle cx="50" cy="50" r="45" stroke={theme.color} strokeWidth="6" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" />
+                {theme.type === 'pulse' && (
+                  <Circle cx="50" cy="50" r="32" stroke={theme.color} strokeWidth="2" fill="transparent" opacity="0.3" strokeDasharray={190} strokeDashoffset={offset * 0.7} />
+                )}
               </G>
             )}
           </Svg>
@@ -447,9 +471,8 @@ export default function DashboardScreen({ navigation, route }) {
         <View style={styles.stepsInfoContainer}>
           <View style={{flexDirection: 'row', alignItems: 'center'}}>
              <Footprints size={24} color={theme.color} />
-             {/* 🔴 Buton Info Sincronizare Pasi */}
-             <TouchableOpacity 
-               onPress={() => Alert.alert('Sincronizare Pași', 'Pașii tăi sunt preluați automat și în timp real din aplicația de sănătate a telefonului (Apple Health / Google Fit).')} 
+             <TouchableOpacity
+               onPress={() => Alert.alert('Sincronizare Pași', 'Pașii tăi sunt preluați automat și în timp real din aplicația de sănătate a telefonului (Apple Health / Google Fit).')}
                style={{marginLeft: 6, padding: 4}}
              >
                <Info size={16} color="#666" />
@@ -462,7 +485,6 @@ export default function DashboardScreen({ navigation, route }) {
     );
   };
 
-  // 🔴 LOGICA NOUA PENTRU RANDAREA TASK-URILOR (Placeholder pentru Setup)
   const renderTaskItem = (item) => {
     const completed = isTaskAutoCompleted(item);
     return (
@@ -496,7 +518,6 @@ export default function DashboardScreen({ navigation, route }) {
     );
   };
 
-  // Asigurăm afișarea Gym și Water (Fie active, fie Placeholder)
   const taskElements = [];
   const gymTask = tasks.find(t => t.type === 'gym');
   const waterTask = tasks.find(t => t.type === 'water');
@@ -528,7 +549,6 @@ export default function DashboardScreen({ navigation, route }) {
       )}
 
       <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
-        {/* 🔴 SCROLL VIEW REF ADĂUGAT AICI */}
         <ScrollView ref={scrollViewRef} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
 
           <View style={styles.header}>
@@ -572,12 +592,12 @@ export default function DashboardScreen({ navigation, route }) {
 
           <Text style={[styles.sectionTitle, { marginLeft: 20, marginTop: 25, marginBottom: 15 }]}>Daily Summary</Text>
           <View style={styles.statsGrid}>
-            <StatCardWrapper 
-              icon={<Flame size={16} color={NEON_GREEN}/>} 
-              label="CALORIES" 
-              value={`${Math.round(dailyStats.calories)}`} 
-              unit={`/ ${getRecommendedCalories()} kcal`} 
-              color={NEON_GREEN} 
+            <StatCardWrapper
+              icon={<Flame size={16} color={NEON_GREEN}/>}
+              label="CALORIES"
+              value={`${Math.round(dailyStats.calories)}`}
+              unit={`/ ${getRecommendedCalories()} kcal`}
+              color={NEON_GREEN}
             />
             <StatCardWrapper icon={<Clock size={16} color="#4D79FF"/>} label="ACTIVITY" value={dailyStats.activity} unit="mins" color="#4D79FF" />
             <StatCardWrapper icon={<Moon size={16} color={SLEEP_PURPLE}/>} label="SLEEP" value={dailyStats.sleep} unit="" color={SLEEP_PURPLE} />
@@ -597,7 +617,7 @@ export default function DashboardScreen({ navigation, route }) {
                 </TouchableOpacity>
               </View>
               <ScrollView bounces={false} showsVerticalScrollIndicator={false}>
-                
+
                 {taskType === 'manual' && (
                   <View style={styles.expandedContent}>
                     <TextInput style={styles.modalInput} placeholder="E.g. Morning Yoga" placeholderTextColor="#444" value={newTaskTitle} onChangeText={setNewTaskTitle} />
@@ -622,20 +642,28 @@ export default function DashboardScreen({ navigation, route }) {
         <View style={styles.menuOverlaySide}>
           <TouchableOpacity style={styles.menuCloseArea} onPress={() => setMenuVisible(false)} />
           <View style={styles.sideMenuContent}>
-            <View style={styles.sidebarProfileSection}>
+
+            {/* 🔴 Sidebar Profile Section complet apăsabil */}
+            <TouchableOpacity
+              style={styles.sidebarProfileSection}
+              activeOpacity={0.7}
+              onPress={() => {
+                if (isLoggedIn) {
+                  setMenuVisible(false);
+                  setProfileModalVisible(true);
+                }
+              }}
+            >
               {renderAvatar(56, 30)}
               <View style={{ marginLeft: 15, flex: 1 }}>
                 <Text style={styles.sidebarName}>{isLoggedIn ? (userProfile?.first_name || 'User') : 'Guest'}</Text>
-                
+
                 {isLoggedIn && userProfile?.equipped_title && (
                    <Text style={{color: NEON_GREEN, fontSize: 12, fontWeight: 'bold', marginBottom: 5}}>{userProfile.equipped_title}</Text>
                 )}
 
                 {isLoggedIn ? (
                   <View>
-                    <TouchableOpacity onPress={() => { setMenuVisible(false); setProfileModalVisible(true); }}>
-                      <Text style={styles.viewProfileSidebar}>View Profile</Text>
-                    </TouchableOpacity>
                     <View style={styles.sidebarXpBarBg}>
                       <View style={[styles.sidebarXpBarFill, { width: xpPercentage }]} />
                     </View>
@@ -645,7 +673,9 @@ export default function DashboardScreen({ navigation, route }) {
                   <Text style={[styles.viewProfileSidebar, { color: '#888' }]}>Not logged in</Text>
                 )}
               </View>
-            </View>
+              {isLoggedIn && <ChevronRight color="#444" size={24} />}
+            </TouchableOpacity>
+
             <View style={styles.menuDivider} />
             <ScrollView style={{ flex: 1 }}>
               <Text style={styles.menuGroupTitle}>General Settings</Text>
@@ -709,7 +739,7 @@ export default function DashboardScreen({ navigation, route }) {
                     </View>
                   </View>
                   <Text style={styles.userNameBig}>{userProfile?.first_name || 'Athlete'}</Text>
-                  
+
                   {userProfile?.equipped_title && (
                     <Text style={{color: NEON_GREEN, fontSize: 16, fontWeight: 'bold', marginTop: 5}}>{userProfile.equipped_title}</Text>
                   )}
@@ -886,13 +916,13 @@ const styles = StyleSheet.create({
   editButtonBorder: { width: 42, height: 42, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: '#333', borderRadius: 12, backgroundColor: '#121212' },
   emptyTaskPlaceholder: { height: 120, marginHorizontal: 20, borderRadius: 25, borderStyle: 'dashed', borderWidth: 1, borderColor: '#222', justifyContent: 'center', alignItems: 'center' },
   emptyTaskText: { color: '#333', marginTop: 10, fontWeight: '600' },
-  
+
   taskCard: { backgroundColor: CARD_BG, marginHorizontal: 20, borderRadius: 20, padding: 20, flexDirection: 'row', alignItems: 'center', marginBottom: 12, borderWidth: 1, borderColor: '#222' },
   neonBorder: { borderColor: NEON_GREEN + 'AA' },
   circleOutline: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#333' },
   taskTitleText: { color: '#FFF', fontSize: 16, fontWeight: 'bold' },
   taskSub: { color: '#666', fontSize: 12 },
-  
+
   setupBtn: { backgroundColor: '#1c1c1e', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 12, borderWidth: 1, borderColor: '#333' },
   setupBtnText: { color: '#FFF', fontSize: 12, fontWeight: 'bold' },
 
@@ -925,9 +955,9 @@ const styles = StyleSheet.create({
   menuOverlaySide: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', flexDirection: 'row' },
   menuCloseArea: { flex: 1 },
   sideMenuContent: { width: width * 0.75, backgroundColor: '#121212', padding: 25, paddingTop: 60 },
-  sidebarProfileSection: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
+  sidebarProfileSection: { flexDirection: 'row', alignItems: 'center', marginBottom: 20, paddingVertical: 10 },
   sidebarName: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
-  viewProfileSidebar: { color: NEON_GREEN, fontSize: 12, fontWeight: '600', marginTop: 2 },
+  viewProfileSidebar: { color: '#888', fontSize: 12, fontWeight: '600', marginTop: 2 },
 
   sidebarXpBarBg: { height: 4, backgroundColor: '#222', borderRadius: 2, marginTop: 8, width: 100, overflow: 'hidden' },
   sidebarXpBarFill: { height: '100%', backgroundColor: NEON_GREEN },
