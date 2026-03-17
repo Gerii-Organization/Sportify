@@ -8,12 +8,13 @@ import {
   Flame, User, LogIn, X, Bell, ShieldCheck,
   HelpCircle, Ruler, ChevronRight, Edit3, Footprints, Droplets, Clock, Moon,
   Trophy, TrendingUp, Target, Award, Activity, Crown, Dumbbell,
-  CheckCircle2, Plus, Trash2, ChevronDown, ChevronUp, Edit2, Check, Zap, Star
+  CheckCircle2, Plus, Trash2, ChevronDown, ChevronUp, Edit2, Check, Zap, Star, Info
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Circle, G, Polygon } from 'react-native-svg';
 import { supabase } from '../lib/supabase';
 import { Pedometer } from 'expo-sensors';
+
 
 const { width } = Dimensions.get('window');
 const NEON_GREEN = '#1ED760';
@@ -36,6 +37,7 @@ const AVATAR_THEMES = {
 };
 
 export default function DashboardScreen({ navigation, route }) {
+  const scrollViewRef = useRef(null); // 🔴 Ref pentru Scroll to Top
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isMenuVisible, setMenuVisible] = useState(false);
   const [isProfileModalVisible, setProfileModalVisible] = useState(false);
@@ -72,6 +74,7 @@ export default function DashboardScreen({ navigation, route }) {
   const currentLevel = Math.floor(totalXp / 100) + 1;
   const currentLevelXp = totalXp % 100;
   const xpPercentage = `${currentLevelXp}%`;
+
 
   const showXpToast = (amount, title) => {
     setXpToast({ amount, title });
@@ -196,7 +199,40 @@ export default function DashboardScreen({ navigation, route }) {
     return () => { isCancelled = true; };
   }, []);
 
-  useFocusEffect(useCallback(() => { fetchProfileAndStats(); }, []));
+  // 🔴 Scroll to top și Fetch la focus
+  useFocusEffect(useCallback(() => { 
+    scrollViewRef.current?.scrollTo({ y: 0, animated: true });
+    fetchProfileAndStats(); 
+  }, []));
+
+  // 🔴 ALGORITM CALORII ZILNICE (100% Accurate)
+  const getRecommendedCalories = () => {
+    if (!userProfile) return 2000;
+    const weight = parseFloat(userProfile.weight) || 70;
+    const height = parseFloat(userProfile.height) || 170;
+    const age = parseInt(userProfile.age) || 25;
+    const sex = userProfile.sex === 'F' ? 'F' : 'M';
+    const goal = userProfile.goal || 'maintain';
+    const workouts = parseInt(userProfile.workouts_per_week) || 3;
+
+    // Ecuația Mifflin-St Jeor
+    let bmr = (10 * weight) + (6.25 * height) - (5 * age);
+    bmr = sex === 'M' ? bmr + 5 : bmr - 161;
+
+    // Multiplicator Activitate
+    let multiplier = 1.2;
+    if (workouts >= 6) multiplier = 1.725;
+    else if (workouts >= 3) multiplier = 1.55;
+    else if (workouts >= 1) multiplier = 1.375;
+
+    let tdee = bmr * multiplier;
+
+    // Ajustare pentru Goal
+    if (goal === 'lose_weight') tdee -= 500;
+    else if (goal === 'build_muscle' || goal === 'gain_strength') tdee += 300;
+
+    return Math.max(1200, Math.round(tdee)); // Minimum 1200 per siguranță
+  };
 
   const fetchCompletedWorkouts = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -256,7 +292,7 @@ export default function DashboardScreen({ navigation, route }) {
       if (tasksData) setTasks(tasksData);
     } else {
       setIsLoggedIn(false); setUserProfile(null);
-      setDailyStats(prev => ({ ...prev, calories: 0, activity: 0, sleep: 7.5, water: 0 })); setTasks([]);
+      setDailyStats(prev => ({ ...prev, calories: 0, activity: 0, sleep: "0 m", water: 0 })); setTasks([]);
     }
   };
 
@@ -297,18 +333,27 @@ export default function DashboardScreen({ navigation, route }) {
     else if (type === 'water') { if (!finalGoal) return; finalTitle = `Drink ${finalGoal}L Water`; } 
     else if (type === 'gym') { if (!finalGoal) return; finalTitle = `GYM for ${finalGoal.toLocaleString()} min`; }
 
-    const tempId = Date.now().toString();
-    const newTask = { id: tempId, title: finalTitle, goal: finalGoal, type: type, completed: false };
-    setTasks(prev => [...prev, newTask]);
     resetAndCloseModal();
 
     const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      try {
-        const { data } = await supabase.from('tasks').insert([{ user_id: user.id, title: newTask.title, goal: newTask.goal, type: newTask.type, completed: false }]).select();
-        if (data && data.length > 0) setTasks(prev => prev.map(t => t.id === tempId ? data[0] : t));
-      } catch (err) {}
+    if (!user) return;
+
+    // Prevenirea creării de task-uri duplicate pentru Gym sau Water
+    const existing = tasks.find(t => t.type === type);
+    if ((type === 'gym' || type === 'water') && existing) {
+      setTasks(prev => prev.map(t => t.id === existing.id ? { ...t, title: finalTitle, goal: finalGoal } : t));
+      await supabase.from('tasks').update({ title: finalTitle, goal: finalGoal }).eq('id', existing.id);
+      return;
     }
+
+    const tempId = Date.now().toString();
+    const newTask = { id: tempId, title: finalTitle, goal: finalGoal, type: type, completed: false };
+    setTasks(prev => [...prev, newTask]);
+
+    try {
+      const { data } = await supabase.from('tasks').insert([{ user_id: user.id, title: newTask.title, goal: newTask.goal, type: newTask.type, completed: false }]).select();
+      if (data && data.length > 0) setTasks(prev => prev.map(t => t.id === tempId ? data[0] : t));
+    } catch (err) {}
   };
 
   const resetAndCloseModal = () => {
@@ -336,7 +381,6 @@ export default function DashboardScreen({ navigation, route }) {
     return task.completed;
   };
 
-  // 🔥 LOGICA PENTRU RAME ÎN FUNCȚIE DE NIVEL
   const renderAvatar = (size, iconSize) => {
     const theme = AVATAR_THEMES[userProfile?.equipped_avatar] || AVATAR_THEMES['a1'];
     let strokeColor = isLoggedIn ? theme.color : '#444';
@@ -344,11 +388,11 @@ export default function DashboardScreen({ navigation, route }) {
     let extraStyles = {};
 
     if (isLoggedIn) {
-      if (currentLevel >= 40) { strokeColor = '#FF00FF'; borderWidth = 4; extraStyles = { shadowColor: '#FF00FF', shadowOpacity: 0.8, shadowRadius: 10 }; } // Legendary
-      else if (currentLevel >= 30) { strokeColor = '#00FFFF'; borderWidth = 3; extraStyles = { shadowColor: '#00FFFF', shadowOpacity: 0.5 }; } // Diamond
-      else if (currentLevel >= 20) { strokeColor = '#FFD700'; borderWidth = 3; } // Gold
-      else if (currentLevel >= 10) { strokeColor = '#C0C0C0'; borderWidth = 2; } // Silver
-      else if (currentLevel >= 5) { strokeColor = '#CD7F32'; borderWidth = 2; } // Bronze
+      if (currentLevel >= 40) { strokeColor = '#FF00FF'; borderWidth = 4; extraStyles = { shadowColor: '#FF00FF', shadowOpacity: 0.8, shadowRadius: 10 }; }
+      else if (currentLevel >= 30) { strokeColor = '#00FFFF'; borderWidth = 3; extraStyles = { shadowColor: '#00FFFF', shadowOpacity: 0.5 }; }
+      else if (currentLevel >= 20) { strokeColor = '#FFD700'; borderWidth = 3; }
+      else if (currentLevel >= 10) { strokeColor = '#C0C0C0'; borderWidth = 2; }
+      else if (currentLevel >= 5) { strokeColor = '#CD7F32'; borderWidth = 2; }
     }
 
     return (
@@ -401,13 +445,72 @@ export default function DashboardScreen({ navigation, route }) {
           )}
         </View>
         <View style={styles.stepsInfoContainer}>
-          <Footprints size={24} color={theme.color} />
+          <View style={{flexDirection: 'row', alignItems: 'center'}}>
+             <Footprints size={24} color={theme.color} />
+             {/* 🔴 Buton Info Sincronizare Pasi */}
+             <TouchableOpacity 
+               onPress={() => Alert.alert('Sincronizare Pași', 'Pașii tăi sunt preluați automat și în timp real din aplicația de sănătate a telefonului (Apple Health / Google Fit).')} 
+               style={{marginLeft: 6, padding: 4}}
+             >
+               <Info size={16} color="#666" />
+             </TouchableOpacity>
+          </View>
           <Text style={styles.stepCount}>{dailyStats.steps}</Text>
           <Text style={styles.stepGoal}>of {stepsGoal} steps</Text>
         </View>
       </View>
     );
   };
+
+  // 🔴 LOGICA NOUA PENTRU RANDAREA TASK-URILOR (Placeholder pentru Setup)
+  const renderTaskItem = (item) => {
+    const completed = isTaskAutoCompleted(item);
+    return (
+      <View key={item.id} style={[styles.taskCard, completed && styles.neonBorder]}>
+        <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }} onPress={() => toggleTask(item.id, item.completed)}>
+          {completed ? <CheckCircle2 size={24} color={NEON_GREEN} /> : <View style={styles.circleOutline} />}
+          <View style={{ marginLeft: 15 }}>
+            <Text style={styles.taskTitleText}>{item.title}</Text>
+            {item.type === 'water' && <Text style={styles.taskSub}>{(dailyStats.water / 1000).toFixed(2)}L / {item.goal}L</Text>}
+            {item.type === 'gym' && <Text style={styles.taskSub}>{dailyStats.activity} min / {item.goal} min</Text>}
+          </View>
+        </TouchableOpacity>
+        {isEditMode && <TouchableOpacity onPress={() => deleteTask(item.id)}><Trash2 color="#FF4444" size={20} /></TouchableOpacity>}
+      </View>
+    );
+  };
+
+  const renderSetupItem = (type, title) => {
+    return (
+      <View key={type} style={[styles.taskCard, { borderColor: '#222' }]}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+          <View style={[styles.circleOutline, { borderStyle: 'dashed', borderColor: '#444' }]} />
+          <View style={{ marginLeft: 15, flex: 1 }}>
+            <Text style={[styles.taskTitleText, { color: '#888' }]}>{title}</Text>
+          </View>
+        </View>
+        <TouchableOpacity style={styles.setupBtn} onPress={() => { setTaskType(type); setAddTaskModalVisible(true); }}>
+          <Text style={styles.setupBtnText}>Set up</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  // Asigurăm afișarea Gym și Water (Fie active, fie Placeholder)
+  const taskElements = [];
+  const gymTask = tasks.find(t => t.type === 'gym');
+  const waterTask = tasks.find(t => t.type === 'water');
+  const customTasks = tasks.filter(t => t.type === 'manual');
+
+  if (gymTask) taskElements.push(renderTaskItem(gymTask));
+  else taskElements.push(renderSetupItem('gym', 'Gym for -- minutes'));
+
+  if (waterTask) taskElements.push(renderTaskItem(waterTask));
+  else taskElements.push(renderSetupItem('water', 'Drink -- L Water'));
+
+  customTasks.forEach(t => taskElements.push(renderTaskItem(t)));
+
+  const visibleTasks = isTasksCollapsed ? taskElements.slice(0, 2) : taskElements;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -425,7 +528,8 @@ export default function DashboardScreen({ navigation, route }) {
       )}
 
       <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        {/* 🔴 SCROLL VIEW REF ADĂUGAT AICI */}
+        <ScrollView ref={scrollViewRef} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
 
           <View style={styles.header}>
             <View style={styles.logoRow}>
@@ -446,15 +550,13 @@ export default function DashboardScreen({ navigation, route }) {
           <View style={styles.sectionHeader}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <Text style={styles.sectionTitle}>Daily Quests</Text>
-              {tasks.length > 2 && (
-                <TouchableOpacity onPress={() => setIsTasksCollapsed(!isTasksCollapsed)} style={{ marginLeft: 12 }}>
-                  {isTasksCollapsed ? <ChevronDown color={NEON_GREEN} size={22} /> : <ChevronUp color={NEON_GREEN} size={22} />}
-                </TouchableOpacity>
-              )}
+              <TouchableOpacity onPress={() => setIsTasksCollapsed(!isTasksCollapsed)} style={{ marginLeft: 12 }}>
+                {isTasksCollapsed ? <ChevronDown color={NEON_GREEN} size={22} /> : <ChevronUp color={NEON_GREEN} size={22} />}
+              </TouchableOpacity>
             </View>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               {isEditMode && (
-                <TouchableOpacity onPress={() => setAddTaskModalVisible(true)} style={[styles.editButtonBorder, { marginRight: 12 }]}>
+                <TouchableOpacity onPress={() => { setTaskType('manual'); setAddTaskModalVisible(true); }} style={[styles.editButtonBorder, { marginRight: 12 }]}>
                   <Plus color={NEON_GREEN} size={24} />
                 </TouchableOpacity>
               )}
@@ -465,34 +567,18 @@ export default function DashboardScreen({ navigation, route }) {
           </View>
 
           <View>
-            {tasks.length === 0 ? (
-              <TouchableOpacity style={styles.emptyTaskPlaceholder} onPress={() => setAddTaskModalVisible(true)}>
-                <Plus color="#333" size={40} />
-                <Text style={styles.emptyTaskText}>Add your first task</Text>
-              </TouchableOpacity>
-            ) : (
-              (isTasksCollapsed ? tasks.slice(0, 2) : tasks).map(item => {
-                const completed = isTaskAutoCompleted(item);
-                return (
-                  <View key={item.id} style={[styles.taskCard, completed && styles.neonBorder]}>
-                    <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }} onPress={() => toggleTask(item.id, item.completed)}>
-                      {completed ? <CheckCircle2 size={24} color={NEON_GREEN} /> : <View style={styles.circleOutline} />}
-                      <View style={{ marginLeft: 15 }}>
-                        <Text style={styles.taskTitleText}>{item.title}</Text>
-                        {item.type === 'water' && <Text style={styles.taskSub}>{(dailyStats.water / 1000).toFixed(2)}L / {item.goal}L</Text>}
-                        {item.type === 'gym' && <Text style={styles.taskSub}>{dailyStats.activity} min / {item.goal} min</Text>}
-                      </View>
-                    </TouchableOpacity>
-                    {isEditMode && <TouchableOpacity onPress={() => deleteTask(item.id)}><Trash2 color="#FF4444" size={20} /></TouchableOpacity>}
-                  </View>
-                );
-              })
-            )}
+            {visibleTasks}
           </View>
 
           <Text style={[styles.sectionTitle, { marginLeft: 20, marginTop: 25, marginBottom: 15 }]}>Daily Summary</Text>
           <View style={styles.statsGrid}>
-            <StatCardWrapper icon={<Flame size={16} color={NEON_GREEN}/>} label="CALORIES" value={dailyStats.calories} unit="kcal" color={NEON_GREEN} />
+            <StatCardWrapper 
+              icon={<Flame size={16} color={NEON_GREEN}/>} 
+              label="CALORIES" 
+              value={`${Math.round(dailyStats.calories)}`} 
+              unit={`/ ${getRecommendedCalories()} kcal`} 
+              color={NEON_GREEN} 
+            />
             <StatCardWrapper icon={<Clock size={16} color="#4D79FF"/>} label="ACTIVITY" value={dailyStats.activity} unit="mins" color="#4D79FF" />
             <StatCardWrapper icon={<Moon size={16} color={SLEEP_PURPLE}/>} label="SLEEP" value={dailyStats.sleep} unit="" color={SLEEP_PURPLE} />
             <StatCardWrapper icon={<Droplets size={16} color={WATER_BLUE}/>} label="WATER" value={(dailyStats.water / 1000).toFixed(2)} unit="L" color={WATER_BLUE} onPress={() => setWaterModalVisible(true)} />
@@ -505,33 +591,24 @@ export default function DashboardScreen({ navigation, route }) {
           <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={resetAndCloseModal}>
             <TouchableOpacity activeOpacity={1} style={styles.modalContentTasks}>
               <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>New Task</Text>
+                <Text style={styles.modalTitle}>{taskType === 'gym' ? 'Set Gym Goal' : taskType === 'water' ? 'Set Water Goal' : 'New Custom Task'}</Text>
                 <TouchableOpacity onPress={resetAndCloseModal} style={styles.closeBtnContainer}>
                   <X color="#666" size={24} />
                 </TouchableOpacity>
               </View>
               <ScrollView bounces={false} showsVerticalScrollIndicator={false}>
-                <View style={styles.expandableSection}>
-                  <TouchableOpacity style={styles.sectionMainRow} onPress={() => { setIsCustomExpanded(!isCustomExpanded); setTaskType('manual'); }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}><Zap size={20} color={NEON_GREEN} style={{ marginRight: 15 }} /><Text style={styles.sectionLabelMain}>Custom Task</Text></View>
-                    {isCustomExpanded ? <ChevronDown color={NEON_GREEN} size={20} /> : <ChevronRight color="#666" size={20} />}
-                  </TouchableOpacity>
-                  {isCustomExpanded && (
-                    <View style={styles.expandedContent}>
-                      <TextInput style={styles.modalInput} placeholder="E.g. Morning Yoga" placeholderTextColor="#444" value={newTaskTitle} onChangeText={setNewTaskTitle} />
-                      <TouchableOpacity style={styles.saveBtn} onPress={() => handleAddTask('manual')}><Text style={styles.saveBtnText}>Add Task</Text></TouchableOpacity>
-                    </View>
-                  )}
-                </View>
-                <View style={styles.divider} />
-                <View style={styles.suggestedGridTasks}>
-                  <TouchableOpacity style={[styles.suggestedItem, taskType === 'gym' && styles.selectedItem]} onPress={() => setTaskType('gym')}><Dumbbell color={taskType === 'gym' ? NEON_GREEN : "#666"} size={32} /><Text style={[styles.suggestedText, taskType === 'gym' && { color: NEON_GREEN }]}>GYM</Text></TouchableOpacity>
-                  <TouchableOpacity style={[styles.suggestedItem, taskType === 'water' && styles.selectedItem]} onPress={() => setTaskType('water')}><Droplets color={taskType === 'water' ? WATER_BLUE : "#666"} size={32} /><Text style={[styles.suggestedText, taskType === 'water' && {color: WATER_BLUE}]}>Water</Text></TouchableOpacity>
-                </View>
+                
+                {taskType === 'manual' && (
+                  <View style={styles.expandedContent}>
+                    <TextInput style={styles.modalInput} placeholder="E.g. Morning Yoga" placeholderTextColor="#444" value={newTaskTitle} onChangeText={setNewTaskTitle} />
+                    <TouchableOpacity style={styles.saveBtn} onPress={() => handleAddTask('manual')}><Text style={styles.saveBtnText}>Add Task</Text></TouchableOpacity>
+                  </View>
+                )}
+
                 {(taskType === 'gym' || taskType === 'water') && (
-                  <View style={{ width: '100%', marginTop: 20 }}>
+                  <View style={{ width: '100%', marginTop: 10 }}>
                     <TextInput style={styles.modalInput} placeholder={taskType === 'gym' ? "Goal: 45 min" : "Goal: 2.5 liters"} placeholderTextColor="#444" keyboardType="numeric" value={newTaskGoal} onChangeText={(t) => setNewTaskGoal(t.replace(/[^0-9.]/g, ''))} />
-                    <TouchableOpacity style={[styles.saveBtn, { backgroundColor: NEON_GREEN }]} onPress={() => handleAddTask(taskType)}><Text style={styles.saveBtnText}>Set Goal</Text></TouchableOpacity>
+                    <TouchableOpacity style={[styles.saveBtn, { backgroundColor: NEON_GREEN }]} onPress={() => handleAddTask(taskType)}><Text style={styles.saveBtnText}>Save Goal</Text></TouchableOpacity>
                   </View>
                 )}
                 <View style={{ height: 40 }} />
@@ -550,7 +627,6 @@ export default function DashboardScreen({ navigation, route }) {
               <View style={{ marginLeft: 15, flex: 1 }}>
                 <Text style={styles.sidebarName}>{isLoggedIn ? (userProfile?.first_name || 'User') : 'Guest'}</Text>
                 
-                {/* 🔴 AFIȘARE TITLU CURENT */}
                 {isLoggedIn && userProfile?.equipped_title && (
                    <Text style={{color: NEON_GREEN, fontSize: 12, fontWeight: 'bold', marginBottom: 5}}>{userProfile.equipped_title}</Text>
                 )}
@@ -634,7 +710,6 @@ export default function DashboardScreen({ navigation, route }) {
                   </View>
                   <Text style={styles.userNameBig}>{userProfile?.first_name || 'Athlete'}</Text>
                   
-                  {/* 🔴 AFIȘARE TITLU CURENT */}
                   {userProfile?.equipped_title && (
                     <Text style={{color: NEON_GREEN, fontSize: 16, fontWeight: 'bold', marginTop: 5}}>{userProfile.equipped_title}</Text>
                   )}
@@ -731,7 +806,10 @@ function StatCardWrapper({ icon, label, value, unit, color, onPress }) {
     <TouchableOpacity style={styles.statCardWrapper} onPress={onPress} disabled={!onPress}>
       <View style={styles.statCardInner}>
         <View style={styles.statHeader}>{icon}<Text style={[styles.statLabel, { color }]}>{label}</Text></View>
-        <View style={styles.statValueContainer}><Text style={styles.statValue}>{value}</Text><Text style={styles.statUnit}>{unit}</Text></View>
+        <View style={styles.statValueContainer}>
+          <Text style={styles.statValue}>{value}</Text>
+          <Text style={styles.statUnit}>{unit}</Text>
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -808,11 +886,15 @@ const styles = StyleSheet.create({
   editButtonBorder: { width: 42, height: 42, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: '#333', borderRadius: 12, backgroundColor: '#121212' },
   emptyTaskPlaceholder: { height: 120, marginHorizontal: 20, borderRadius: 25, borderStyle: 'dashed', borderWidth: 1, borderColor: '#222', justifyContent: 'center', alignItems: 'center' },
   emptyTaskText: { color: '#333', marginTop: 10, fontWeight: '600' },
+  
   taskCard: { backgroundColor: CARD_BG, marginHorizontal: 20, borderRadius: 20, padding: 20, flexDirection: 'row', alignItems: 'center', marginBottom: 12, borderWidth: 1, borderColor: '#222' },
   neonBorder: { borderColor: NEON_GREEN + 'AA' },
   circleOutline: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#333' },
   taskTitleText: { color: '#FFF', fontSize: 16, fontWeight: 'bold' },
   taskSub: { color: '#666', fontSize: 12 },
+  
+  setupBtn: { backgroundColor: '#1c1c1e', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 12, borderWidth: 1, borderColor: '#333' },
+  setupBtnText: { color: '#FFF', fontSize: 12, fontWeight: 'bold' },
 
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 16, justifyContent: 'space-between' },
   statCardWrapper: { width: '48%', marginBottom: 12 },
