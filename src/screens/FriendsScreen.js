@@ -71,7 +71,8 @@ export default function FriendsScreen() {
     setGroups(data || []);
   };
 
-  const fetchFriendsAndChats = async (userId) => {
+ const fetchFriendsAndChats = async (userId) => {
+    // 1. Aducem prieteniile
     const { data: fData, error } = await supabase.from('friendships')
       .select('*')
       .or(`user_id.eq.${userId},friend_id.eq.${userId}`);
@@ -86,7 +87,6 @@ export default function FriendsScreen() {
     fData.forEach(f => {
       const otherId = f.user_id === userId ? f.friend_id : f.user_id;
       fMap[otherId] = f.id;
-      
       if (f.status === 'accepted') acceptedIds.push(otherId);
       else if (f.status === 'pending') {
         if (f.friend_id === userId) pendingIn.push(otherId);
@@ -94,32 +94,40 @@ export default function FriendsScreen() {
       }
     });
 
-    // Procesăm Prietenii și Chaturile
     if (acceptedIds.length > 0) {
       const { data: pData } = await supabase.from('profiles').select('*').in('id', acceptedIds);
       
-      // Căutăm mesajele pentru a vedea cu cine am vorbit
+      // 🔴 NOU: Aducem mesajele ordonate pentru a afla ULTIMUL mesaj
       const { data: mData } = await supabase.from('messages')
-        .select('sender_id, receiver_id')
-        .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`);
+        .select('*')
+        .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
+        .order('created_at', { ascending: false });
 
-      const chattedWith = new Set();
+      const lastMessagesMap = {};
       if (mData) {
         mData.forEach(m => {
-          if (m.sender_id !== userId) chattedWith.add(m.sender_id);
-          if (m.receiver_id !== userId) chattedWith.add(m.receiver_id);
+          const partnerId = m.sender_id === userId ? m.receiver_id : m.sender_id;
+          if (!lastMessagesMap[partnerId]) lastMessagesMap[partnerId] = m;
         });
       }
 
       const allFriends = pData || [];
-      setActiveChats(allFriends.filter(f => chattedWith.has(f.id)));
-      setInactiveChats(allFriends.filter(f => !chattedWith.has(f.id)));
+      
+      // Separăm și sortăm chaturile active după data ultimului mesaj
+      const active = allFriends
+        .filter(f => lastMessagesMap[f.id])
+        .map(f => ({ ...f, lastMessage: lastMessagesMap[f.id] }))
+        .sort((a, b) => new Date(b.lastMessage.created_at) - new Date(a.lastMessage.created_at));
+        
+      const inactive = allFriends.filter(f => !lastMessagesMap[f.id]);
+
+      setActiveChats(active);
+      setInactiveChats(inactive);
     } else {
       setActiveChats([]);
       setInactiveChats([]);
     }
 
-    // Procesăm Cererile
     if (pendingIn.length > 0) {
       const { data: pData } = await supabase.from('profiles').select('*').in('id', pendingIn);
       setReceivedRequests((pData || []).map(p => ({ ...p, friendship_id: fMap[p.id] })));
@@ -225,7 +233,10 @@ export default function FriendsScreen() {
         {renderMiniAvatar(item)}
         <View style={styles.userInfo}>
           <Text style={styles.userName}>{item.first_name}</Text>
-          <Text style={styles.userTitle}>Apasă pentru a deschide chat-ul</Text>
+          <Text style={styles.userTitle} numberOfLines={1}>
+            {item.lastMessage?.is_deleted ? '🚫 Mesaj șters' : 
+             (item.lastMessage?.sender_id === myId ? 'Tu: ' : '') + item.lastMessage?.content}
+          </Text>
         </View>
         <MessageSquare color="#666" size={20} />
       </TouchableOpacity>
