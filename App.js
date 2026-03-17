@@ -10,10 +10,11 @@ import DashboardScreen from './src/screens/DashboardScreen';
 import ScannerScreen from './src/screens/ScannerScreen';
 import TrainingScreen from './src/screens/TrainingScreen';
 import WorkoutDetailScreen from './src/screens/WorkoutDetailScreen';
-import StatsScreen from './src/screens/StatsScreen';
+import FriendsScreen from './src/screens/FriendsScreen'; // ✅ Importat corect
 import ShopScreen from './src/screens/ShopScreen';
+import PublicProfileScreen from './src/screens/PublicProfileScreen';
 
-import { LayoutDashboard, ScanLine, Dumbbell, Activity, ShoppingBag } from 'lucide-react-native';
+import { LayoutDashboard, ScanLine, Dumbbell, Users, ShoppingBag } from 'lucide-react-native'; // ✅ Users importat
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -63,10 +64,11 @@ function MainTabs() {
         component={TrainingScreen}
         options={{ tabBarIcon: ({color}) => <Dumbbell color={color} size={24} /> }}
       />
+      {/* 🔴 Aici am reparat: Am adăugat componenta de Prieteni și iconița Users */}
       <Tab.Screen
-        name="Stats"
-        component={StatsScreen}
-        options={{ tabBarIcon: ({color}) => <Activity color={color} size={24} /> }}
+        name="Friends"
+        component={FriendsScreen}
+        options={{ tabBarIcon: ({color}) => <Users color={color} size={24} /> }}
       />
       <Tab.Screen
         name="Shop"
@@ -91,6 +93,11 @@ export default function App() {
           name="AuthScreen"
           component={AuthScreen}
           options={{ presentation: 'modal' }}
+        />
+        <Stack.Screen
+          name="PublicProfileScreen"
+          component={PublicProfileScreen}
+          options={{ presentation: 'card' }} // Ofera animatia clasica de back (slide din stanga-dreapta)
         />
       </Stack.Navigator>
     </NavigationContainer>
