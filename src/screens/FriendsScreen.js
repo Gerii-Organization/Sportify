@@ -248,7 +248,7 @@ export default function FriendsScreen() {
       <TouchableOpacity 
         key={item.id} 
         style={styles.userCard}
-        onPress={() => Alert.alert('În curând!', 'Chat-ul de grup va fi implementat la pasul următor.')}
+        onPress={() => navigation.navigate('GroupChatScreen', { groupId: item.id, groupName: item.name })}
         activeOpacity={0.7}
       >
         <View style={[styles.avatarBase, { borderColor: NEON_GREEN, borderWidth: 1 }]}>

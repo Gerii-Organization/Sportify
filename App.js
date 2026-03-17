@@ -15,6 +15,7 @@ import ShopScreen from './src/screens/ShopScreen';
 import PublicProfileScreen from './src/screens/PublicProfileScreen';
 import LeaderboardScreen from './src/screens/LeaderboardScreen';
 import ChatScreen from './src/screens/ChatScreen';
+import GroupChatScreen from './src/screens/GroupChatScreen';
 
 import { LayoutDashboard, ScanLine, Dumbbell, Users, ShoppingBag } from 'lucide-react-native';
 
@@ -108,6 +109,11 @@ export default function App() {
         <Stack.Screen
           name="ChatScreen"
           component={ChatScreen}
+          options={{ presentation: 'card' }} 
+        />
+        <Stack.Screen
+          name="GroupChatScreen"
+          component={GroupChatScreen}
           options={{ presentation: 'card' }} 
         />
       </Stack.Navigator>
