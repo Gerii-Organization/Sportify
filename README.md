@@ -15,9 +15,9 @@ Sportify is a neon-style fitness companion that helps users track their daily ac
 
 ## Screens
 
-<img src=".screenshots/Auth.png" width="250"> <img src=".screenshots/Dashboard.png" width="250"> <img src=".screenshots/Workout.png" width="250"> <img src=".screenshots/Shop.png" width="250"> <img src=".screenshots/Scanner.png" width="250">
+<img src="screenshots/Auth.png" width="250"> <img src="screenshots/Dashboard.png" width="250"> <img src="screenshots/Workout.png" width="250"> <img src="screenshots/Shop.png" width="250"> <img src="screenshots/Scanner.png" width="250">
 
-## How It Works (High Level)
+## How It Works
 
 1. **Sign up / Log in**
    - Users authenticate with **Supabase Auth**.
@@ -92,12 +92,3 @@ The app reads/writes to:
 - `user_workouts` (current workout being edited/played)
 - `user_inventory` (owned/equipped shop items)
 - `scanned_foods` (food scan history)
-
-## License
-
-<<<<<<< HEAD
-Add your preferred license here (or remove this section if not needed).
-=======
-Add your preferred license here (or remove this section if not needed).
-
-> > > > > > > 1dcb0479a3ec001889744a529174a91101b57bb1
