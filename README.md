@@ -13,25 +13,22 @@ Sportify is a neon-style fitness companion that helps users track their daily ac
 - **Shop & power-ups**: spend energy points to equip cosmetic items and use gameplay boosts (XP boost, streak restore).
 
 ## Screens
-Replace the placeholders below with your real screenshots. Add them to a folder named `./screenshots/`.
 
 ### Auth
-![Auth screen](./screenshots/auth.png)
+![Auth screen](./screenshots/Auth.png)
 
 ### Dashboard
-![Dashboard screen](./screenshots/dashboard.png)
+![Dashboard screen](./screenshots/Dashboard.png)
 
 ### Workout
-![Workout tracking screen](./screenshots/workout.png)
-
-### Stats
-![Stats screen](./screenshots/stats.png)
+![Workout tracking screen](./screenshots/Workout.png)
 
 ### Shop
-![Shop screen](./screenshots/shop.png)
+![Shop screen](./screenshots/Shop.png)
 
 ### Scanner
-![Scanner screen](./screenshots/scanner.png)
+![Scanner screen](./screenshots/Scanner.png)
+
 
 ## How It Works (High Level)
 1. **Sign up / Log in**
