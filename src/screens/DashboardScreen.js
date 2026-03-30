@@ -11,7 +11,7 @@ import {
   CheckCircle2, Plus, Trash2, ChevronDown, ChevronUp, Edit2, Check, Zap, Star, Info
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import Svg, { Circle, G, Polygon } from 'react-native-svg';
+import Svg, { Circle, G, Polygon, Defs, RadialGradient, Stop, Filter , FeGaussianBlur} from 'react-native-svg';
 import { supabase } from '../lib/supabase';
 import { Pedometer } from 'expo-sensors';
 
@@ -421,46 +421,65 @@ export default function DashboardScreen({ navigation, route }) {
     );
   };
 
-  const renderProgressShape = () => {
+const renderProgressShape = () => {
     const theme = RING_THEMES[userProfile?.equipped_ring] || RING_THEMES['r1'];
-    const progress = Math.min(dailyStats.steps / stepsGoal, 1);
+    // Evităm erorile de împărțire la 0 în caz că nu e setat goal-ul
+    const safeStepsGoal = stepsGoal > 0 ? stepsGoal : 10000;
+    const progress = Math.min(dailyStats.steps / safeStepsGoal, 1);
     const offset = theme.perimeter - (theme.perimeter * progress);
+
+    // 🔴 Șablon MULT MAI CURAT (Folosim Blur nativ, fix ca în CSS)
+    const renderShape = (points, isCircle = false) => {
+      if (isCircle) {
+        return (
+          <G transform="rotate(-90 50 50)">
+            {/* 1. Umbra CSS (Forma cu grosime mai mare + Blur) */}
+            <Circle cx="50" cy="50" r="45" stroke={theme.color} strokeWidth="8" fill="transparent" opacity="0.7" filter="url(#glow)" />
+            {/* 2. Liniile de bază subțiri (fără blur) */}
+            <Circle cx="50" cy="50" r="45" stroke="#121212" strokeWidth="3" fill="transparent" />
+            <Circle cx="50" cy="50" r="45" stroke={theme.color} strokeWidth="3" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" />
+          </G>
+        );
+      }
+      return (
+        <G>
+          {/* 1. Umbra CSS pe forma exactă a poligonului */}
+          <Polygon points={points} stroke={theme.color} strokeWidth="8" fill="transparent" strokeLinejoin="round" opacity="0.7" filter="url(#glow)" />
+          {/* 2. Liniile de bază subțiri */}
+          <Polygon points={points} stroke="#121212" strokeWidth="3" fill="transparent" strokeLinejoin="round" />
+          <Polygon points={points} stroke={theme.color} strokeWidth="3" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" strokeLinejoin="round" />
+        </G>
+      );
+    };
+
+    let shapeContent;
+    if (theme.type === 'toxic') shapeContent = renderShape("50,5 95,85 5,85");
+    else if (theme.type === 'cyber') shapeContent = renderShape("50,5 90,25 90,75 50,95 10,75 10,25");
+    else if (theme.type === 'diamond') shapeContent = renderShape("50,5 95,50 50,95 5,50");
+    else if (theme.type === 'quantum') shapeContent = renderShape("30,5 70,5 95,30 95,70 70,95 30,95 5,70 5,30");
+    else shapeContent = renderShape(null, true);
 
     return (
       <View style={styles.progressContainer}>
         <View style={styles.ringWrapper}>
-          <Svg height={220} width={220} viewBox="0 0 100 100">
-            {theme.type === 'toxic' ? (
-              <G>
-                <Polygon points="50,5 95,85 5,85" stroke="#1A1A1A" strokeWidth="4" fill="transparent" strokeLinejoin="round" />
-                <Polygon points="50,5 95,85 5,85" stroke={theme.color} strokeWidth="4" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" strokeLinejoin="round" />
-              </G>
-            ) : theme.type === 'cyber' ? (
-              <G>
-                <Polygon points="50,5 90,25 90,75 50,95 10,75 10,25" stroke="#1A1A1A" strokeWidth="4" fill="transparent" strokeLinejoin="round" />
-                <Polygon points="50,5 90,25 90,75 50,95 10,75 10,25" stroke={theme.color} strokeWidth="4" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" strokeLinejoin="round" />
-              </G>
-            ) : theme.type === 'diamond' ? (
-              <G>
-                <Polygon points="50,5 95,50 50,95 5,50" stroke="#1A1A1A" strokeWidth="4" fill="transparent" strokeLinejoin="round" />
-                <Polygon points="50,5 95,50 50,95 5,50" stroke={theme.color} strokeWidth="4" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" strokeLinejoin="round" />
-              </G>
-            ) : theme.type === 'quantum' ? (
-              <G>
-                {/* Un octogon modern */}
-                <Polygon points="30,5 70,5 95,30 95,70 70,95 30,95 5,70 5,30" stroke="#1A1A1A" strokeWidth="3" fill="transparent" strokeLinejoin="round" />
-                <Polygon points="30,5 70,5 95,30 95,70 70,95 30,95 5,70 5,30" stroke={theme.color} strokeWidth="4" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" strokeLinejoin="round" />
-              </G>
-            ) : (
-              <G transform="rotate(-90 50 50)">
-                <Circle cx="50" cy="50" r="45" stroke="#1A1A1A" strokeWidth="6" fill="transparent" />
-                <Circle cx="50" cy="50" r="45" stroke={theme.color} strokeWidth="6" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" />
-                {theme.type === 'pulse' && (
-                  <Circle cx="50" cy="50" r="32" stroke={theme.color} strokeWidth="2" fill="transparent" opacity="0.3" strokeDasharray={190} strokeDashoffset={offset * 0.7} />
-                )}
-              </G>
+          
+          <Svg height={300} width={300} viewBox="-20 -20 140 140" style={{ position: 'absolute' }}>
+            
+            {/* 🟢 AICI ESTE MAGIA: Definim filtrul de Shadow CSS. 
+                stdDeviation dictează cât de împrăștiat (spread) e shadow-ul */}
+            <Defs>
+              <Filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+                <FeGaussianBlur stdDeviation="6" result="blur" />
+              </Filter>
+            </Defs>
+            
+            {shapeContent}
+            
+            {theme.type === 'pulse' && (
+              <Circle cx="50" cy="50" r="32" stroke={theme.color} strokeWidth="1.5" fill="transparent" opacity={0.4} strokeDasharray={190} strokeDashoffset={offset * 0.7} filter="url(#glow)" />
             )}
           </Svg>
+          
           {theme.type === 'inferno' && (
             <>
               <Flame color="#FF8800" size={35} style={[styles.absoluteIcon, { top: -15 }]} fill="#FF8800" />
@@ -468,11 +487,12 @@ export default function DashboardScreen({ navigation, route }) {
             </>
           )}
         </View>
+        
         <View style={styles.stepsInfoContainer}>
           <View style={{flexDirection: 'row', alignItems: 'center'}}>
              <Footprints size={24} color={theme.color} />
              <TouchableOpacity
-               onPress={() => Alert.alert('Sincronizare Pași', 'Pașii tăi sunt preluați automat și în timp real din aplicația de sănătate a telefonului (Apple Health / Google Fit).')}
+               onPress={() => Alert.alert('Sincronizare Pași', 'Pașii tăi sunt preluați automat și în timp real din aplicația de sănătate a telefonului.')}
                style={{marginLeft: 6, padding: 4}}
              >
                <Info size={16} color="#666" />
