@@ -1,14 +1,17 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { 
   StyleSheet, View, Text, SafeAreaView, TextInput, TouchableOpacity, 
   FlatList, KeyboardAvoidingView, Platform, ActivityIndicator
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ChevronLeft, Send, Hash } from 'lucide-react-native';
+import { ChevronLeft, Send, Hash, Users } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
+import { colors } from '../theme';
+import { formatClockTime } from '../lib/date';
+import { gradients } from '../theme';
+import GroupSheet from '../components/GroupSheet';
+import DaySeparator, { needsSeparator, dayLabel } from '../components/DaySeparator';
 
-const NEON_GREEN = '#1ED760';
-const CARD_BG = '#121212';
 
 export default function GroupChatScreen({ route, navigation }) {
   const { groupId, groupName } = route.params;
@@ -17,8 +20,10 @@ export default function GroupChatScreen({ route, navigation }) {
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
   
-  // Stocăm numele membrilor grupului ca să știm cine a scris
+  // Member names, keyed by user id, so each bubble can show its author.
   const [memberNames, setMemberNames] = useState({});
+  const [group, setGroup] = useState(null);
+  const [groupSheetVisible, setGroupSheetVisible] = useState(false);
 
   const flatListRef = useRef(null);
 
@@ -30,7 +35,12 @@ export default function GroupChatScreen({ route, navigation }) {
       if (!user) return;
       setMyId(user.id);
 
-      // 1. Aducem toți membrii grupului ca să le știm numele
+      // The group row carries created_by, which decides who may rename or
+      // delete it. Without it the sheet cannot show the right controls.
+      const { data: groupRow } = await supabase.from('groups').select('*').eq('id', groupId).maybeSingle();
+      setGroup(groupRow);
+
+      // 1. Members first — we need their names before rendering messages.
       const { data: members } = await supabase.from('group_members').select('user_id').eq('group_id', groupId);
       if (members && members.length > 0) {
         const memberIds = members.map(m => m.user_id);
@@ -40,7 +50,7 @@ export default function GroupChatScreen({ route, navigation }) {
         setMemberNames(namesMap);
       }
 
-      // 2. Aducem mesajele de pe grup
+      // 2. Existing messages, oldest first so the list reads top to bottom.
       const { data: initialMessages } = await supabase
         .from('group_messages')
         .select('*')
@@ -50,7 +60,7 @@ export default function GroupChatScreen({ route, navigation }) {
       setMessages(initialMessages || []);
       setLoading(false);
 
-      // 3. Ascultăm în timp real pe grup
+      // 3. Subscribe to new messages for this group only.
       subscription = supabase
         .channel(`public:group_messages:${groupId}`)
         .on('postgres_changes', { 
@@ -82,25 +92,24 @@ export default function GroupChatScreen({ route, navigation }) {
     }]);
   };
 
-  const formatTime = (isoString) => {
-    const date = new Date(isoString);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
+
 
   const renderMessage = ({ item, index }) => {
     const isMe = item.sender_id === myId;
-    // Nu mai scriem numele nostru dacă noi am trimis mesajul
+    // Only label the first message in a run, and never our own.
     const showName = !isMe && (index === 0 || messages[index - 1].sender_id !== item.sender_id);
+    const showDay = needsSeparator(item.created_at, messages[index - 1]?.created_at);
 
     return (
-      <View style={{ marginBottom: 12 }}>
-        {showName && <Text style={styles.senderName}>{memberNames[item.sender_id] || 'Membru'}</Text>}
+      <View style={{ marginBottom: 10 }}>
+        {showDay && <DaySeparator label={dayLabel(item.created_at)} />}
+        {showName && <Text style={styles.senderName}>{memberNames[item.sender_id] || 'Member'}</Text>}
         <View style={[styles.messageBubble, isMe ? styles.myMessage : styles.theirMessage]}>
           <Text style={[styles.messageText, isMe ? styles.myMessageText : styles.theirMessageText]}>
             {item.content}
           </Text>
-          <Text style={[styles.timeText, isMe ? {color: 'rgba(0,0,0,0.6)'} : {color: '#666'}]}>
-            {formatTime(item.created_at)}
+          <Text style={[styles.timeText, isMe ? {color: 'rgba(0,0,0,0.6)'} : {color: colors.textMuted}]}>
+            {formatClockTime(item.created_at)}
           </Text>
         </View>
       </View>
@@ -109,21 +118,33 @@ export default function GroupChatScreen({ route, navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <LinearGradient colors={['#000000', '#0a0a0a']} style={styles.gradientBg}>
+      <LinearGradient colors={gradients.flat} style={styles.gradientBg}>
         
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-            <ChevronLeft color="#FFF" size={28} />
+          <TouchableOpacity accessibilityLabel="Go back" activeOpacity={0.7} onPress={() => navigation.goBack()} style={styles.backBtn}>
+            <ChevronLeft color={colors.text} size={28} />
           </TouchableOpacity>
-          <View style={{flexDirection: 'row', alignItems: 'center'}}>
-            <Hash color={NEON_GREEN} size={18} style={{marginRight: 6}} />
-            <Text style={styles.headerName}>{groupName}</Text>
-          </View>
-          <View style={{width: 28}} />
+          {/* The title doubles as the way into group settings — there is nowhere
+              else to put it, and tapping a chat title is where people look. */}
+          <TouchableOpacity activeOpacity={0.7}
+            style={{ flexDirection: 'row', alignItems: 'center', flex: 1, justifyContent: 'center' }}
+            onPress={() => setGroupSheetVisible(true)}
+            accessibilityLabel="Group settings"
+          >
+            <Hash color={colors.accent} size={18} style={{marginRight: 6}} />
+            <Text style={styles.headerName}>{group?.name || groupName}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity activeOpacity={0.7}
+            onPress={() => setGroupSheetVisible(true)}
+            style={styles.backBtn}
+            accessibilityLabel="Members"
+          >
+            <Users color={colors.textSecondary} size={22} />
+          </TouchableOpacity>
         </View>
 
         {loading ? (
-          <View style={styles.centerContainer}><ActivityIndicator color={NEON_GREEN} /></View>
+          <View style={styles.centerContainer}><ActivityIndicator color={colors.accent} /></View>
         ) : (
           <FlatList
             ref={flatListRef} data={messages} keyExtractor={(item) => item.id.toString()} renderItem={renderMessage}
@@ -135,37 +156,49 @@ export default function GroupChatScreen({ route, navigation }) {
 
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}>
           <View style={styles.inputContainer}>
-            <TextInput style={styles.textInput} placeholder="Mesaj pe grup..." placeholderTextColor="#666" value={inputText} onChangeText={setInputText} multiline />
-            <TouchableOpacity style={[styles.sendBtn, !inputText.trim() ? { opacity: 0.5 } : {}]} onPress={sendMessage} disabled={!inputText.trim()}>
-              <Send color="#000" size={20} />
+            <TextInput style={styles.textInput} placeholder="Message the group..." placeholderTextColor={colors.textMuted} value={inputText} onChangeText={setInputText} multiline />
+            <TouchableOpacity activeOpacity={0.7} style={[styles.sendBtn, !inputText.trim() ? { opacity: 0.5 } : {}]} onPress={sendMessage} disabled={!inputText.trim()} accessibilityLabel="Send message">
+              <Send color={colors.onAccent} size={20} />
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
 
+        <GroupSheet
+          visible={groupSheetVisible}
+          onClose={() => setGroupSheetVisible(false)}
+          group={group}
+          currentUserId={myId}
+          onChanged={() => {
+            // A rename should show immediately; a leave or delete means this
+            // screen no longer has anything to display.
+            supabase.from('groups').select('*').eq('id', groupId).maybeSingle()
+              .then(({ data }) => (data ? setGroup(data) : navigation.goBack()));
+          }}
+        />
       </LinearGradient>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
+  container: { flex: 1, backgroundColor: colors.background },
   gradientBg: { flex: 1, justifyContent: 'space-between' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 15, paddingTop: Platform.OS === 'android' ? 40 : 10, paddingBottom: 15, backgroundColor: 'rgba(0,0,0,0.5)', borderBottomWidth: 1, borderBottomColor: '#222' },
-  backBtn: { padding: 5 },
-  headerName: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: Platform.OS === 'android' ? 40 : 10, paddingBottom: 16, backgroundColor: 'rgba(0,0,0,0.5)', borderBottomWidth: 1, borderBottomColor: colors.border },
+  backBtn: { padding: 6 },
+  headerName: { color: colors.text, fontSize: 17, fontWeight: '700' },
   centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  chatList: { padding: 15, flexGrow: 1, justifyContent: 'flex-end' },
+  chatList: { padding: 16, flexGrow: 1, justifyContent: 'flex-end' },
   
-  senderName: { color: NEON_GREEN, fontSize: 11, fontWeight: 'bold', marginLeft: 10, marginBottom: 4 },
-  messageBubble: { maxWidth: '80%', paddingHorizontal: 15, paddingVertical: 10, borderRadius: 20 },
-  myMessage: { alignSelf: 'flex-end', backgroundColor: NEON_GREEN, borderBottomRightRadius: 5 },
-  theirMessage: { alignSelf: 'flex-start', backgroundColor: '#222', borderBottomLeftRadius: 5, borderWidth: 1, borderColor: '#333' },
-  messageText: { fontSize: 16 },
-  myMessageText: { color: '#000', fontWeight: '500' },
-  theirMessageText: { color: '#FFF' },
-  timeText: { fontSize: 10, fontWeight: 'bold', alignSelf: 'flex-end', marginTop: 4 },
+  senderName: { color: colors.accent, fontSize: 11, fontWeight: '600', marginLeft: 10, marginBottom: 6 },
+  messageBubble: { maxWidth: '80%', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24 },
+  myMessage: { alignSelf: 'flex-end', backgroundColor: colors.accent, borderBottomRightRadius: 5 },
+  theirMessage: { alignSelf: 'flex-start', backgroundColor: colors.surfaceHigh, borderBottomLeftRadius: 5 },
+  messageText: { fontSize: 15 },
+  myMessageText: { color: colors.onAccent, fontWeight: '500' },
+  theirMessageText: { color: colors.text },
+  timeText: { fontSize: 11, fontWeight: '600', alignSelf: 'flex-end', marginTop: 6 },
 
-  inputContainer: { flexDirection: 'row', alignItems: 'flex-end', padding: 15, backgroundColor: CARD_BG, borderTopWidth: 1, borderTopColor: '#222' },
-  textInput: { flex: 1, backgroundColor: '#1A1A1A', color: '#FFF', minHeight: 45, maxHeight: 100, borderRadius: 20, paddingHorizontal: 15, paddingTop: 12, paddingBottom: 12, fontSize: 16, borderWidth: 1, borderColor: '#333' },
-  sendBtn: { backgroundColor: NEON_GREEN, width: 45, height: 45, borderRadius: 22.5, justifyContent: 'center', alignItems: 'center', marginLeft: 10, marginBottom: 2 }
+  inputContainer: { flexDirection: 'row', alignItems: 'flex-end', padding: 16, backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.border },
+  textInput: { flex: 1, backgroundColor: colors.surface, color: colors.text, minHeight: 45, maxHeight: 100, borderRadius: 24, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 10, fontSize: 15 },
+  sendBtn: { backgroundColor: colors.accent, width: 45, height: 45, borderRadius: 22.5, justifyContent: 'center', alignItems: 'center', marginLeft: 10, marginBottom: 2 }
 });

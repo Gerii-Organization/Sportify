@@ -1,20 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { 
   StyleSheet, View, Text, SafeAreaView, TextInput, TouchableOpacity, 
   FlatList, KeyboardAvoidingView, Platform, ActivityIndicator, Alert, Modal, Image
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ChevronLeft, Send, Check, CheckCheck, X, MoreVertical, ImageIcon, User, Crown } from 'lucide-react-native';
+import { ChevronLeft, Send, Check, CheckCheck, X, MoreVertical, ImageIcon } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
-import * as ImagePicker from 'expo-image-picker'; // 🔴 Pachetul nou
+import * as ImagePicker from 'expo-image-picker';
 
-const NEON_GREEN = '#1ED760';
-const CARD_BG = '#121212';
-
-const AVATAR_THEMES = {
-  'a1': { color: '#1ED760', type: 'standard' }, 'a2': { color: '#FFD700', type: 'royal' },
-  'a3': { color: '#9900FF', type: 'demon' }, 'a4': { color: '#FF00FF', type: 'glitch' },
-};
 
 export default function ChatScreen({ route, navigation }) {
   const { friendId, friendName } = route.params;
@@ -35,7 +28,7 @@ export default function ChatScreen({ route, navigation }) {
       if (!user) return;
       setMyId(user.id);
 
-      // Aducem profilul prietenului pentru poză
+      // Load the friend's profile so we can show their avatar in the header.
       const { data: fProfile } = await supabase.from('profiles').select('*').eq('id', friendId).single();
       setFriendProfile(fProfile);
 
@@ -49,16 +42,26 @@ export default function ChatScreen({ route, navigation }) {
       }
       setLoading(false);
 
-      subscription = supabase.channel('public:messages')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, (payload) => {
-            if (payload.eventType === 'INSERT' && payload.new.sender_id === friendId) {
-                setMessages(prev => [...prev, payload.new]);
-                supabase.from('messages').update({ is_read: true }).eq('id', payload.new.id).then();
+      // Scoped to this conversation. The previous version subscribed to every
+      // row in `messages` and filtered client-side, so every user's traffic
+      // was delivered to every open client.
+      subscription = supabase
+        .channel(`messages:${friendId}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'messages', filter: `sender_id=eq.${friendId}` },
+          (payload) => {
+            if (payload.new?.receiver_id !== user.id) return;
+            if (payload.eventType === 'INSERT') {
+              setMessages((prev) => [...prev, payload.new]);
+              supabase.from('messages').update({ is_read: true }).eq('id', payload.new.id).then();
             }
             if (payload.eventType === 'UPDATE') {
-                setMessages(prev => prev.map(msg => msg.id === payload.new.id ? payload.new : msg));
+              setMessages((prev) => prev.map((m) => (m.id === payload.new.id ? payload.new : m)));
             }
-        }).subscribe();
+          }
+        )
+        .subscribe();
     };
 
     setupChat();
@@ -86,7 +89,7 @@ export default function ChatScreen({ route, navigation }) {
     }]);
   };
 
-  // 🔴 FUNCȚIA DE TRIMIS POZE
+  // Pick an image, upload it to Supabase Storage, then send its public URL.
   const pickAndSendImage = async () => {
     let result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -107,27 +110,27 @@ export default function ChatScreen({ route, navigation }) {
         const { error } = await supabase.storage.from('chat_images').upload(filePath, blob);
         if (error) throw error;
 
-        // Luăm URL-ul public
+        // Storage paths are private by default; getPublicUrl gives a shareable link.
         const { data } = supabase.storage.from('chat_images').getPublicUrl(filePath);
         await sendMessage(data.publicUrl); // Trimitem mesajul cu poza
 
-      } catch (e) { Alert.alert("Eroare", "Nu s-a putut încărca imaginea: " + e.message); }
+      } catch (e) { Alert.alert("Upload failed", "Could not upload the image: " + e.message); }
       setLoading(false);
     }
   };
 
   const handleLongPress = (item) => {
     if (item.sender_id !== myId || item.is_deleted) return;
-    Alert.alert("Acțiuni", "Alege ce vrei să faci", [
-        { text: "Editează textul", onPress: () => { setEditingMessage(item); setEditInput(item.content); } },
-        { text: "Șterge", onPress: () => deleteMessage(item.id), style: "destructive" },
-        { text: "Anulează", style: "cancel" }
+    Alert.alert("Message", "What would you like to do?", [
+        { text: "Edit text", onPress: () => { setEditingMessage(item); setEditInput(item.content); } },
+        { text: "Delete", onPress: () => deleteMessage(item.id), style: "destructive" },
+        { text: "Cancel", style: "cancel" }
     ]);
   };
 
   const deleteMessage = async (id) => {
     setMessages(prev => prev.map(m => m.id === id ? { ...m, is_deleted: true } : m));
-    await supabase.from('messages').update({ is_deleted: true, content: 'Acest mesaj a fost șters', image_url: null }).eq('id', id);
+    await supabase.from('messages').update({ is_deleted: true, content: 'This message was deleted', image_url: null }).eq('id', id);
   };
 
   const saveEdit = async () => {
@@ -138,78 +141,76 @@ export default function ChatScreen({ route, navigation }) {
   };
 
   const showMoreOptions = () => {
-    Alert.alert("Opțiuni Chat", "Aceste funcții vor fi disponibile în curând:", [
-      { text: "Schimbă Fundalul" }, { text: "Caută în conversație" }, { text: "Media & Linkuri" }, { text: "Închide", style: "cancel" }
+    Alert.alert("Chat options", "These features are coming soon:", [
+      { text: "Change background" }, { text: "Search conversation" }, { text: "Media & links" }, { text: "Close", style: "cancel" }
     ]);
   };
 
-  const renderMiniAvatar = () => {
-    if (!friendProfile) return <View style={[styles.avatarBase, { width: 36, height: 36, borderRadius: 18 }]}><User size={18} color="#888"/></View>;
-    const theme = AVATAR_THEMES[friendProfile.equipped_avatar] || AVATAR_THEMES['a1'];
-    return (
-      <View style={[styles.avatarBase, { width: 36, height: 36, borderRadius: 18, borderColor: theme.color, borderWidth: 1, marginRight: 10 }]}>
-        <User size={18} color={theme.type === 'glitch' ? '#00EAFF' : theme.color} />
-      </View>
-    );
-  };
 
-  const renderMessage = ({ item }) => {
+  const renderMessage = ({ item, index }) => {
     const isMe = item.sender_id === myId;
+    // FlatList gives us the index, so the previous message is one lookup away —
+    // no need to precompute a grouped structure.
+    const showDay = needsSeparator(item.created_at, messages[index - 1]?.created_at);
+
     return (
-      <TouchableOpacity 
-        style={[styles.messageBubble, isMe ? styles.myMessage : styles.theirMessage, item.is_deleted && { backgroundColor: 'transparent', borderWidth: 1, borderColor: '#333' }]}
-        onLongPress={() => handleLongPress(item)} activeOpacity={0.8} delayLongPress={300}
+      <>
+      {showDay && <DaySeparator label={dayLabel(item.created_at)} />}
+      <TouchableOpacity activeOpacity={0.7} 
+        style={[styles.messageBubble, isMe ? styles.myMessage : styles.theirMessage, item.is_deleted && { backgroundColor: 'transparent' }]}
+        onLongPress={() => handleLongPress(item)} delayLongPress={300}
       >
         {item.is_deleted ? (
-          <Text style={{ color: '#666', fontStyle: 'italic', fontSize: 15 }}>🚫 Acest mesaj a fost șters</Text>
+          <Text style={{ color: colors.textMuted, fontStyle: 'italic', fontSize: 15 }}>🚫 This message was deleted</Text>
         ) : (
           <>
-            {/* Afișăm imaginea dacă există */}
+            {/* Image messages carry an image_url instead of, or as well as, text. */}
             {item.image_url && <Image source={{uri: item.image_url}} style={styles.chatImage} />}
             {item.content ? <Text style={[styles.messageText, isMe ? styles.myMessageText : styles.theirMessageText]}>{item.content}</Text> : null}
           </>
         )}
 
         <View style={styles.messageFooter}>
-          <Text style={[styles.timeText, isMe ? {color: 'rgba(0,0,0,0.6)'} : {color: '#666'}]}>
-            {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} {item.is_edited && !item.is_deleted && '(editat)'}
+          <Text style={[styles.timeText, isMe ? {color: 'rgba(0,0,0,0.6)'} : {color: colors.textMuted}]}>
+            {formatClockTime(item.created_at)} {item.is_edited && !item.is_deleted && '(edited)'}
           </Text>
-          {/* 🔴 Bifa Albastră Mărită */}
+          {/* Read receipt: double tick once the recipient has opened the chat. */}
           {isMe && !item.is_deleted && (
-            <View style={{ marginLeft: 5 }}>
-              {item.is_read ? <CheckCheck size={18} color="#3b82f6" /> : <Check size={16} color="rgba(0,0,0,0.5)" />}
+            <View style={{ marginLeft: 6 }}>
+              {item.is_read ? <CheckCheck size={18} color={colors.water} /> : <Check size={16} color="rgba(0,0,0,0.5)" />}
             </View>
           )}
         </View>
       </TouchableOpacity>
+      </>
     );
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      <LinearGradient colors={['#000000', '#0a0a0a']} style={styles.gradientBg}>
+      <LinearGradient colors={gradients.flat} style={styles.gradientBg}>
         
         {/* HEADER CENTRAT */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerBtn}>
-            <ChevronLeft color="#FFF" size={28} />
+          <TouchableOpacity accessibilityLabel="Go back" activeOpacity={0.7} onPress={() => navigation.goBack()} style={styles.headerBtn}>
+            <ChevronLeft color={colors.text} size={28} />
           </TouchableOpacity>
           
-          <TouchableOpacity style={styles.headerCenter} onPress={() => navigation.navigate('PublicProfileScreen', { userId: friendId })}>
-            {renderMiniAvatar()}
+          <TouchableOpacity activeOpacity={0.7} style={styles.headerCenter} onPress={() => navigation.navigate('PublicProfileScreen', { userId: friendId })}>
+            <Avatar profile={friendProfile} size={36} />
             <View style={{ alignItems: 'center' }}>
               <Text style={styles.headerName}>{friendName}</Text>
-              <Text style={{color: NEON_GREEN, fontSize: 10, marginTop: 2}}>Vezi Profilul</Text>
+              <Text style={{color: colors.accent, fontSize: 11, marginTop: 2}}>View profile</Text>
             </View>
           </TouchableOpacity>
 
-          <TouchableOpacity onPress={showMoreOptions} style={styles.headerBtn}>
-            <MoreVertical color="#FFF" size={24} />
+          <TouchableOpacity activeOpacity={0.7} onPress={showMoreOptions} style={styles.headerBtn} accessibilityLabel="More options">
+            <MoreVertical color={colors.text} size={24} />
           </TouchableOpacity>
         </View>
 
         {loading ? (
-          <View style={styles.centerContainer}><ActivityIndicator color={NEON_GREEN} /></View>
+          <View style={styles.centerContainer}><ActivityIndicator color={colors.accent} /></View>
         ) : (
           <FlatList
             ref={flatListRef} data={messages} keyExtractor={(item) => item.id.toString()} renderItem={renderMessage}
@@ -220,15 +221,15 @@ export default function ChatScreen({ route, navigation }) {
         {/* INPUT AREA CU BUTON PENTRU POZE */}
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}>
           <View style={styles.inputContainer}>
-            <TouchableOpacity style={styles.attachBtn} onPress={pickAndSendImage}>
-              <ImageIcon color="#888" size={24} />
+            <TouchableOpacity activeOpacity={0.7} style={styles.attachBtn} onPress={pickAndSendImage} accessibilityLabel="Choose from gallery">
+              <ImageIcon color={colors.textSecondary} size={24} />
             </TouchableOpacity>
             <TextInput
-              style={styles.textInput} placeholder="Mesaj..." placeholderTextColor="#666"
+              style={styles.textInput} placeholder="Message..." placeholderTextColor={colors.textMuted}
               value={inputText} onChangeText={setInputText} multiline
             />
-            <TouchableOpacity style={[styles.sendBtn, !inputText.trim() && { opacity: 0.5 }]} onPress={() => sendMessage()} disabled={!inputText.trim()}>
-              <Send color="#000" size={20} />
+            <TouchableOpacity accessibilityLabel="Send message" activeOpacity={0.7} style={[styles.sendBtn, !inputText.trim() && { opacity: 0.5 }]} onPress={() => sendMessage()} disabled={!inputText.trim()}>
+              <Send color={colors.onAccent} size={20} />
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
@@ -238,11 +239,11 @@ export default function ChatScreen({ route, navigation }) {
           <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>
               <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Editează mesajul</Text>
-                <TouchableOpacity onPress={() => setEditingMessage(null)}><X color="#666" size={24}/></TouchableOpacity>
+                <Text style={styles.modalTitle}>Edit message</Text>
+                <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} onPress={() => setEditingMessage(null)}><X color={colors.textMuted} size={24}/></TouchableOpacity>
               </View>
-              <TextInput style={[styles.textInput, { backgroundColor: '#222', minHeight: 50 }]} value={editInput} onChangeText={setEditInput} multiline autoFocus />
-              <TouchableOpacity style={styles.saveBtn} onPress={saveEdit}><Text style={{color: '#000', fontWeight: 'bold'}}>Salvează</Text></TouchableOpacity>
+              <TextInput style={[styles.textInput, { backgroundColor: colors.surfaceHigh, minHeight: 50 }]} value={editInput} onChangeText={setEditInput} multiline autoFocus />
+              <TouchableOpacity activeOpacity={0.7} style={styles.saveBtn} onPress={saveEdit}><Text style={{color: colors.onAccent, fontWeight: '600'}}>Save</Text></TouchableOpacity>
             </View>
           </View>
         </Modal>
@@ -253,36 +254,41 @@ export default function ChatScreen({ route, navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
+  container: { flex: 1, backgroundColor: colors.background },
   gradientBg: { flex: 1, justifyContent: 'space-between' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 15, paddingTop: Platform.OS === 'android' ? 40 : 10, paddingBottom: 15, backgroundColor: '#121212', borderBottomWidth: 1, borderBottomColor: '#222' },
-  headerBtn: { padding: 5, width: 40, alignItems: 'center' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: Platform.OS === 'android' ? 40 : 10, paddingBottom: 16, backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.border },
+  headerBtn: { padding: 6, width: 40, alignItems: 'center' },
   headerCenter: { flexDirection: 'row', alignItems: 'center', flex: 1, justifyContent: 'center' },
-  headerName: { color: '#FFF', fontSize: 16, fontWeight: 'bold' },
-  avatarBase: { backgroundColor: '#1A1A1A', justifyContent: 'center', alignItems: 'center' },
+  headerName: { color: colors.text, fontSize: 15, fontWeight: '600' },
+  avatarBase: { backgroundColor: colors.surface, justifyContent: 'center', alignItems: 'center' },
   
   centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  chatList: { padding: 15, flexGrow: 1, justifyContent: 'flex-end' },
+  chatList: { padding: 16, flexGrow: 1, justifyContent: 'flex-end' },
   
-  messageBubble: { maxWidth: '80%', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20, marginBottom: 12 },
-  myMessage: { alignSelf: 'flex-end', backgroundColor: NEON_GREEN, borderBottomRightRadius: 5 },
-  theirMessage: { alignSelf: 'flex-start', backgroundColor: '#222', borderBottomLeftRadius: 5, borderWidth: 1, borderColor: '#333' },
-  messageText: { fontSize: 16, marginTop: 4 },
-  myMessageText: { color: '#000', fontWeight: '500' },
-  theirMessageText: { color: '#FFF' },
-  chatImage: { width: 200, height: 200, borderRadius: 15, marginBottom: 5, backgroundColor: 'rgba(0,0,0,0.1)' },
+  messageBubble: { maxWidth: '80%', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24, marginBottom: 10 },
+  myMessage: { alignSelf: 'flex-end', backgroundColor: colors.accent, borderBottomRightRadius: 5 },
+  theirMessage: { alignSelf: 'flex-start', backgroundColor: colors.surfaceHigh, borderBottomLeftRadius: 5 },
+  messageText: { fontSize: 15, marginTop: 6 },
+  myMessageText: { color: colors.onAccent, fontWeight: '500' },
+  theirMessageText: { color: colors.text },
+  chatImage: { width: 200, height: 200, borderRadius: 18, marginBottom: 6, backgroundColor: 'rgba(0,0,0,0.1)' },
   
-  messageFooter: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', marginTop: 4 },
-  timeText: { fontSize: 10, fontWeight: 'bold' },
+  messageFooter: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', marginTop: 6 },
+  timeText: { fontSize: 11, fontWeight: '600' },
 
-  inputContainer: { flexDirection: 'row', alignItems: 'flex-end', padding: 10, backgroundColor: CARD_BG, borderTopWidth: 1, borderTopColor: '#222' },
-  attachBtn: { padding: 12, marginRight: 5, marginBottom: 2 },
-  textInput: { flex: 1, backgroundColor: '#1A1A1A', color: '#FFF', minHeight: 45, maxHeight: 100, borderRadius: 20, paddingHorizontal: 15, paddingTop: 12, paddingBottom: 12, fontSize: 16, borderWidth: 1, borderColor: '#333' },
-  sendBtn: { backgroundColor: NEON_GREEN, width: 45, height: 45, borderRadius: 22.5, justifyContent: 'center', alignItems: 'center', marginLeft: 10, marginBottom: 2 },
+  inputContainer: { flexDirection: 'row', alignItems: 'flex-end', padding: 10, backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.border },
+  attachBtn: { padding: 10, marginRight: 6, marginBottom: 2 },
+  textInput: { flex: 1, backgroundColor: colors.surface, color: colors.text, minHeight: 45, maxHeight: 100, borderRadius: 24, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 10, fontSize: 15 },
+  sendBtn: { backgroundColor: colors.accent, width: 45, height: 45, borderRadius: 22.5, justifyContent: 'center', alignItems: 'center', marginLeft: 10, marginBottom: 2 },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'flex-end' },
-  modalContent: { backgroundColor: '#161616', padding: 25, borderTopLeftRadius: 30, borderTopRightRadius: 30 },
+  modalContent: { backgroundColor: colors.sheet, padding: 26, borderTopLeftRadius: 30, borderTopRightRadius: 30 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 },
-  modalTitle: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
-  saveBtn: { backgroundColor: NEON_GREEN, padding: 15, borderRadius: 15, alignItems: 'center', marginTop: 15 }
+  modalTitle: { color: colors.text, fontSize: 17, fontWeight: '700' },
+  saveBtn: { backgroundColor: colors.accent, padding: 16, borderRadius: 18, alignItems: 'center', marginTop: 16 }
 });
+import { colors } from '../theme';
+import { formatClockTime } from '../lib/date';
+import { gradients } from '../theme';
+import Avatar from '../components/Avatar';
+import DaySeparator, { needsSeparator, dayLabel } from '../components/DaySeparator';

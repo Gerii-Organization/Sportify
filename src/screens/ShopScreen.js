@@ -1,56 +1,46 @@
-import React, { useState, useCallback, useEffect } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, SafeAreaView, ActivityIndicator, Modal, Platform, Alert, Dimensions } from 'react-native';
+import { useState, useCallback, useEffect } from 'react';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, SafeAreaView, Modal, Alert, Dimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { useFocusEffect } from '@react-navigation/native';
-import { ShoppingBag, Zap, Circle, User, Shield, Check, Flame, Crown, Swords, Ghost, Hexagon, Triangle, ZapOff, BatteryCharging, Trophy, Clock, Gift, Tag } from 'lucide-react-native';
+import { ShoppingBag, ChevronLeft, ChevronRight, Zap, Circle, User, Shield, Check, Flame, Crown, Swords, Ghost, Hexagon, Triangle, BatteryCharging, Trophy, Clock, Gift, Tag, Snowflake } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
+import { colors } from '../theme';
+import { RINGS, AVATARS, BADGES, TITLES, POWERUPS } from '../constants/cosmetics';
+import { gradients } from '../theme';
+import { useAuth } from '../context/AuthContext';
+import ScreenHeader from '../components/ScreenHeader';
+import AmbientGlow from '../components/AmbientGlow';
+import { SkeletonShelf } from '../components/Skeleton';
+import useRefresh from '../lib/useRefresh';
+import Press from '../components/Press';
+import FadeIn from '../components/FadeIn';
+import { todayKey } from '../lib/date';
 
 const { width } = Dimensions.get('window');
-const NEON_GREEN = '#1ED760';
-const CARD_BG = '#121212';
 
-const CATALOG_RINGS = [
-  { id: 'r1', name: 'Standard Flow', price: 0, type: 'standard', color: '#00FF66' },
-  { id: 'r2', name: 'Hellfire Ring', price: 800, type: 'inferno', color: '#FF3300' },
-  { id: 'r3', name: 'Cyber Hex', price: 1200, type: 'cyber', color: '#00EAFF' },
-  { id: 'r4', name: 'Toxic Triangle', price: 1500, type: 'toxic', color: '#39FF14' },
-  { id: 'r5', name: 'Neon Pulse', price: 2000, type: 'pulse', color: '#FF00AA' },
-  { id: 'r6', name: 'Golden Diamond', price: 2500, type: 'diamond', color: '#FFD700' },
-  { id: 'r7', name: 'Quantum Core', price: 3500, type: 'quantum', color: '#7400FF' },
+const PURCHASE_ERRORS = {
+  insufficient_funds: "You do not have enough energy for this.",
+  nothing_to_restore: "You have no lost streak to restore right now.",
+  already_active: "Coin Boost is already waiting for your next workout.",
+  no_profile: "Your profile could not be loaded. Try signing in again."
+};
+
+/**
+ * Shelves in the order they matter: things that change how you play first,
+ * things that change how you look after. Each carries a one-line note, because
+ * a category name alone does not tell you why you would want anything on it.
+ */
+const SHELVES = [
+  { key: 'powerup', type: 'powerup', title: 'Power-ups', note: 'Spent once, felt immediately', pick: (d) => d.powerups },
+  { key: 'title',   type: 'title',   title: 'Titles',    note: 'Shown next to your name',     pick: (d) => d.titles },
+  { key: 'ring',    type: 'ring',    title: 'Progress rings', note: 'The shape around your daily steps', pick: (d) => d.rings },
+  { key: 'avatar',  type: 'avatar',  title: 'Avatar frames',  note: 'How friends see you in lists',      pick: (d) => d.avatars },
 ];
 
-const CATALOG_AVATARS = [
-  { id: 'a1', name: 'Clean Cut', price: 0, type: 'standard', color: '#1A1A1A' },
-  { id: 'a2', name: 'Golden King', price: 1500, type: 'royal', color: '#FFD700' },
-  { id: 'a3', name: 'Demon Aura', price: 2000, type: 'demon', color: '#9900FF' },
-  { id: 'a4', name: 'Electric Glitch', price: 2500, type: 'glitch', color: '#FF00FF' },
-  { id: 'a5', name: 'Holographic', price: 3000, type: 'holo', color: '#00FFFF' },
-  { id: 'a6', name: 'Hellfire', price: 3500, type: 'inferno_avatar', color: '#FF4400' },
-  { id: 'a7', name: 'The Void', price: 5000, type: 'void', color: '#333333' },
-];
-
-const CATALOG_BADGES = [
-  { id: 'b1', name: 'Rookie', price: 0, icon: 'Shield', color: '#888' },
-  { id: 'b2', name: 'Spartan', price: 1000, icon: 'Swords', color: '#FF4444' },
-  { id: 'b3', name: 'Phantom', price: 3000, icon: 'Ghost', color: '#00EAFF' },
-  { id: 'b4', name: 'Overlord', price: 5000, icon: 'Crown', color: '#FFD700' },
-];
-
-const CATALOG_TITLES = [
-  { id: 'Gym Rat', price: 100, desc: 'For the dedicated' },
-  { id: 'Beast Mode', price: 250, desc: 'Unleash the beast' },
-  { id: 'Iron Lifter', price: 500, desc: 'Heavy weights only' },
-  { id: 'Olympian', price: 1000, desc: 'God-like status' },
-];
-
-const CATALOG_POWERUPS = [
-  { id: 'p1', name: 'XP Boost', desc: 'Double XP for 24h', price: 600, icon: 'Trophy', color: '#FFD700' },
-  { id: 'p2', name: 'Streak Restore', desc: 'Recover lost streak', price: 1000, icon: 'Flame', color: '#FF3300' },
-  { id: 'p3', name: 'Coin Boost', desc: '+50% Energy for next workout', price: 50, icon: 'Zap', color: '#FFD700' }
-];
-
-export default function ShopScreen() {
+export default function ShopScreen({ navigation }) {
+  const { refreshControl } = useRefresh(() => fetchShopData());
+  const { user, refreshProfile } = useAuth();
   const [loading, setLoading] = useState(true);
   const [balance, setBalance] = useState(0);
   const [profileData, setProfileData] = useState(null);
@@ -59,12 +49,14 @@ export default function ShopScreen() {
   const [avatars, setAvatars] = useState([]);
   const [badges, setBadges] = useState([]);
   const [titles, setTitles] = useState([]);
-  const [powerups, setPowerups] = useState(CATALOG_POWERUPS);
+  const [powerups, setPowerups] = useState(POWERUPS);
 
   const [purchaseModalVisible, setPurchaseModalVisible] = useState(false);
   const [selectedItem, setSelectedItem] = useState(null);
 
   const [boostExpiresAt, setBoostExpiresAt] = useState(null);
+  /** The spin resets at midnight; the card says so rather than failing on tap. */
+  const spinUsed = profileData?.last_spin_date === todayKey();
   const [timeLeftStr, setTimeLeftStr] = useState(null);
 
   useEffect(() => {
@@ -93,8 +85,12 @@ export default function ShopScreen() {
 
   useFocusEffect(
     useCallback(() => {
+    // user?.id is in the deps because useCallback pins the closure: without it
+    // the memoised function keeps the `user` from first render (null, before the
+    // session loads) and every later focus re-runs that stale copy — which is
+    // why signing in left the screen empty until something forced a remount.
       fetchShopData();
-    }, [])
+    }, [user?.id])
   );
 
   const fetchShopData = async () => {
@@ -103,17 +99,17 @@ export default function ShopScreen() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         setBalance(0);
-        setRings(CATALOG_RINGS.map(item => ({ ...item, owned: false, equipped: false })));
-        setAvatars(CATALOG_AVATARS.map(item => ({ ...item, owned: false, equipped: false })));
-        setBadges(CATALOG_BADGES.map(item => ({ ...item, owned: false, equipped: false })));
-        setTitles(CATALOG_TITLES.map(item => ({ ...item, owned: false, equipped: false })));
+        setRings(RINGS.map(item => ({ ...item, owned: false, equipped: false })));
+        setAvatars(AVATARS.map(item => ({ ...item, owned: false, equipped: false })));
+        setBadges(BADGES.map(item => ({ ...item, owned: false, equipped: false })));
+        setTitles(TITLES.map(item => ({ ...item, owned: false, equipped: false })));
         setLoading(false);
         return;
       }
 
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select('energy_points, equipped_ring, equipped_avatar, equipped_badge, equipped_title, owned_titles, coin_boost_active, last_spin_date, xp_boost_expires_at, current_streak, previous_streak')
+        .select('xp, energy_points, streak_freezes, equipped_ring, equipped_avatar, equipped_badge, equipped_title, owned_titles, coin_boost_active, last_spin_date, xp_boost_expires_at, current_streak, previous_streak')
         .eq('id', user.id)
         .maybeSingle();
 
@@ -136,25 +132,25 @@ export default function ShopScreen() {
         setBoostExpiresAt(null);
       }
 
-      setRings(CATALOG_RINGS.map(item => ({
+      setRings(RINGS.map(item => ({
         ...item,
         owned: item.price === 0 || ownedItemIds.has(item.id),
         equipped: profile.equipped_ring === item.id
       })));
 
-      setAvatars(CATALOG_AVATARS.map(item => ({
+      setAvatars(AVATARS.map(item => ({
         ...item,
         owned: item.price === 0 || ownedItemIds.has(item.id),
         equipped: profile.equipped_avatar === item.id
       })));
 
-      setBadges(CATALOG_BADGES.map(item => ({
+      setBadges(BADGES.map(item => ({
         ...item,
         owned: item.price === 0 || ownedItemIds.has(item.id),
         equipped: profile.equipped_badge === item.id
       })));
 
-      setTitles(CATALOG_TITLES.map(item => ({
+      setTitles(TITLES.map(item => ({
         ...item,
         owned: ownedTitleIds.has(item.id),
         equipped: profile.equipped_title === item.id
@@ -167,34 +163,37 @@ export default function ShopScreen() {
     }
   };
 
+  /**
+   * The reward roll and the once-a-day check both happen in the database now.
+   * When they lived here, the roll could be re-rolled by restarting the app and
+   * the date check could be bypassed by changing the device clock.
+   *
+   * This also fixes the bug that made every spin reset total XP: the old code
+   * read the profile, added the prize in JavaScript and wrote the sum back, but
+   * `xp` was missing from the SELECT, so the sum was always 0 + prize.
+   */
   const handleDailySpin = async () => {
-    const today = new Date().toISOString().split('T')[0];
-    if (profileData?.last_spin_date === today) {
-      return Alert.alert('Come Back Tomorrow', 'You have already used your daily spin today!');
+    setLoading(true);
+    const { data, error } = await supabase.rpc('daily_spin');
+    setLoading(false);
+
+    if (error) {
+      Alert.alert('Spin failed', error.message);
+      return;
+    }
+    if (!data?.ok) {
+      if (data?.reason === 'already_spun') {
+        Alert.alert('Come back tomorrow', 'You have already used your daily spin.');
+      } else {
+        Alert.alert('Spin unavailable', 'Please try again in a moment.');
+      }
+      return;
     }
 
-    setLoading(true);
-    const random = Math.random();
-    let rewardText = "";
-    let energyWon = 0;
-    let xpWon = 0;
-
-    if (random > 0.9) { xpWon = 150; rewardText = "JACKPOT! +150 XP 🔥"; }
-    else if (random > 0.6) { energyWon = 100; rewardText = "+100 Energy ⚡"; }
-    else { energyWon = 30; rewardText = "+30 Energy ⚡"; }
-
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      await supabase.from('profiles').update({
-        energy_points: (profileData.energy_points || 0) + energyWon,
-        xp: (profileData.xp || 0) + xpWon,
-        last_spin_date: today
-      }).eq('id', user.id);
-
-      Alert.alert('🎰 Lucky Spin!', `You won: ${rewardText}`);
-      fetchShopData();
-    } catch (e) {}
-    setLoading(false);
+    const prize = data.xp > 0 ? `JACKPOT! +${data.xp} XP 🔥` : `+${data.energy} Energy ⚡`;
+    Alert.alert('🎰 Lucky Spin', `You won: ${prize}`);
+    fetchShopData();
+    refreshProfile();
   };
 
   const handleAction = async (item, categoryType) => {
@@ -230,56 +229,49 @@ export default function ShopScreen() {
       if (balance >= item.price) {
         setSelectedItem({ item, categoryType });
         setPurchaseModalVisible(true);
+      } else {
+        const short = item.price - balance;
+        Alert.alert(
+          'Not enough energy',
+          `You need ${short} more ⚡ for ${item.name || item.id}. Finish a workout to earn more — you get 5 ⚡ per minute trained.`
+        );
       }
     }
   };
 
+  /**
+   * One call, one transaction. The server checks the balance, deducts it,
+   * records the item and applies the effect — all while holding a lock on the
+   * profile row, so double-tapping cannot spend the same energy twice.
+   */
   const confirmPurchase = async () => {
     if (!selectedItem) return;
     const { item, categoryType } = selectedItem;
     setPurchaseModalVisible(false);
 
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+    const { data, error } = await supabase.rpc('purchase_item', {
+      p_item_id: item.id,
+      p_item_type: categoryType,
+      p_price: item.price,
+    });
 
-      const newBalance = balance - item.price;
-      let profileUpdates = { energy_points: newBalance };
-
-      if (item.id === 'p1') {
-        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-        profileUpdates.xp_boost_expires_at = expiresAt;
-      } else if (item.id === 'p2') {
-        profileUpdates.current_streak = profileData.previous_streak;
-        profileUpdates.previous_streak = 0;
-      } else if (item.id === 'p3') {
-        profileUpdates.coin_boost_active = true;
-      }
-
-      if (categoryType === 'title') {
-        const currentOwned = profileData.owned_titles || ['Novice'];
-        profileUpdates.owned_titles = [...currentOwned, item.id];
-        profileUpdates.equipped_title = item.id;
-      }
-
-      const { error: profileErr } = await supabase.from('profiles').update(profileUpdates).eq('id', user.id);
-      if (profileErr) throw profileErr;
-
-      if (categoryType !== 'powerup' && categoryType !== 'title') {
-        const { error: invErr } = await supabase.from('user_inventory').upsert(
-            { user_id: user.id, item_id: item.id, item_type: categoryType, purchased_at: new Date().toISOString() },
-            { onConflict: 'user_id,item_id' }
-          );
-        if (invErr) throw invErr;
-      }
-
-      if (item.id === 'p2') Alert.alert("Success", "Your lost streak has been successfully restored.");
-      if (item.id === 'p3') Alert.alert("Success", "Coin Boost active for the next workout!");
-
-      fetchShopData();
-    } catch (err) {
-      Alert.alert("Purchase Error", err.message);
+    if (error) {
+      Alert.alert('Purchase failed', error.message);
+      return;
     }
+
+    if (!data?.ok) {
+      Alert.alert('Could not buy this', PURCHASE_ERRORS[data?.reason] || 'Please try again.');
+      fetchShopData();
+      return;
+    }
+
+    if (item.id === 'p2') Alert.alert('Streak restored', 'Your previous streak is back.');
+    if (item.id === 'p3') Alert.alert('Coin Boost ready', 'Active for your next workout.');
+    if (item.id === 'p4') Alert.alert('Streak Freeze added', 'The next day you miss will not break your streak.');
+
+    fetchShopData();
+    refreshProfile();
   };
 
   const renderVisualPreview = (item, categoryType) => {
@@ -288,8 +280,8 @@ export default function ShopScreen() {
         return (
           <View style={styles.previewContainer}>
             <Circle color={item.color} size={40} strokeWidth={3} />
-            <Flame color="#FF8800" size={20} style={styles.absoluteTop} />
-            <Flame color="#FF8800" size={20} style={styles.absoluteBottom} />
+            <Flame color={colors.streak} size={20} style={styles.absoluteTop} />
+            <Flame color={colors.streak} size={20} style={styles.absoluteBottom} />
           </View>
         );
       }
@@ -305,7 +297,7 @@ export default function ShopScreen() {
         return (
           <View style={styles.previewContainer}>
             <Triangle color={item.color} size={46} strokeWidth={3} />
-            <Circle color="#000" size={10} style={styles.absoluteCenter} fill={item.color} />
+            <Circle color={colors.onAccent} size={10} style={styles.absoluteCenter} fill={item.color} />
           </View>
         );
       }
@@ -339,7 +331,7 @@ export default function ShopScreen() {
       if (item.type === 'royal') {
         return (
           <View style={[styles.avatarFrame, { borderColor: item.color, borderWidth: 3 }]}>
-            <User color="#fff" size={24} />
+            <User color={colors.text} size={24} />
             <Crown color={item.color} size={22} style={styles.absoluteTopOffset} fill="rgba(255, 215, 0, 0.3)" />
           </View>
         );
@@ -347,14 +339,14 @@ export default function ShopScreen() {
       if (item.type === 'demon' || item.type === 'inferno_avatar') {
         return (
           <View style={[styles.avatarFrame, { borderColor: item.color, borderWidth: 2, borderStyle: item.type === 'demon' ? 'dashed' : 'solid', shadowColor: item.color, shadowOpacity: 0.8, shadowRadius: 8 }]}>
-            <User color="#fff" size={24} />
+            <User color={colors.text} size={24} />
             <Flame color={item.color} size={30} style={styles.absoluteBackground} />
           </View>
         );
       }
       if (item.type === 'glitch') {
         return (
-          <View style={[styles.avatarFrame, { borderColor: item.color, borderWidth: 2, borderRadius: 10 }]}>
+          <View style={[styles.avatarFrame, { borderColor: item.color, borderWidth: 2, borderRadius: 12 }]}>
             <User color="#00EAFF" size={26} style={{ marginLeft: -2 }} />
             <User color="#FF00FF" size={26} style={styles.absoluteCenterOffset} />
           </View>
@@ -370,13 +362,13 @@ export default function ShopScreen() {
       if (item.type === 'void') {
         return (
           <View style={[styles.avatarFrame, { borderColor: item.color, borderWidth: 4, shadowColor: '#fff', shadowOpacity: 0.2, shadowRadius: 5 }]}>
-            <User color="#555" size={24} />
+            <User color={colors.textDisabled} size={24} />
           </View>
         );
       }
       return (
         <View style={[styles.avatarFrame, { borderColor: '#444' }]}>
-          <User color="#fff" size={24} />
+          <User color={colors.text} size={24} />
         </View>
       );
     }
@@ -388,7 +380,7 @@ export default function ShopScreen() {
       if (item.icon === 'Crown') IconObj = Crown;
 
       return (
-        <View style={[styles.previewContainer, { backgroundColor: `${item.color}22`, borderRadius: 25 }]}>
+        <View style={[styles.previewContainer, { backgroundColor: `${item.color}22`, borderRadius: 28 }]}>
           <IconObj color={item.color} size={32} />
         </View>
       );
@@ -396,8 +388,8 @@ export default function ShopScreen() {
 
     if (categoryType === 'title') {
       return (
-        <View style={[styles.previewContainer, { backgroundColor: `rgba(30, 215, 96, 0.1)`, borderRadius: 15 }]}>
-          <Tag color={NEON_GREEN} size={32} />
+        <View style={[styles.previewContainer, { backgroundColor: `rgba(46, 211, 198, 0.1)`, borderRadius: 18 }]}>
+          <Tag color={colors.accent} size={32} />
         </View>
       );
     }
@@ -407,9 +399,10 @@ export default function ShopScreen() {
       if (item.icon === 'Zap') IconObj = Zap;
       if (item.icon === 'Trophy') IconObj = Trophy;
       if (item.icon === 'Flame') IconObj = Flame;
+      if (item.icon === 'Snowflake') IconObj = Snowflake;
 
       return (
-        <View style={[styles.previewContainer, { backgroundColor: `${item.color}15`, borderRadius: 15, padding: 10 }]}>
+        <View style={[styles.previewContainer, { backgroundColor: `${item.color}15`, borderRadius: 18, padding: 10 }]}>
           <IconObj color={item.color} size={38} />
         </View>
       );
@@ -421,22 +414,23 @@ export default function ShopScreen() {
     const isLocked = !isPowerup && !item.owned;
     const isEquipped = !isPowerup && item.equipped;
 
-    // Starea Boostului de XP sau Coins
+    // XP boost still running, or a coin boost waiting for the next workout.
     const isBoostActive = (item.id === 'p1' && timeLeftStr) || (item.id === 'p3' && profileData?.coin_boost_active);
 
     return (
-      <TouchableOpacity
+      <Press
         key={item.id}
+        scale={0.955}
         style={[
           styles.itemCard,
           isEquipped && styles.itemCardEquipped,
-          isBoostActive && { borderColor: '#FFD700', backgroundColor: 'rgba(255, 215, 0, 0.05)' }
+          isBoostActive && { borderColor: colors.energy, backgroundColor: 'rgba(255, 215, 0, 0.05)' }
         ]}
         onPress={() => {
           if (isBoostActive) return;
           handleAction(item, categoryType);
         }}
-        activeOpacity={isBoostActive ? 1 : 0.7}
+        disabled={isBoostActive}
       >
         <View style={styles.itemPreviewBox}>
           {renderVisualPreview(item, categoryType)}
@@ -447,17 +441,17 @@ export default function ShopScreen() {
 
           {isEquipped ? (
             <View style={styles.statusBadge}>
-              <Check color={NEON_GREEN} size={14} />
+              <Check color={colors.accent} size={14} />
               <Text style={styles.statusTextEquipped}>Equipped</Text>
             </View>
           ) : isBoostActive ? (
             <View style={[styles.statusBadge, { backgroundColor: 'rgba(255, 215, 0, 0.15)' }]}>
-              <Clock color="#FFD700" size={14} />
-              <Text style={[styles.statusTextEquipped, { color: '#FFD700' }]}>{item.id === 'p3' ? 'Ready for Workout' : timeLeftStr}</Text>
+              <Clock color={colors.energy} size={14} />
+              <Text style={[styles.statusTextEquipped, { color: colors.energy }]}>{item.id === 'p3' ? 'Ready for Workout' : timeLeftStr}</Text>
             </View>
           ) : isLocked || isPowerup ? (
             <View style={styles.priceContainer}>
-              <Zap color="#FFD700" size={14} />
+              <Zap color={colors.energy} size={14} />
               <Text style={styles.priceText}>{item.price}</Text>
             </View>
           ) : (
@@ -466,16 +460,17 @@ export default function ShopScreen() {
             </View>
           )}
         </View>
-      </TouchableOpacity>
+      </Press>
     );
   };
 
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
-        <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
+        <LinearGradient colors={gradients.screen} style={styles.gradientBg}>
+        <AmbientGlow tone="ember" height={300} intensity={0.42} />
           <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={NEON_GREEN} />
+            <SkeletonShelf count={3} />
           </View>
         </LinearGradient>
       </SafeAreaView>
@@ -484,70 +479,94 @@ export default function ShopScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
-        <View style={styles.header}>
-          <View style={styles.logoRow}>
-            <View style={styles.logoAndName}>
-              <View style={styles.logoMark}><Flame size={18} color="black" fill="black" /></View>
-              <Text style={styles.appName}>Sportify</Text>
-            </View>
-            <BlurView intensity={30} tint="dark" style={styles.balanceContainer}>
-              <Zap color="#FFD700" size={20} fill="#FFD700" />
-              <Text style={styles.balanceText}>{balance}</Text>
-            </BlurView>
-          </View>
-          <Text style={styles.screenTitle}>Shop</Text>
+      <LinearGradient colors={gradients.screen} style={styles.gradientBg}>
+        <View style={styles.navRow}>
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            style={styles.backBtn}
+            accessibilityLabel="Go back"
+            activeOpacity={0.7}
+          >
+            <ChevronLeft color={colors.text} size={26} />
+          </TouchableOpacity>
         </View>
 
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        <ScreenHeader
+          title="Shop"
+          subtitle="Spend what you have earned"
+          right={
+            <BlurView intensity={30} tint="dark" style={styles.balanceContainer}>
+              <Zap color={colors.energy} size={20} fill={colors.energy} />
+              <Text style={styles.balanceText}>{balance}</Text>
+            </BlurView>
+          }
+        />
 
-          {/* 🎰 DAILY SPIN */}
-          <Text style={styles.sectionTitle}>Daily Reward</Text>
-          <TouchableOpacity style={styles.spinCard} onPress={handleDailySpin}>
-            <LinearGradient colors={['#ff8a00', '#e52e71']} style={styles.spinGradient}>
-              <Gift color="#FFF" size={40} />
-              <View style={{ marginLeft: 15 }}>
-                <Text style={styles.spinTitle}>Daily Lucky Spin 🎰</Text>
-                <Text style={styles.spinSub}>Test your luck for free today!</Text>
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}
+          refreshControl={refreshControl}>
+
+          {/* The spin is free and expires daily, so it leads — and it is the one
+              card allowed a photographic gradient. Everything below it costs
+              energy and shares one restrained treatment, so the eye is not
+              asked to weigh four equally loud shelves. */}
+          <Press scale={0.98} onPress={handleDailySpin} style={styles.spinCard} accessibilityLabel="Daily lucky spin">
+            <LinearGradient
+              colors={spinUsed ? [colors.surfaceHigh, colors.surface] : ['#FF9A3C', '#E0490A']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.spinInner}
+            >
+              <View style={styles.spinGlyph}>
+                <Gift color={spinUsed ? colors.textMuted : colors.text} size={26} />
               </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.spinTitle, spinUsed && { color: colors.textSecondary }]}>
+                  {spinUsed ? 'Spun for today' : 'Daily spin'}
+                </Text>
+                <Text style={[styles.spinSub, spinUsed && { color: colors.textMuted }]}>
+                  {spinUsed ? 'Comes back tomorrow' : 'Free — energy or a burst of XP'}
+                </Text>
+              </View>
+              {!spinUsed && <ChevronRight color={colors.text} size={22} />}
             </LinearGradient>
-          </TouchableOpacity>
+          </Press>
 
-          <Text style={styles.sectionTitle}>Power-Ups</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
-            {powerups.map(powerup => renderItemCard(powerup, 'powerup'))}
-          </ScrollView>
+          {SHELVES.map((shelf, shelfIndex) => {
+            const items = shelf.pick({ powerups, titles, rings, avatars });
+            if (!items?.length) return null;
 
-          <Text style={styles.sectionTitle}>Profile Titles</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
-            {titles.map(title => renderItemCard(title, 'title'))}
-          </ScrollView>
-
-          <Text style={styles.sectionTitle}>Progress Bar Themes</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
-            {rings.map(ring => renderItemCard(ring, 'ring'))}
-          </ScrollView>
-
-          <Text style={styles.sectionTitle}>Avatar Border Themes</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
-            {avatars.map(avatar => renderItemCard(avatar, 'avatar'))}
-          </ScrollView>
+            return (
+              <FadeIn key={shelf.key} index={shelfIndex} style={styles.shelfBlock}>
+                <View style={styles.shelfHead}>
+                  <Text style={styles.shelfTitle}>{shelf.title}</Text>
+                  <Text style={styles.shelfNote}>{shelf.note}</Text>
+                </View>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.shelfRow}
+                >
+                  {items.map((item) => renderItemCard(item, shelf.type))}
+                </ScrollView>
+              </FadeIn>
+            );
+          })}
 
         </ScrollView>
 
         <Modal transparent visible={purchaseModalVisible} animationType="fade">
         <View style={styles.modalOverlayFull}>
           <View style={styles.modalContent}>
-            <ShoppingBag size={48} color={NEON_GREEN} style={{ marginBottom: 20 }} />
+            <ShoppingBag size={48} color={colors.accent} style={{ marginBottom: 20 }} />
             <Text style={styles.modalTitle}>Confirm Purchase</Text>
             <Text style={styles.modalText}>
-              Do you want to buy {selectedItem?.item.name || selectedItem?.item.id} for <Text style={{color: '#FFD700', fontWeight: 'bold'}}>{selectedItem?.item.price} ⚡</Text>?
+              Do you want to buy {selectedItem?.item.name || selectedItem?.item.id} for <Text style={{color: colors.energy, fontWeight: '600'}}>{selectedItem?.item.price} ⚡</Text>?
             </Text>
             <View style={styles.modalActions}>
-              <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setPurchaseModalVisible(false)}>
+              <TouchableOpacity activeOpacity={0.7} style={styles.modalCancelBtn} onPress={() => setPurchaseModalVisible(false)}>
                 <Text style={styles.modalCancelText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.modalBuyBtn} onPress={confirmPurchase}>
+              <TouchableOpacity activeOpacity={0.7} style={styles.modalBuyBtn} onPress={confirmPurchase}>
                 <Text style={styles.modalBuyText}>Buy</Text>
               </TouchableOpacity>
             </View>
@@ -560,52 +579,64 @@ export default function ShopScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
+  container: { flex: 1, backgroundColor: colors.background },
   gradientBg: { flex: 1 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: { padding: 20, paddingTop: 40 },
   logoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   logoAndName: { flexDirection: 'row', alignItems: 'center' },
-  logoMark: { width: 32, height: 32, backgroundColor: NEON_GREEN, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
-  appName: { color: '#FFF', fontSize: 22, fontWeight: 'bold', marginLeft: 10 },
-  screenTitle: { color: '#666', marginTop: 15, fontSize: 14, marginLeft: 20 },
-  balanceContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255, 215, 0, 0.2)' },
-  balanceText: { color: '#FFD700', fontSize: 18, fontWeight: 'bold', marginLeft: 8 },
+  logoMark: { width: 32, height: 32, backgroundColor: colors.accent, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
+  appName: { color: colors.text, fontSize: 20, fontWeight: '700', marginLeft: 10 },
+  screenTitle: { color: colors.textMuted, marginTop: 16, fontSize: 15, marginLeft: 20 },
+  navRow: { paddingHorizontal: 16, paddingTop: 10, marginBottom: -14 },
+  backBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface },
+  balanceContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255, 215, 0, 0.2)' },
+  balanceText: { color: colors.energy, fontSize: 17, fontWeight: '700', marginLeft: 10 },
   scrollContent: { paddingBottom: 120 },
-  sectionTitle: { color: '#FFF', fontSize: 20, fontWeight: 'bold', marginLeft: 20, marginTop: 20, marginBottom: 15 },
-  horizontalScroll: { paddingHorizontal: 15, paddingRight: 30 },
+  sectionTitle: { color: colors.text, fontSize: 20, fontWeight: '700', marginLeft: 20, marginTop: 20, marginBottom: 16 },
+  horizontalScroll: { paddingHorizontal: 16, paddingRight: 26 },
 
-  spinCard: { borderRadius: 20, overflow: 'hidden', marginBottom: 20, marginHorizontal: 20 },
-  spinGradient: { flexDirection: 'row', alignItems: 'center', padding: 25 },
-  spinTitle: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
-  spinSub: { color: 'rgba(255,255,255,0.8)', fontSize: 13, marginTop: 4 },
+  spinCard: { marginHorizontal: 20, marginBottom: 30, borderRadius: 26, overflow: 'hidden' },
+  spinInner: { flexDirection: 'row', alignItems: 'center', padding: 20, gap: 16 },
+  spinGlyph: {
+    width: 46, height: 46, borderRadius: 23,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  shelfBlock: { marginBottom: 30 },
+  shelfHead: { paddingHorizontal: 20, marginBottom: 14 },
+  shelfTitle: { color: colors.text, fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
+  shelfNote: { color: colors.textMuted, fontSize: 13, marginTop: 3 },
+  shelfRow: { paddingHorizontal: 20, gap: 12 },
+  spinTitle: { color: colors.text, fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
+  spinSub: { color: 'rgba(255,255,255,0.82)', fontSize: 13, marginTop: 3 },
 
-  itemCard: { backgroundColor: CARD_BG, width: 140, borderRadius: 22, padding: 15, marginRight: 15, borderWidth: 1, borderColor: '#222', alignItems: 'center' },
-  itemCardEquipped: { borderColor: NEON_GREEN + 'AA', backgroundColor: 'rgba(30, 215, 96, 0.05)', shadowColor: NEON_GREEN, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.3, shadowRadius: 10, elevation: 5 },
-  itemPreviewBox: { width: 70, height: 70, borderRadius: 35, backgroundColor: 'rgba(255,255,255,0.02)', justifyContent: 'center', alignItems: 'center', marginBottom: 15 },
+  itemCard: { backgroundColor: colors.card, width: 140, borderRadius: 26, padding: 16, alignItems: 'center' },
+  itemCardEquipped: { borderColor: colors.accent + 'AA', backgroundColor: 'rgba(46, 211, 198, 0.05)', shadowColor: colors.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.3, shadowRadius: 10, elevation: 5 },
+  itemPreviewBox: { width: 70, height: 70, borderRadius: 35, backgroundColor: 'rgba(255,255,255,0.02)', justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
   previewContainer: { width: 50, height: 50, justifyContent: 'center', alignItems: 'center' },
   absoluteTop: { position: 'absolute', top: -10 },
   absoluteBottom: { position: 'absolute', bottom: -10, transform: [{ rotate: '180deg' }] },
   absoluteCenter: { position: 'absolute' },
-  avatarFrame: { width: 48, height: 48, borderRadius: 24, justifyContent: 'center', alignItems: 'center', backgroundColor: '#1A1A1A', borderWidth: 2 },
+  avatarFrame: { width: 48, height: 48, borderRadius: 24, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.surface, borderWidth: 2 },
   absoluteTopOffset: { position: 'absolute', top: -18 },
   absoluteBackground: { position: 'absolute', opacity: 0.4, zIndex: -1 },
   absoluteCenterOffset: { position: 'absolute', opacity: 0.7, marginLeft: 2 },
   itemInfo: { alignItems: 'center', width: '100%' },
-  itemName: { color: '#fff', fontSize: 14, fontWeight: '600', marginBottom: 8, textAlign: 'center' },
-  itemDesc: { color: '#888', fontSize: 10, marginBottom: 8, textAlign: 'center' },
-  priceContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255, 215, 0, 0.1)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 },
-  priceText: { color: '#FFD700', fontWeight: 'bold', marginLeft: 4, fontSize: 12 },
-  statusBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0, 255, 102, 0.15)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 },
-  statusTextEquipped: { color: NEON_GREEN, fontWeight: 'bold', fontSize: 12, marginLeft: 4 },
-  statusBadgeOwned: { backgroundColor: 'rgba(255, 255, 255, 0.08)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 },
-  statusTextOwned: { color: '#fff', fontWeight: 'bold', fontSize: 12 },
+  itemName: { color: colors.text, fontSize: 15, fontWeight: '600', marginBottom: 10, textAlign: 'center' },
+  itemDesc: { color: colors.textSecondary, fontSize: 11, marginBottom: 10, textAlign: 'center' },
+  priceContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255, 215, 0, 0.1)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 },
+  priceText: { color: colors.energy, fontWeight: '600', marginLeft: 6, fontSize: 13 },
+  statusBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(46, 211, 198, 0.15)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 },
+  statusTextEquipped: { color: colors.accent, fontWeight: '600', fontSize: 13, marginLeft: 6 },
+  statusBadgeOwned: { backgroundColor: 'rgba(255, 255, 255, 0.08)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 },
+  statusTextOwned: { color: colors.text, fontWeight: '600', fontSize: 13 },
   modalOverlayFull: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' },
-  modalContent: { backgroundColor: CARD_BG, borderRadius: 32, padding: 25, width: '85%', alignItems: 'center', borderWidth: 1, borderColor: '#222' },
-  modalTitle: { color: '#fff', fontSize: 22, fontWeight: 'bold', marginBottom: 10 },
-  modalText: { color: '#aaa', fontSize: 16, textAlign: 'center', marginBottom: 25 },
+  modalContent: { backgroundColor: colors.card, borderRadius: 32, padding: 26, width: '85%', alignItems: 'center' },
+  modalTitle: { color: colors.text, fontSize: 20, fontWeight: '700', marginBottom: 10 },
+  modalText: { color: colors.textSecondary, fontSize: 15, textAlign: 'center', marginBottom: 26 },
   modalActions: { flexDirection: 'row', justifyContent: 'space-between', width: '100%' },
-  modalCancelBtn: { flex: 1, padding: 15, backgroundColor: '#1A1A1A', borderRadius: 15, marginRight: 10, alignItems: 'center' },
-  modalCancelText: { color: '#fff', fontWeight: 'bold' },
-  modalBuyBtn: { flex: 1, padding: 15, backgroundColor: NEON_GREEN, borderRadius: 15, marginLeft: 10, alignItems: 'center' }
+  modalCancelBtn: { flex: 1, padding: 16, backgroundColor: colors.surface, borderRadius: 18, marginRight: 10, alignItems: 'center' },
+  modalCancelText: { color: colors.text, fontWeight: '600' },
+  modalBuyBtn: { flex: 1, padding: 16, backgroundColor: colors.accent, borderRadius: 18, marginLeft: 10, alignItems: 'center' }
 });

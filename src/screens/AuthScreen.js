@@ -1,19 +1,13 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { 
   View, Text, TextInput, TouchableOpacity, StyleSheet, 
   Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView 
 } from 'react-native';
 import { supabase } from '../lib/supabase';
 import { X } from 'lucide-react-native';
+import { colors } from '../theme';
+import { GOALS } from '../constants/content';
 
-const NEON_GREEN = '#1ED760';
-
-const GOALS = [
-  { id: 'lose_weight', label: 'Fat Loss' },
-  { id: 'build_muscle', label: 'Muscle Gain' },
-  { id: 'maintain', label: 'Maintenance' },
-  { id: 'gain_strength', label: 'Strength' }
-];
 
 export default function AuthScreen({ navigation }) {
   const [isRegistering, setIsRegistering] = useState(false);
@@ -82,7 +76,7 @@ export default function AuthScreen({ navigation }) {
     if (isRegistering) {
       const { data: { user }, error: signUpError } = await supabase.auth.signUp({ email: email.trim(), password });
 
-      if (signUpError) Alert.alert('Eroare', signUpError.message);
+      if (signUpError) Alert.alert('Error', signUpError.message);
       else if (user) {
         const { error: profileError } = await supabase.from('profiles').insert({
           id: user.id,
@@ -97,8 +91,10 @@ export default function AuthScreen({ navigation }) {
 
         if (profileError) Alert.alert('Profile Error', profileError.message);
         else {
-          Alert.alert('Success', 'Account created! You can now log in.');
-          toggleAuthMode();
+          // signUp already returns an active session when email confirmation is
+          // off, so send the user straight in instead of making them retype
+          // the credentials they just chose.
+          navigation.goBack();
         }
       }
     } else {
@@ -116,8 +112,8 @@ export default function AuthScreen({ navigation }) {
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
 
-        <TouchableOpacity style={styles.closeBtn} onPress={() => navigation.goBack()}>
-          <X color="#FFF" size={32} />
+        <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} style={styles.closeBtn} onPress={() => navigation.goBack()}>
+          <X color={colors.text} size={32} />
         </TouchableOpacity>
 
         <View style={styles.card}>
@@ -136,7 +132,7 @@ export default function AuthScreen({ navigation }) {
 
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.goalContainer}>
                   {GOALS.map(g => (
-                    <TouchableOpacity
+                    <TouchableOpacity activeOpacity={0.7}
                       key={g.id}
                       style={[styles.chip, goal === g.id && styles.chipActive]}
                       onPress={() => setGoal(g.id)}
@@ -174,11 +170,11 @@ export default function AuthScreen({ navigation }) {
               </>
             )}
 
-            <TouchableOpacity style={styles.mainButton} onPress={handleAuth} disabled={loading}>
-              {loading ? <ActivityIndicator color="#000" /> : <Text style={styles.mainButtonText}>{isRegistering ? 'Create Account' : 'Log In'}</Text>}
+            <TouchableOpacity activeOpacity={0.7} style={styles.mainButton} onPress={handleAuth} disabled={loading}>
+              {loading ? <ActivityIndicator color={colors.onAccent} /> : <Text style={styles.mainButtonText}>{isRegistering ? 'Create Account' : 'Log In'}</Text>}
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.switchButton} onPress={toggleAuthMode}>
+            <TouchableOpacity activeOpacity={0.7} style={styles.switchButton} onPress={toggleAuthMode}>
               <Text style={styles.switchText}>{isRegistering ? 'Already have an account? Log in' : "Don't have an account? Sign up for free"}</Text>
             </TouchableOpacity>
           </View>
@@ -194,31 +190,31 @@ function CustomInput({ label, value, onChange, placeholder, secure, autoCap, key
       <Text style={styles.label}>{label}</Text>
       <TextInput
         style={styles.input} value={value} onChangeText={onChange} placeholder={placeholder}
-        placeholderTextColor="#444" secureTextEntry={secure} autoCapitalize={autoCap || 'sentences'} keyboardType={keyboard || 'default'}
+        placeholderTextColor={colors.textFaint} secureTextEntry={secure} autoCapitalize={autoCap || 'sentences'} keyboardType={keyboard || 'default'}
       />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
-  closeBtn: { alignSelf: 'flex-end', marginBottom: 20, padding: 5 },
+  container: { flex: 1, backgroundColor: colors.background },
+  closeBtn: { alignSelf: 'flex-end', marginBottom: 20, padding: 6 },
   scrollContent: { padding: 20, paddingTop: 60, paddingBottom: 40 },
-  card: { backgroundColor: '#121212', borderRadius: 30, padding: 25, borderWidth: 1, borderColor: '#222' },
-  title: { color: '#FFF', fontSize: 28, fontWeight: 'bold', marginBottom: 30, textAlign: 'center' },
-  sectionTitle: { color: NEON_GREEN, fontSize: 16, fontWeight: 'bold', marginBottom: 10, marginTop: 10 },
+  card: { backgroundColor: colors.card, borderRadius: 30, padding: 26 },
+  title: { color: colors.text, fontSize: 26, fontWeight: '800', marginBottom: 26, textAlign: 'center' },
+  sectionTitle: { color: colors.accent, fontSize: 15, fontWeight: '600', marginBottom: 10, marginTop: 10 },
   goalContainer: { flexDirection: 'row', marginBottom: 20 },
-  chip: { backgroundColor: '#1A1A1A', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, marginRight: 10, borderWidth: 1, borderColor: '#333' },
-  chipActive: { backgroundColor: NEON_GREEN, borderColor: NEON_GREEN },
-  chipText: { color: '#888', fontWeight: 'bold' },
-  chipTextActive: { color: '#000' },
-  inputContainer: { marginBottom: 18 },
-  label: { color: '#888', fontSize: 12, marginBottom: 8, fontWeight: '600', marginLeft: 4 },
-  input: { backgroundColor: '#1A1A1A', color: '#FFF', padding: 15, borderRadius: 12, fontSize: 16, borderWidth: 1, borderColor: '#333' },
+  chip: { backgroundColor: colors.surface, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24, marginRight: 10 },
+  chipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  chipText: { color: colors.textSecondary, fontWeight: '600' },
+  chipTextActive: { color: colors.onAccent },
+  inputContainer: { marginBottom: 20 },
+  label: { color: colors.textSecondary, fontSize: 13, marginBottom: 10, fontWeight: '600', marginLeft: 6 },
+  input: { backgroundColor: colors.surface, color: colors.text, padding: 16, borderRadius: 14, fontSize: 15 },
   row: { flexDirection: 'row', justifyContent: 'space-between' },
-  mainButton: { backgroundColor: NEON_GREEN, padding: 18, borderRadius: 15, alignItems: 'center', marginTop: 10 },
-  mainButtonText: { color: '#000', fontWeight: 'bold', fontSize: 18 },
+  mainButton: { backgroundColor: colors.accent, padding: 20, borderRadius: 18, alignItems: 'center', marginTop: 10 },
+  mainButtonText: { color: colors.onAccent, fontWeight: '700', fontSize: 17 },
   switchButton: { marginTop: 20, alignItems: 'center' },
-  switchText: { color: '#888', fontSize: 14 },
-  divider: { height: 1, backgroundColor: '#222', marginVertical: 20 }
+  switchText: { color: colors.textSecondary, fontSize: 15 },
+  divider: { height: 1, backgroundColor: colors.surfaceHigh, marginVertical: 20 }
 });

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   View, Text, StyleSheet, TouchableOpacity, 
   Modal, SafeAreaView, TextInput, ScrollView, KeyboardAvoidingView, Platform, FlatList, Alert 
@@ -6,42 +6,25 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { 
   ChevronLeft, Edit3, Plus, X, Play, CheckCircle2, Circle, Clock, 
-  Save, Trash2, Zap, Star, Flame, ChevronUp, ChevronDown 
+  Save, Trash2, Zap, Star, Flame, ChevronUp, ChevronDown, Globe, Lock 
 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
+import { colors } from '../theme';
+import { EXERCISES, MUSCLES } from '../constants/exercises';
+import { randomMotivationalMessage } from '../constants/content';
+import { formatStopwatch } from '../lib/date';
+import { gradients } from '../theme';
+import RestTimer, { restSecondsFor } from '../components/RestTimer';
+import { useAuth } from '../context/AuthContext';
+import PersonalRecordCard from '../components/PersonalRecordCard';
+import { AchievementIcon } from '../lib/achievements';
+import { scheduleRestAlert, cancelRestAlert } from '../lib/restNotification';
+import Button from '../components/Button';
+import { deviceTimeZone } from '../lib/date';
 
-const NEON_GREEN = '#1ED760';
-const CARD_BG = '#121212';
-
-const EXERCISE_DB = [
-  { id: 'ex1', name: 'Barbell Bench Press', muscle: 'Chest' },
-  { id: 'ex2', name: 'Incline Dumbbell Press', muscle: 'Chest' },
-  { id: 'ex3', name: 'Machine Chest Fly', muscle: 'Chest' },
-  { id: 'ex4', name: 'Push-ups', muscle: 'Chest' },
-  { id: 'ex5', name: 'Lat Pulldown', muscle: 'Back' },
-  { id: 'ex6', name: 'Barbell Row', muscle: 'Back' },
-  { id: 'ex7', name: 'Pull-ups', muscle: 'Back' },
-  { id: 'ex8', name: 'Barbell Squat', muscle: 'Legs' },
-  { id: 'ex13', name: 'Overhead Press', muscle: 'Shoulders' },
-  { id: 'ex15', name: 'Barbell Bicep Curl', muscle: 'Arms' },
-  { id: 'ex17', name: 'Cable Tricep Pushdown', muscle: 'Arms' },
-  { id: 'ex19', name: 'Crunches', muscle: 'Core' },
-];
-
-const MOTIVATIONAL_MESSAGES = [
-  "You showed up today. That already puts you ahead.",
-  "Consistency beats intensity. This session is one more brick.",
-  "Strong habits are built one finished workout at a time.",
-  "You're not chasing perfection, you're chasing progress.",
-  "Future you is grateful you didn't skip this.",
-  "The hard part is starting. You did that.",
-  "Tiny improvements stacked over time become strength.",
-  "You don't have to feel motivated, you just have to show up.",
-  "Discipline is doing what you said you'd do. You did it.",
-  "Every rep was a vote for the person you want to become."
-];
 
 export default function WorkoutDetailScreen({ route, navigation }) {
+  const { user, profile, refreshProfile } = useAuth();
   const workout = route?.params?.workout;
   const onSave = route?.params?.onSave;
 
@@ -49,16 +32,34 @@ export default function WorkoutDetailScreen({ route, navigation }) {
   const [mode, setMode] = useState('idle');
   const [timer, setTimer] = useState(0);
   const [isExerciseSelectorVisible, setIsExerciseSelectorVisible] = useState(false);
+  const [exerciseQuery, setExerciseQuery] = useState('');
+  const [muscleFilter, setMuscleFilter] = useState(null);
+
+  // Recomputed only when the search or filter changes, not on every keystroke
+  // elsewhere in the screen.
+  const visibleExercises = useMemo(() => {
+    const query = exerciseQuery.trim().toLowerCase();
+    return EXERCISES.filter(
+      (ex) =>
+        (!muscleFilter || ex.muscle === muscleFilter) &&
+        (!query || ex.name.toLowerCase().includes(query))
+    );
+  }, [exerciseQuery, muscleFilter]);
 
   const [showSummary, setShowSummary] = useState(false);
-  const [showTooFastModal, setShowTooFastModal] = useState(false);
-  const [workoutStats, setWorkoutStats] = useState({ volume: 0, time: 0, message: '', xpGained: 50, energyGained: 0, isFirstWorkoutToday: false, newStreak: 0 });
+  /** Timestamp the current rest period ends, or null when not resting. */
+  const [restEndsAt, setRestEndsAt] = useState(null);
+  /** Id of the pending local notification, so it can be cancelled. */
+  const restAlertId = useRef(null);
+  const [workoutStats, setWorkoutStats] = useState({ volume: 0, time: 0, message: '', xpGained: 50, energyGained: 0, isFirstWorkoutToday: false, newStreak: 0, records: [], achievements: [] });
 
   useEffect(() => {
     if (!workout) {
       navigation.replace('MainTabs');
     }
   }, [workout, navigation]);
+
+  useEffect(() => () => cancelRestAlert(restAlertId.current), []);
 
   useEffect(() => {
     let interval;
@@ -71,10 +72,36 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     return <View style={styles.container} />;
   }
 
-  const formatTime = (totalSeconds) => {
-    const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
-    const s = (totalSeconds % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
+
+
+  /**
+   * Publish or unpublish. A public workout appears in Browse for everyone, so
+   * the confirmation names what actually becomes visible — the plan, not your
+   * logged weights, which copy_workout strips.
+   */
+  const togglePublic = async () => {
+    const next = !currentWorkout.is_public;
+
+    const apply = async () => {
+      const { error } = await supabase
+        .from('user_workouts')
+        .update({ is_public: next })
+        .eq('id', currentWorkout.id);
+
+      if (error) return Alert.alert('Could not change this', error.message);
+      setCurrentWorkout((w) => ({ ...w, is_public: next }));
+    };
+
+    if (!next) return apply();
+
+    Alert.alert(
+      'Share this workout?',
+      'Anyone can find it in Browse and add it to their own list. They get the exercises and set count — not your weights or reps.',
+      [
+        { text: 'Keep private', style: 'cancel' },
+        { text: 'Share', onPress: apply },
+      ]
+    );
   };
 
   const toggleEditMode = async () => {
@@ -133,10 +160,19 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     setCurrentWorkout({ ...currentWorkout, exercises: updatedExercises });
   };
 
-  const addNewExercise = (exerciseName) => {
-    const newExercise = { id: Math.random().toString(), name: exerciseName, sets: [{ id: Math.random().toString(), weight: '', reps: '', prev: '-', completed: false }] };
+  const addNewExercise = (exercise) => {
+    const newExercise = {
+      id: Math.random().toString(),
+      name: exercise.name,
+      // StatsScreen groups training by `muscle`. It was never written, which is
+      // why "Primary Muscle Group" always read "More data needed".
+      muscle: exercise.muscle,
+      sets: [{ id: Math.random().toString(), weight: '', reps: '', prev: '-', completed: false }],
+    };
     setCurrentWorkout({ ...currentWorkout, exercises: [...(currentWorkout.exercises || []), newExercise] });
     setIsExerciseSelectorVisible(false);
+    setExerciseQuery('');
+    setMuscleFilter(null);
   };
 
   const confirmDeleteExercise = (exId) => {
@@ -161,50 +197,78 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
   const toggleSetCompletion = (exerciseId, setId) => {
     if (mode !== 'started') return;
-    const updatedExercises = currentWorkout.exercises.map(ex => {
-      if (ex.id === exerciseId) return { ...ex, sets: ex.sets.map(s => s.id === setId ? { ...s, completed: !s.completed } : s) };
-      return ex;
+
+    let startedResting = false;
+    const updatedExercises = currentWorkout.exercises.map((ex) => {
+      if (ex.id !== exerciseId) return ex;
+      return {
+        ...ex,
+        sets: ex.sets.map((set) => {
+          if (set.id !== setId) return set;
+          // Only when ticking ON — un-ticking a set is a correction, not a
+          // finished set, so it should not start a rest period.
+          if (!set.completed) startedResting = true;
+          return { ...set, completed: !set.completed };
+        }),
+      };
     });
+
     setCurrentWorkout({ ...currentWorkout, exercises: updatedExercises });
+
+    if (startedResting) {
+      const seconds = restSecondsFor(profile?.goal);
+      setRestEndsAt(Date.now() + seconds * 1000);
+
+      // Replace any alert still pending from the previous set.
+      cancelRestAlert(restAlertId.current);
+      scheduleRestAlert(seconds).then((id) => { restAlertId.current = id; });
+    }
   };
 
   const handleFinishWorkout = async () => {
-    const allSetsCompleted = currentWorkout.exercises.every(ex => ex.sets.every(set => set.completed));
+    const allSets = currentWorkout.exercises.flatMap((ex) => ex.sets);
+    const doneSets = allSets.filter((s) => s.completed);
 
-    if (!allSetsCompleted) {
+    if (doneSets.length === 0) {
+      Alert.alert('Nothing logged yet', 'Mark at least one set as done before finishing.', [{ text: 'OK' }]);
+      return;
+    }
+
+    // A session can legitimately be cut short — a busy gym, a phone call, an
+    // injury. Log what was actually done and scale the reward to match, rather
+    // than refusing to save anything at all.
+    if (doneSets.length < allSets.length) {
+      const remaining = allSets.length - doneSets.length;
       Alert.alert(
-        'Incomplete Workout',
-        'This workout cannot be validated. All sets must be marked as DONE before you can finish and save your progress.',
-        [{ text: 'Got it', style: 'cancel' }]
+        'Finish early?',
+        `You have ${remaining} set${remaining === 1 ? '' : 's'} left. You can save what you have done and come back to the rest another time.`,
+        [
+          { text: 'Keep training', style: 'cancel' },
+          { text: 'Save and finish', onPress: () => processWorkoutCompletion(doneSets.length, allSets.length) },
+        ]
       );
       return;
     }
 
-    if (timer < 60) {
-      setShowTooFastModal(true);
-      return;
-    }
-
-    let totalSets = 0;
-    currentWorkout.exercises.forEach(ex => { totalSets += ex.sets.length; });
-    const MIN_SECONDS_PER_SET = 60;
-    const minRequiredSeconds = totalSets * MIN_SECONDS_PER_SET;
-
-    if (totalSets > 0 && timer < minRequiredSeconds) {
-      const minutesSpent = Math.floor(timer / 60);
-      const minimumMinutes = Math.floor(minRequiredSeconds / 60);
+    // Guard against a full workout being 'finished' in seconds. This is a
+    // nudge, not a lockout — the user decides.
+    const minRealisticSeconds = doneSets.length * 20;
+    if (timer < minRealisticSeconds) {
       Alert.alert(
-        'Workout Too Fast',
-        `You tried to complete ${totalSets} sets in just ${minutesSpent} minutes.\n\nThe minimum estimated time for this volume is ~${minimumMinutes} minutes.\n\nYou can’t cheat the system—come back when you’re really done.`,
-        [{ text: 'Back to work', style: 'default' }]
+        'That was quick',
+        `${doneSets.length} sets in ${formatStopwatch(timer)}. If that is right, go ahead — otherwise keep the timer running.`,
+        [
+          { text: 'Keep training', style: 'cancel' },
+          { text: 'Save anyway', onPress: () => processWorkoutCompletion(doneSets.length, allSets.length) },
+        ]
       );
       return;
     }
 
-    processWorkoutCompletion();
+    processWorkoutCompletion(doneSets.length, allSets.length);
   };
 
-  const processWorkoutCompletion = async () => {
+  const processWorkoutCompletion = async (setsDone, setsTotal) => {
     setMode('idle');
     let totalKg = 0;
     currentWorkout.exercises.forEach(ex => {
@@ -213,93 +277,73 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       });
     });
 
-    const randomMsg = MOTIVATIONAL_MESSAGES[Math.floor(Math.random() * MOTIVATIONAL_MESSAGES.length)];
+    const randomMsg = randomMotivationalMessage();
     const elapsedMinutes = Math.max(1, Math.ceil(timer / 60));
 
-    const { data: { user } } = await supabase.auth.getUser();
+    // Everything below used to happen here: read the profile, compute the new
+    // streak and rewards in JavaScript, write them back. That is the same
+    // read-modify-write shape that let the daily spin wipe people's XP, and it
+    // put the streak rules inside a client anyone can edit.
+    //
+    // One call now does the history write, the streak (including spending a
+    // Streak Freeze on a missed day) and the rewards, in a single transaction.
+    const completionRatio = setsTotal > 0 ? setsDone / setsTotal : 1;
+    let finalXP = 0;
+    let finalEnergy = 0;
     let isFirstWorkoutToday = false;
     let finalStreakValue = 0;
-    let finalXP = 50 + (totalKg > 1000 ? 20 : 0);
-    let finalEnergy = 0;
+    let freezeUsed = false;
 
     if (user) {
-      const now = new Date();
-      const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const day = String(now.getDate()).padStart(2, '0');
-      const todayStr = `${year}-${month}-${day}`;
-
-      const { data: currentStat } = await supabase.from('daily_stats').select('activity_minutes').eq('user_id', user.id).eq('date', todayStr).maybeSingle();
-      const currentMinutes = currentStat?.activity_minutes || 0;
-
-      await supabase.from('daily_stats').upsert({
-        user_id: user.id,
-        date: todayStr,
-        activity_minutes: currentMinutes + elapsedMinutes
+      const { data: result, error } = await supabase.rpc('complete_workout', {
+        p_workout_id: String(currentWorkout.id),
+        p_workout_name: currentWorkout.name || 'Workout',
+        p_minutes: elapsedMinutes,
+        p_volume_kg: totalKg,
+        p_completion: completionRatio,
+        // Without the zone, a session logged after midnight local time records
+        // against yesterday on the server and breaks the streak.
+        p_tz: deviceTimeZone(),
       });
 
-      await supabase.from('workout_completions').insert([{
-        user_id: user.id,
-        workout_id: currentWorkout.id,
-        workout_name: currentWorkout.name || 'Workout',
-        completed_at: new Date().toISOString(),
-        duration_minutes: elapsedMinutes
-      }]);
-
-      const { data: profile } = await supabase.from('profiles').select('xp, energy_points, current_streak, previous_streak, last_workout_date, xp_boost_expires_at, coin_boost_active').eq('id', user.id).single();
-
-      // 🔴 CALCUL PENTRU COIN BOOST (+50% Coins)
-      let boostMultiplier = 1.0;
-      let resetCoinBoost = false;
-      if (profile?.coin_boost_active) {
-         boostMultiplier = 1.5;
-         resetCoinBoost = true;
-      }
-      
-      finalEnergy = Math.min(Math.floor((elapsedMinutes * 5) * boostMultiplier), 500);
-
-      let newStreak = profile?.current_streak || 0;
-      let streakIncreased = false;
-
-      if (profile?.last_workout_date === todayStr) {
-        streakIncreased = false;
-      } else if (profile?.last_workout_date) {
-        const todayDate = new Date(todayStr);
-        const lastDate = new Date(profile.last_workout_date);
-        const diffTime = todayDate.getTime() - lastDate.getTime();
-        const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
-
-        if (diffDays === 1) {
-          newStreak += 1;
-          streakIncreased = true;
-        } else if (diffDays > 1) {
-          await supabase.from('profiles').update({ previous_streak: profile.current_streak }).eq('id', user.id);
-          newStreak = 1;
-          streakIncreased = true;
-        }
-      } else {
-        newStreak = 1;
-        streakIncreased = true;
+      if (error || !result?.ok) {
+        Alert.alert(
+          'Could not save this workout',
+          error?.message || 'Your session was not recorded. Check your connection and try again.'
+        );
+        setMode('started');
+        return;
       }
 
-      isFirstWorkoutToday = streakIncreased;
-      finalStreakValue = newStreak;
+      finalXP = result.xp;
+      finalEnergy = result.energy;
+      finalStreakValue = result.streak;
+      isFirstWorkoutToday = result.streak_grew;
+      freezeUsed = result.freeze_used;
+    }
 
-      const isBoosted = profile?.xp_boost_expires_at && new Date(profile.xp_boost_expires_at) > new Date();
-      if (isBoosted) finalXP *= 2;
+    // The server keeps only the sets that beat a previous best and tells us
+    // which those were. Doing the comparison there means a modified client
+    // cannot claim a record it did not earn.
+    let newRecords = [];
+    let newAchievements = [];
 
-      let updatesProfile = {
-        xp: (profile?.xp || 0) + finalXP,
-        energy_points: (profile?.energy_points || 0) + finalEnergy,
-        current_streak: newStreak,
-        last_workout_date: todayStr
-      };
+    if (user) {
+      const completedSets = currentWorkout.exercises.flatMap((ex) =>
+        ex.sets
+          .filter((set) => set.completed && set.weight && set.reps)
+          .map((set) => ({ name: ex.name, weight: Number(set.weight), reps: Number(set.reps) }))
+      );
 
-      if (resetCoinBoost) {
-        updatesProfile.coin_boost_active = false;
+      if (completedSets.length > 0) {
+        const { data } = await supabase.rpc('submit_sets', { p_sets: completedSets });
+        newRecords = data || [];
       }
 
-      await supabase.from('profiles').update(updatesProfile).eq('id', user.id);
+      // Achievements are evaluated after the workout is written, so this session
+      // counts towards the thresholds.
+      const { data: unlocked } = await supabase.rpc('check_achievements');
+      newAchievements = unlocked || [];
     }
 
     setWorkoutStats({
@@ -309,7 +353,10 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       xpGained: finalXP,
       energyGained: finalEnergy,
       isFirstWorkoutToday,
-      newStreak: finalStreakValue
+      newStreak: finalStreakValue,
+      freezeUsed,
+      records: newRecords,
+      achievements: newAchievements,
     });
 
     const resetExercises = currentWorkout.exercises.map(ex => ({
@@ -370,28 +417,45 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
+      <LinearGradient colors={gradients.screen} style={styles.gradientBg}>
         <View style={styles.detailHeader}>
-          <TouchableOpacity onPress={handleBackPress}><ChevronLeft color="#fff" size={30} /></TouchableOpacity>
+          <TouchableOpacity activeOpacity={0.7} onPress={handleBackPress} accessibilityLabel="Go back"><ChevronLeft color={colors.text} size={30} /></TouchableOpacity>
           {mode === 'started' ? (
-            <View style={styles.timerHeader}><Clock color={NEON_GREEN} size={20} /><Text style={styles.timerText}>{formatTime(timer)}</Text></View>
+            <View style={styles.timerHeader}><Clock color={colors.accent} size={20} /><Text style={styles.timerText}>{formatStopwatch(timer)}</Text></View>
           ) : (
             <Text style={styles.detailTitle}>{currentWorkout?.name}</Text>
           )}
-          {mode === 'idle' && <TouchableOpacity onPress={toggleEditMode}><Edit3 color={NEON_GREEN} size={24} /></TouchableOpacity>}
-          {mode === 'editing' && <TouchableOpacity onPress={toggleEditMode}><Save color={NEON_GREEN} size={24} /></TouchableOpacity>}
+          {mode === 'idle' && <TouchableOpacity activeOpacity={0.7} onPress={toggleEditMode} accessibilityLabel="Edit"><Edit3 color={colors.accent} size={24} /></TouchableOpacity>}
+          {mode === 'editing' && (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+              <TouchableOpacity
+                onPress={togglePublic}
+                accessibilityLabel={currentWorkout.is_public ? 'Make private' : 'Share publicly'}
+                activeOpacity={0.7}
+              >
+                {currentWorkout.is_public
+                  ? <Globe color={colors.accent} size={22} />
+                  : <Lock color={colors.textSecondary} size={22} />}
+              </TouchableOpacity>
+              <TouchableOpacity activeOpacity={0.7} onPress={toggleEditMode} accessibilityLabel="Save">
+                <Save color={colors.accent} size={24} />
+              </TouchableOpacity>
+            </View>
+          )}
           {mode === 'started' && <View style={{width: 24}} />}
         </View>
 
         {mode === 'idle' && (
-          <TouchableOpacity style={styles.startBigBtn} onPress={() => setMode('started')}>
-            <Play color="#000" size={24} fill="#000" />
-            <Text style={styles.startBigBtnText}>Start Workout</Text>
-          </TouchableOpacity>
+          <Button
+            label="Start workout"
+            icon={<Play color={colors.onAccent} size={20} fill={colors.onAccent} />}
+            onPress={() => setMode('started')}
+            style={styles.startBigBtn}
+          />
         )}
 
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ padding: 15, paddingBottom: 100 }}>
+        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 100 }}>
           {currentWorkout?.exercises?.map((exercise, index) => (
             <View key={exercise.id} style={styles.exerciseCard}>
 
@@ -400,51 +464,51 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
                 {mode === 'editing' && (
                   <View style={styles.exerciseActionRow}>
-                    <TouchableOpacity onPress={() => moveExerciseUp(index)} disabled={index === 0} style={{ opacity: index === 0 ? 0.2 : 1, paddingHorizontal: 5 }}>
-                      <ChevronUp color={NEON_GREEN} size={24} />
+                    <TouchableOpacity accessibilityLabel="Collapse" activeOpacity={0.7} onPress={() => moveExerciseUp(index)} disabled={index === 0} style={{ opacity: index === 0 ? 0.2 : 1, paddingHorizontal: 6 }}>
+                      <ChevronUp color={colors.accent} size={24} />
                     </TouchableOpacity>
-                    <TouchableOpacity onPress={() => moveExerciseDown(index)} disabled={index === currentWorkout.exercises.length - 1} style={{ opacity: index === currentWorkout.exercises.length - 1 ? 0.2 : 1, paddingHorizontal: 5, marginRight: 15 }}>
-                      <ChevronDown color={NEON_GREEN} size={24} />
+                    <TouchableOpacity accessibilityLabel="Expand" activeOpacity={0.7} onPress={() => moveExerciseDown(index)} disabled={index === currentWorkout.exercises.length - 1} style={{ opacity: index === currentWorkout.exercises.length - 1 ? 0.2 : 1, paddingHorizontal: 6, marginRight: 16 }}>
+                      <ChevronDown color={colors.accent} size={24} />
                     </TouchableOpacity>
-                    <TouchableOpacity onPress={() => confirmDeleteExercise(exercise.id)}>
-                      <Trash2 color="#ff4444" size={22} />
+                    <TouchableOpacity accessibilityLabel="Delete" activeOpacity={0.7} onPress={() => confirmDeleteExercise(exercise.id)}>
+                      <Trash2 color={colors.danger} size={22} />
                     </TouchableOpacity>
                   </View>
                 )}
               </View>
 
               <View style={styles.tableHeader}>
-                <Text style={[styles.tableHeaderText, { flex: 0.5 }]}>SET</Text>
-                <Text style={[styles.tableHeaderText, { flex: 1 }]}>PREV</Text>
-                <Text style={[styles.tableHeaderText, { flex: 1 }]}>KG</Text>
-                <Text style={[styles.tableHeaderText, { flex: 1 }]}>REPS</Text>
-                {mode === 'started' && <Text style={[styles.tableHeaderText, { flex: 0.6 }]}>DONE</Text>}
+                <Text style={[styles.tableHeaderText, { flex: 0.5 }]}>Set</Text>
+                <Text style={[styles.tableHeaderText, { flex: 1 }]}>Prev</Text>
+                <Text style={[styles.tableHeaderText, { flex: 1 }]}>Kg</Text>
+                <Text style={[styles.tableHeaderText, { flex: 1 }]}>Reps</Text>
+                {mode === 'started' && <Text style={[styles.tableHeaderText, { flex: 0.6 }]}>Done</Text>}
                 {mode === 'editing' && <Text style={[styles.tableHeaderText, { flex: 0.5 }]}></Text>}
               </View>
 
               {exercise.sets.map((set, setIndex) => (
                 <View key={set.id} style={[styles.setRow, set.completed && styles.setRowCompleted]}>
                   <Text style={[styles.setText, { flex: 0.5 }]}>{setIndex + 1}</Text>
-                  <Text style={[styles.setText, { flex: 1, color: '#555' }]}>{set.prev}</Text>
+                  <Text style={[styles.setText, { flex: 1, color: colors.textDisabled }]}>{set.prev}</Text>
 
-                  <TextInput style={[styles.setInput, set.completed && {opacity: 0.5}]} keyboardType="numeric" value={set.weight} onChangeText={(v) => updateSetData(exercise.id, set.id, 'weight', v)} placeholder="0" placeholderTextColor="#444" editable={!set.completed} />
-                  <TextInput style={[styles.setInput, set.completed && {opacity: 0.5}]} keyboardType="numeric" value={set.reps} onChangeText={(v) => updateSetData(exercise.id, set.id, 'reps', v)} placeholder="0" placeholderTextColor="#444" editable={!set.completed} />
+                  <TextInput style={[styles.setInput, set.completed && {opacity: 0.5}]} keyboardType="numeric" value={set.weight} onChangeText={(v) => updateSetData(exercise.id, set.id, 'weight', v)} placeholder="0" placeholderTextColor={colors.textFaint} editable={!set.completed} />
+                  <TextInput style={[styles.setInput, set.completed && {opacity: 0.5}]} keyboardType="numeric" value={set.reps} onChangeText={(v) => updateSetData(exercise.id, set.id, 'reps', v)} placeholder="0" placeholderTextColor={colors.textFaint} editable={!set.completed} />
 
                   {mode === 'started' && (
-                    <TouchableOpacity style={styles.checkboxContainer} onPress={() => toggleSetCompletion(exercise.id, set.id)}>
-                      {set.completed ? <CheckCircle2 color={NEON_GREEN} size={26} /> : <Circle color="#444" size={26} />}
+                    <TouchableOpacity activeOpacity={0.7} style={styles.checkboxContainer} onPress={() => toggleSetCompletion(exercise.id, set.id)}>
+                      {set.completed ? <CheckCircle2 color={colors.accent} size={26} /> : <Circle color={colors.textFaint} size={26} />}
                     </TouchableOpacity>
                   )}
                   {mode === 'editing' && (
-                    <TouchableOpacity style={{ flex: 0.5, alignItems: 'center' }} onPress={() => confirmDeleteSet(exercise.id, set.id)}>
-                      <X color="#ff4444" size={20} />
+                    <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} style={{ flex: 0.5, alignItems: 'center' }} onPress={() => confirmDeleteSet(exercise.id, set.id)}>
+                      <X color={colors.danger} size={20} />
                     </TouchableOpacity>
                   )}
                 </View>
               ))}
 
               {mode === 'editing' && (
-                <TouchableOpacity style={styles.addSetBtn} onPress={() => addSetToExercise(exercise.id)}>
+                <TouchableOpacity activeOpacity={0.7} style={styles.addSetBtn} onPress={() => addSetToExercise(exercise.id)}>
                   <Text style={styles.addSetText}>+ Add Set</Text>
                 </TouchableOpacity>
               )}
@@ -452,28 +516,49 @@ export default function WorkoutDetailScreen({ route, navigation }) {
           ))}
 
           {mode === 'editing' && (
-            <TouchableOpacity style={styles.addExerciseBtn} onPress={() => setIsExerciseSelectorVisible(true)}>
-              <Plus color={NEON_GREEN} size={24} />
+            <TouchableOpacity activeOpacity={0.7} style={styles.addExerciseBtn} onPress={() => setIsExerciseSelectorVisible(true)}>
+              <Plus color={colors.accent} size={24} />
               <Text style={styles.addExerciseText}>Add Exercise</Text>
             </TouchableOpacity>
           )}
         </ScrollView>
         </KeyboardAvoidingView>
 
+        {mode === 'started' && restEndsAt && (
+          <View style={styles.restWrapper}>
+            <RestTimer
+              endsAt={restEndsAt}
+              onExtend={(delta) =>
+                setRestEndsAt((end) => {
+                  const next = Math.max(Date.now(), end + delta * 1000);
+                  cancelRestAlert(restAlertId.current);
+                  scheduleRestAlert(Math.round((next - Date.now()) / 1000)).then((id) => {
+                    restAlertId.current = id;
+                  });
+                  return next;
+                })
+              }
+              onDismiss={() => {
+                cancelRestAlert(restAlertId.current);
+                restAlertId.current = null;
+                setRestEndsAt(null);
+              }}
+            />
+          </View>
+        )}
+
         {mode === 'started' && (
           <View style={styles.finishContainer}>
-            <TouchableOpacity style={styles.finishBtn} onPress={handleFinishWorkout}>
-              <Text style={styles.finishBtnText}>Finish Workout</Text>
-            </TouchableOpacity>
+            <Button label="Finish workout" onPress={handleFinishWorkout} />
           </View>
         )}
 
         <Modal visible={showSummary} animationType="slide">
           <SafeAreaView style={styles.summaryContainer}>
-            <LinearGradient colors={['#000000', '#05180B']} style={{ flex: 1 }}>
+            <LinearGradient colors={gradients.screen} style={{ flex: 1 }}>
             <ScrollView contentContainerStyle={styles.summaryScroll}>
               <View style={styles.summaryHeader}>
-                <CheckCircle2 color={NEON_GREEN} size={80} style={{ marginBottom: 20 }} />
+                <CheckCircle2 color={colors.accent} size={80} style={{ marginBottom: 20 }} />
                 <Text style={styles.summaryTitle}>WORKOUT{'\n'}COMPLETED!</Text>
                 <Text style={styles.summaryMessage}>{workoutStats.message}</Text>
             </View>
@@ -481,12 +566,12 @@ export default function WorkoutDetailScreen({ route, navigation }) {
             <View style={styles.duoCard}>
               <View style={styles.duoStatRow}>
                 <View style={styles.duoStatBox}>
-                  <Text style={styles.duoStatLabel}>TOTAL TIME</Text>
-                  <Text style={styles.duoStatValue}>{formatTime(workoutStats.time)}</Text>
+                  <Text style={styles.duoStatLabel}>Total time</Text>
+                  <Text style={styles.duoStatValue}>{formatStopwatch(workoutStats.time)}</Text>
                 </View>
                 <View style={styles.duoDivider} />
                 <View style={styles.duoStatBox}>
-                  <Text style={styles.duoStatLabel}>TOTAL VOLUME</Text>
+                  <Text style={styles.duoStatLabel}>Total volume</Text>
                   <Text style={styles.duoStatValue}>{workoutStats.volume} kg</Text>
                 </View>
               </View>
@@ -496,21 +581,51 @@ export default function WorkoutDetailScreen({ route, navigation }) {
               <Text style={styles.duoRewardTitle}>Rewards Earned</Text>
               <View style={styles.duoStatRow}>
                 <View style={styles.duoRewardBox}>
-                  <Star color="#3b82f6" size={32} fill="#3b82f6" />
-                  <Text style={[styles.duoStatValue, { color: '#3b82f6', marginTop: 10 }]}>+{workoutStats.xpGained} XP</Text>
+                  <Star color={colors.water} size={32} fill={colors.water} />
+                  <Text style={[styles.duoStatValue, { color: colors.water, marginTop: 10 }]}>+{workoutStats.xpGained} XP</Text>
                 </View>
                 <View style={styles.duoRewardBox}>
-                  <Zap color="#FFD700" size={32} fill="#FFD700" />
-                  <Text style={[styles.duoStatValue, { color: '#FFD700', marginTop: 10 }]}>+{workoutStats.energyGained} ⚡</Text>
+                  <Zap color={colors.energy} size={32} fill={colors.energy} />
+                  <Text style={[styles.duoStatValue, { color: colors.energy, marginTop: 10 }]}>+{workoutStats.energyGained} ⚡</Text>
                 </View>
               </View>
             </View>
 
+            <PersonalRecordCard records={workoutStats.records} />
+
+            {workoutStats.achievements?.length > 0 && (
+              <View style={[styles.duoCard, { borderColor: colors.accent }]}>
+                <Text style={styles.duoRewardTitle}>
+                  {workoutStats.achievements.length === 1 ? 'Achievement unlocked' : 'Achievements unlocked'}
+                </Text>
+                {workoutStats.achievements.map((a) => (
+                  <View key={a.code} style={styles.unlockRow}>
+                    <AchievementIcon name={a.icon} color={colors.accent} size={22} />
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <Text style={styles.unlockName}>{a.name}</Text>
+                      <Text style={styles.unlockDesc}>{a.description}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {workoutStats.freezeUsed && (
+              <View style={[styles.duoCard, { borderColor: colors.water }]}>
+                <Text style={[styles.duoRewardTitle, { color: colors.water, marginBottom: 6 }]}>
+                  Streak Freeze used
+                </Text>
+                <Text style={styles.duoStreakSub}>
+                  You missed a day, so one freeze was spent to keep your streak alive.
+                </Text>
+              </View>
+            )}
+
             {workoutStats.isFirstWorkoutToday && (
-              <View style={[styles.duoCard, { borderColor: '#FF8800', backgroundColor: '#1f1000' }]}>
+              <View style={[styles.duoCard, { borderColor: colors.streak, backgroundColor: '#1f1000' }]}>
                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                   <View style={styles.streakCircle}>
-                    <Flame color="#FF8800" size={36} fill="#FF8800" />
+                    <Flame color={colors.streak} size={36} fill={colors.streak} />
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.duoStreakTitle}>{workoutStats.newStreak}-Day Streak! 🔥</Text>
@@ -523,45 +638,54 @@ export default function WorkoutDetailScreen({ route, navigation }) {
             </ScrollView>
 
             <View style={styles.duoFooter}>
-              <TouchableOpacity style={styles.duoButton} onPress={closeSummaryAndExit}>
-                <Text style={styles.duoButtonText}>CONTINUE</Text>
-              </TouchableOpacity>
+              <Button label="Continue" onPress={closeSummaryAndExit} />
             </View>
             </LinearGradient>
           </SafeAreaView>
         </Modal>
 
-        <Modal transparent visible={showTooFastModal} animationType="fade">
-          <View style={styles.modalOverlayFull}>
-            <View style={styles.modalContentTooFast}>
-              <Clock color="#ff4444" size={56} style={{ marginBottom: 20 }} />
-              <Text style={styles.modalTitle}>Wait a minute!</Text>
-              <Text style={styles.modalText}>
-                You haven't trained enough. Try training more until you complete the workout!
-              </Text>
-              <TouchableOpacity
-                style={styles.modalBtnAction}
-                onPress={() => setShowTooFastModal(false)}
-              >
-                <Text style={styles.modalBtnActionText}>Keep Training</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
 
         <Modal visible={isExerciseSelectorVisible} animationType="slide" transparent>
           <View style={styles.modalOverlay}>
             <View style={[styles.glassMenu, { height: '80%', padding: 20 }]}>
               <View style={styles.modalHeader}>
                 <Text style={styles.menuTitle}>Choose an exercise</Text>
-                <TouchableOpacity onPress={() => setIsExerciseSelectorVisible(false)}><X color="#fff" size={24} /></TouchableOpacity>
+                <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} onPress={() => setIsExerciseSelectorVisible(false)}><X color={colors.text} size={24} /></TouchableOpacity>
               </View>
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search exercises..."
+                placeholderTextColor={colors.textFaint}
+                value={exerciseQuery}
+                onChangeText={setExerciseQuery}
+                autoCorrect={false}
+              />
+
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow}>
+                {MUSCLES.map((muscle) => {
+                  const active = muscleFilter === muscle;
+                  return (
+                    <TouchableOpacity activeOpacity={0.7}
+                      key={muscle}
+                      style={[styles.filterChip, active && styles.filterChipActive]}
+                      onPress={() => setMuscleFilter(active ? null : muscle)}
+                    >
+                      <Text style={[styles.filterText, active && styles.filterTextActive]}>{muscle}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+
               <FlatList
-                data={EXERCISE_DB} keyExtractor={item => item.id} showsVerticalScrollIndicator={false}
+                data={visibleExercises}
+                keyExtractor={item => item.id}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                ListEmptyComponent={<Text style={styles.noResults}>No exercises match that search.</Text>}
                 renderItem={({ item }) => (
-                  <TouchableOpacity style={styles.exerciseDbItem} onPress={() => addNewExercise(item.name)}>
+                  <TouchableOpacity accessibilityLabel="Add" activeOpacity={0.7} style={styles.exerciseDbItem} onPress={() => addNewExercise(item)}>
                     <View><Text style={styles.exerciseDbName}>{item.name}</Text><Text style={styles.exerciseDbMuscle}>{item.muscle}</Text></View>
-                    <Plus color={NEON_GREEN} size={20} />
+                    <Plus color={colors.accent} size={20} />
                   </TouchableOpacity>
                 )}
               />
@@ -574,71 +698,101 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
+  container: { flex: 1, backgroundColor: colors.background },
   gradientBg: { flex: 1 },
-  detailHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, paddingTop: Platform.OS === 'android' ? 40 : 15, borderBottomWidth: 1, borderBottomColor: '#222' },
-  detailTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
-  timerHeader: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(30, 215, 96, 0.1)', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20 },
-  timerText: { color: NEON_GREEN, fontSize: 18, fontWeight: 'bold', marginLeft: 8 },
-  startBigBtn: { flexDirection: 'row', backgroundColor: NEON_GREEN, margin: 20, padding: 18, borderRadius: 25, justifyContent: 'center', alignItems: 'center', shadowColor: NEON_GREEN, shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
-  startBigBtnText: { color: '#000', fontWeight: 'bold', fontSize: 18, marginLeft: 10 },
+  detailHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingTop: Platform.OS === 'android' ? 40 : 15, borderBottomWidth: 1, borderBottomColor: colors.border },
+  detailTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
+  timerHeader: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(46, 211, 198, 0.1)', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24 },
+  timerText: { color: colors.accent, fontSize: 17, fontWeight: '700', marginLeft: 10 },
+  startBigBtn: { flexDirection: 'row', backgroundColor: colors.accent, margin: 20, padding: 20, borderRadius: 28, justifyContent: 'center', alignItems: 'center', shadowColor: colors.accent, shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
+  startBigBtnText: { color: colors.onAccent, fontWeight: '700', fontSize: 17, marginLeft: 10 },
 
-  exerciseCard: { backgroundColor: CARD_BG, borderRadius: 20, padding: 15, marginBottom: 20, borderWidth: 1, borderColor: '#222' },
-  exerciseHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
-  exerciseName: { color: NEON_GREEN, fontSize: 16, fontWeight: '700', flex: 1 },
+  exerciseCard: { backgroundColor: colors.card, borderRadius: 24, padding: 16, marginBottom: 20 },
+  exerciseHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  exerciseName: { color: colors.accent, fontSize: 15, fontWeight: '600', flex: 1 },
   exerciseActionRow: { flexDirection: 'row', alignItems: 'center' },
 
   tableHeader: { flexDirection: 'row', marginBottom: 10 },
-  tableHeaderText: { color: '#666', fontSize: 12, textAlign: 'center', fontWeight: 'bold' },
-  setRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: '#333' },
-  setRowCompleted: { backgroundColor: 'rgba(30, 215, 96, 0.05)', borderRadius: 10 },
-  setText: { color: '#fff', textAlign: 'center' },
-  setInput: { flex: 1, backgroundColor: '#222', color: '#fff', borderRadius: 8, padding: 8, marginHorizontal: 5, textAlign: 'center', fontSize: 16, fontWeight: 'bold' },
+  tableHeaderText: { color: colors.textMuted, fontSize: 13, textAlign: 'center', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.7 },
+  setRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: colors.borderLight },
+  setRowCompleted: { backgroundColor: 'rgba(46, 211, 198, 0.05)', borderRadius: 12 },
+  setText: { color: colors.text, textAlign: 'center' },
+  setInput: { flex: 1, backgroundColor: colors.surfaceHigh, color: colors.text, borderRadius: 10, padding: 10, marginHorizontal: 6, textAlign: 'center', fontSize: 15, fontWeight: '600' },
   checkboxContainer: { flex: 0.6, alignItems: 'center', justifyContent: 'center' },
-  addSetBtn: { marginTop: 15, alignItems: 'center', paddingVertical: 5 },
-  addSetText: { color: '#888', fontSize: 14, fontWeight: '600' },
-  addExerciseBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(30, 215, 96, 0.1)', padding: 15, borderRadius: 15, marginBottom: 30, borderWidth: 1, borderColor: NEON_GREEN + 'AA' },
-  addExerciseText: { color: NEON_GREEN, fontWeight: 'bold', fontSize: 16, marginLeft: 10 },
-  finishContainer: { position: 'absolute', bottom: Platform.OS === 'ios' ? 10 : 0, width: '100%', backgroundColor: CARD_BG, padding: 20, borderTopWidth: 1, borderTopColor: '#222' },
-  finishBtn: { backgroundColor: NEON_GREEN, padding: 18, borderRadius: 30, alignItems: 'center' },
-  finishBtnText: { color: '#000', fontWeight: 'bold', fontSize: 16 },
+  addSetBtn: { marginTop: 16, alignItems: 'center', paddingVertical: 6 },
+  addSetText: { color: colors.textSecondary, fontSize: 15, fontWeight: '600' },
+  addExerciseBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(46, 211, 198, 0.1)', padding: 16, borderRadius: 18, marginBottom: 26, borderWidth: 1, borderColor: colors.accent + 'AA' },
+  addExerciseText: { color: colors.accent, fontWeight: '600', fontSize: 15, marginLeft: 10 },
+  restWrapper: {
+    position: 'absolute',
+    bottom: Platform.OS === 'ios' ? 96 : 86,
+    left: 0,
+    right: 0,
+  },
+  finishContainer: { position: 'absolute', bottom: Platform.OS === 'ios' ? 10 : 0, width: '100%', backgroundColor: colors.card, padding: 20, borderTopWidth: 1, borderTopColor: colors.border },
+  finishBtn: { backgroundColor: colors.accent, padding: 20, borderRadius: 30, alignItems: 'center' },
+  finishBtnText: { color: colors.onAccent, fontWeight: '600', fontSize: 15 },
 
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end', padding: 15 },
-  glassMenu: { backgroundColor: '#161616', width: '100%', borderRadius: 35, padding: 25, borderWidth: 1, borderColor: '#222', paddingBottom: 40 },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
-  menuTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold', textAlign: 'center' },
-  exerciseDbItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#222' },
-  exerciseDbName: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  exerciseDbMuscle: { color: '#888', fontSize: 12, marginTop: 4 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end', padding: 16 },
+  glassMenu: { backgroundColor: colors.sheet, width: '100%', borderRadius: 35, padding: 26, paddingBottom: 40 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  menuTitle: { color: colors.text, fontSize: 20, fontWeight: '700', textAlign: 'center' },
+  exerciseDbItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: colors.border },
+  searchInput: {
+    backgroundColor: colors.surfaceHigh,
+    color: colors.text,
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    fontSize: 15,
+    marginBottom: 10,
+  },
+  filterRow: { flexGrow: 0, marginBottom: 10 },
+  filterChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: colors.surfaceHigh,
+    marginRight: 10,
+  },
+  filterChipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  filterText: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
+  filterTextActive: { color: colors.onAccent },
+  noResults: { color: colors.textMuted, textAlign: 'center', marginTop: 26, fontSize: 15 },
+  exerciseDbName: { color: colors.text, fontSize: 15, fontWeight: '600' },
+  exerciseDbMuscle: { color: colors.textSecondary, fontSize: 13, marginTop: 6 },
 
-  summaryContainer: { flex: 1, backgroundColor: '#000' },
+  summaryContainer: { flex: 1, backgroundColor: colors.background },
   summaryScroll: { padding: 20, alignItems: 'center', paddingBottom: 100 },
   summaryHeader: { alignItems: 'center', marginVertical: 40 },
-  summaryTitle: { color: NEON_GREEN, fontSize: 32, fontWeight: '900', textAlign: 'center', letterSpacing: 1 },
-  summaryMessage: { color: '#FFF', fontSize: 16, textAlign: 'center', marginTop: 15, fontStyle: 'italic', paddingHorizontal: 20 },
+  summaryTitle: { color: colors.accent, fontSize: 34, fontWeight: '900', textAlign: 'center', letterSpacing: 1 },
+  summaryMessage: { color: colors.text, fontSize: 15, textAlign: 'center', marginTop: 16, fontStyle: 'italic', paddingHorizontal: 20 },
 
-  duoCard: { backgroundColor: CARD_BG, width: '100%', borderRadius: 22, padding: 20, marginBottom: 20, borderWidth: 1, borderColor: '#222' },
+  duoCard: { backgroundColor: colors.card, width: '100%', borderRadius: 26, padding: 20, marginBottom: 20 },
   duoStatRow: { flexDirection: 'row', justifyContent: 'space-evenly', alignItems: 'center' },
   duoStatBox: { alignItems: 'center', flex: 1 },
   duoDivider: { width: 2, height: 40, backgroundColor: '#333' },
-  duoStatLabel: { color: '#888', fontSize: 12, fontWeight: 'bold', marginBottom: 5 },
-  duoStatValue: { color: '#FFF', fontSize: 24, fontWeight: '900' },
+  duoStatLabel: { color: colors.textSecondary, fontSize: 13, fontWeight: '600', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.7 },
+  duoStatValue: { color: colors.text, fontSize: 26, fontWeight: '900' },
 
-  duoRewardTitle: { color: '#FFF', fontSize: 16, fontWeight: 'bold', textAlign: 'center', marginBottom: 20 },
+  duoRewardTitle: { color: colors.text, fontSize: 15, fontWeight: '600', textAlign: 'center', marginBottom: 20 },
   duoRewardBox: { alignItems: 'center', flex: 1 },
+  unlockRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: 1, borderTopColor: colors.border },
+  unlockName: { color: colors.text, fontSize: 15, fontWeight: '600' },
+  unlockDesc: { color: colors.textSecondary, fontSize: 13, marginTop: 2 },
 
-  streakCircle: { width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(255, 136, 0, 0.1)', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
-  duoStreakTitle: { color: '#FF8800', fontSize: 20, fontWeight: '900' },
-  duoStreakSub: { color: '#FFAA44', fontSize: 13, marginTop: 4, fontWeight: '600' },
+  streakCircle: { width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(255, 136, 0, 0.1)', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
+  duoStreakTitle: { color: colors.streak, fontSize: 20, fontWeight: '900' },
+  duoStreakSub: { color: colors.streak, fontSize: 13, marginTop: 6, fontWeight: '600' },
 
-  duoFooter: { position: 'absolute', bottom: Platform.OS === 'ios' ? 10 : 0, width: '100%', padding: 20, backgroundColor: '#000', borderTopWidth: 1, borderTopColor: '#222' },
-  duoButton: { backgroundColor: NEON_GREEN, paddingVertical: 18, borderRadius: 16, alignItems: 'center', width: '100%' },
-  duoButtonText: { color: '#000', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
+  duoFooter: { position: 'absolute', bottom: Platform.OS === 'ios' ? 10 : 0, width: '100%', padding: 20, backgroundColor: colors.background, borderTopWidth: 1, borderTopColor: colors.border },
+  duoButton: { backgroundColor: colors.accent, paddingVertical: 20, borderRadius: 20, alignItems: 'center', width: '100%' },
+  duoButtonText: { color: colors.onAccent, fontSize: 17, fontWeight: '900', letterSpacing: 1 },
 
   modalOverlayFull: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' },
-  modalContentTooFast: { backgroundColor: CARD_BG, borderRadius: 32, padding: 30, width: '85%', alignItems: 'center', borderWidth: 1, borderColor: '#ff4444' },
-  modalTitle: { color: '#fff', fontSize: 22, fontWeight: 'bold', marginBottom: 10 },
-  modalText: { color: '#aaa', fontSize: 16, textAlign: 'center', marginBottom: 25 },
-  modalBtnAction: { backgroundColor: '#ff4444', padding: 15, borderRadius: 15, width: '100%', alignItems: 'center', marginTop: 10 },
-  modalBtnActionText: { color: '#000', fontWeight: 'bold', fontSize: 16 }
+  modalContentTooFast: { backgroundColor: colors.card, borderRadius: 32, padding: 26, width: '85%', alignItems: 'center', borderWidth: 1, borderColor: colors.danger },
+  modalTitle: { color: colors.text, fontSize: 20, fontWeight: '700', marginBottom: 10 },
+  modalText: { color: colors.textSecondary, fontSize: 15, textAlign: 'center', marginBottom: 26 },
+  modalBtnAction: { backgroundColor: colors.danger, padding: 16, borderRadius: 18, width: '100%', alignItems: 'center', marginTop: 10 },
+  modalBtnActionText: { color: colors.onAccent, fontWeight: '600', fontSize: 15 }
 });

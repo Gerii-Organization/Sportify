@@ -1,8 +1,5 @@
-import React, { useState, useCallback } from 'react';
-import {
-  StyleSheet, View, Text, ScrollView, SafeAreaView,
-  Dimensions, ActivityIndicator, TouchableOpacity
-} from 'react-native';
+import { useState, useCallback } from 'react';
+import { StyleSheet, View, Text, ScrollView, SafeAreaView, Dimensions, TouchableOpacity } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   Activity, Flame, Trophy, Dumbbell, TrendingUp, Target, Lock
@@ -10,12 +7,20 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { supabase } from '../lib/supabase';
+import { colors } from '../theme';
+import { todayKey, recentDayKeys } from '../lib/date';
+import { gradients } from '../theme';
+import ScreenHeader from '../components/ScreenHeader';
+import AmbientGlow from '../components/AmbientGlow';
+import { SkeletonRows } from '../components/Skeleton';
+import useRefresh from '../lib/useRefresh';
+import { useAuth } from '../context/AuthContext';
 
 const { width } = Dimensions.get('window');
-const NEON_GREEN = '#1ED760';
-const CARD_BG = '#121212';
 
 export default function StatsScreen() {
+  const { user } = useAuth();
+  const { refreshControl } = useRefresh(() => fetchStats());
   const [loading, setLoading] = useState(true);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [timeframe, setTimeframe] = useState('week');
@@ -30,8 +35,12 @@ export default function StatsScreen() {
 
   useFocusEffect(
     useCallback(() => {
+    // user?.id is in the deps because useCallback pins the closure: without it
+    // the memoised function keeps the `user` from first render (null, before the
+    // session loads) and every later focus re-runs that stale copy — which is
+    // why signing in left the screen empty until something forced a remount.
       fetchStats();
-    }, [timeframe])
+    }, [timeframe, user?.id])
   );
 
   const fetchStats = async () => {
@@ -54,7 +63,7 @@ export default function StatsScreen() {
       const today = new Date();
       const weekAgo = new Date(today);
       weekAgo.setDate(weekAgo.getDate() - 6);
-      const weekAgoStr = weekAgo.toISOString().split('T')[0];
+      const weekAgoStr = todayKey(weekAgo);
 
       const { data: profile } = await supabase
         .from('profiles')
@@ -115,11 +124,7 @@ export default function StatsScreen() {
           topMuscle = m;
         }
       });
-      const pastWeekDates = Array.from({length: 7}, (_, i) => {
-        const d = new Date(today);
-        d.setDate(d.getDate() - (6 - i));
-        return d.toISOString().split('T')[0];
-      });
+      const pastWeekDates = recentDayKeys(7);
 
       const { data: chartStepsData } = await supabase
         .from('daily_steps')
@@ -153,9 +158,10 @@ export default function StatsScreen() {
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
-        <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
+        <LinearGradient colors={gradients.screen} style={styles.gradientBg}>
+        <AmbientGlow tone="accent" height={300} intensity={0.3} />
           <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={NEON_GREEN} />
+            <SkeletonRows count={4} />
           </View>
         </LinearGradient>
       </SafeAreaView>
@@ -164,24 +170,16 @@ export default function StatsScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
-        <View style={styles.header}>
-          <View style={styles.logoRow}>
-            <View style={styles.logoAndName}>
-              <View style={styles.logoMark}><Flame size={18} color="black" fill="black" /></View>
-              <Text style={styles.appName}>Sportify</Text>
-            </View>
-          </View>
-          <Text style={styles.dateText}>{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</Text>
-          <Text style={styles.title}>Analytics</Text>
-        </View>
+      <LinearGradient colors={gradients.screen} style={styles.gradientBg}>
+        <ScreenHeader title="Analytics" />
 
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}
+          refreshControl={refreshControl}>
 
         {!isLoggedIn && (
           <View style={styles.glassContainerGuest}>
             <BlurView intensity={40} tint="dark" style={styles.glassBlur}>
-              <Lock color="#FF4444" size={32} style={{ marginBottom: 10 }} />
+              <Lock color={colors.danger} size={32} style={{ marginBottom: 10 }} />
               <Text style={styles.guestTitle}>Guest Mode</Text>
               <Text style={styles.guestText}>Create an account to save and view your stats, history, and progress.</Text>
             </BlurView>
@@ -190,13 +188,13 @@ export default function StatsScreen() {
 
         <View style={styles.toggleContainerWrapper}>
           <BlurView intensity={30} tint="dark" style={styles.toggleContainer}>
-            <TouchableOpacity
+            <TouchableOpacity activeOpacity={0.7}
               style={[styles.toggleBtn, timeframe === 'week' && styles.toggleBtnActive]}
               onPress={() => setTimeframe('week')}
             >
               <Text style={[styles.toggleText, timeframe === 'week' && styles.toggleTextActive]}>Last 7 Days</Text>
             </TouchableOpacity>
-            <TouchableOpacity
+            <TouchableOpacity activeOpacity={0.7}
               style={[styles.toggleBtn, timeframe === 'all' && styles.toggleBtnActive]}
               onPress={() => setTimeframe('all')}
             >
@@ -209,7 +207,7 @@ export default function StatsScreen() {
           <View style={styles.statBoxContainer}>
             <BlurView intensity={40} tint="dark" style={styles.glassBlur}>
               <View style={[styles.statIconWrapper, { backgroundColor: 'rgba(255, 136, 0, 0.1)' }]}>
-                <Flame color="#FF8800" size={26} style={styles.iconGlowOrange} />
+                <Flame color={colors.streak} size={26} style={styles.iconGlowOrange} />
               </View>
               <Text style={styles.statVal}>{stats.totalCalories.toLocaleString()}</Text>
               <Text style={styles.statLabel}>Calories Burned</Text>
@@ -218,8 +216,8 @@ export default function StatsScreen() {
 
           <View style={styles.statBoxContainer}>
             <BlurView intensity={40} tint="dark" style={styles.glassBlur}>
-              <View style={[styles.statIconWrapper, { backgroundColor: 'rgba(30, 215, 96, 0.1)' }]}>
-                <Dumbbell color={NEON_GREEN} size={26} style={styles.iconGlowGreen} />
+              <View style={[styles.statIconWrapper, { backgroundColor: 'rgba(46, 211, 198, 0.1)' }]}>
+                <Dumbbell color={colors.accent} size={26} style={styles.iconGlowGreen} />
               </View>
               <Text style={styles.statVal}>{(stats.totalVolume / 1000).toFixed(1)}k</Text>
               <Text style={styles.statLabel}>Weight lifted (kg)</Text>
@@ -241,7 +239,7 @@ export default function StatsScreen() {
           <View style={styles.statBoxContainer}>
             <BlurView intensity={40} tint="dark" style={styles.glassBlur}>
               <View style={[styles.statIconWrapper, { backgroundColor: 'rgba(255, 215, 0, 0.1)' }]}>
-                <Trophy color="#FFD700" size={26} style={styles.iconGlowYellow} />
+                <Trophy color={colors.energy} size={26} style={styles.iconGlowYellow} />
               </View>
               <Text style={styles.statVal}>{stats.currentStreak}</Text>
               <Text style={styles.statLabel}>Streak Days</Text>
@@ -261,11 +259,11 @@ export default function StatsScreen() {
                     <Text style={styles.barLabelTop}>{stepCount > 0 ? (stepCount/1000).toFixed(1) + 'k' : ''}</Text>
                     <View style={[styles.barBg, { height: 150 }]}>
                       <LinearGradient
-                        colors={isToday ? [NEON_GREEN, '#055924'] : ['#333', '#1A1A1A']}
+                        colors={isToday ? [colors.accent, '#055924'] : ['#333', '#1A1A1A']}
                         style={[styles.barFill, { height: barHeight }, isToday && styles.activeBarGlow]}
                       />
                     </View>
-                    <Text style={[styles.barLabel, isToday && {color: NEON_GREEN, fontWeight: 'bold'}]}>
+                    <Text style={[styles.barLabel, isToday && {color: colors.accent, fontWeight: '600'}]}>
                       {daysOfWeek[index]}
                     </Text>
                   </View>
@@ -278,17 +276,17 @@ export default function StatsScreen() {
         <Text style={styles.sectionTitle}>Muscle Focus</Text>
         <View style={styles.muscleCardWrapper}>
           <BlurView intensity={40} tint="dark" style={styles.glassBlurMuscle}>
-            <LinearGradient colors={['rgba(30, 215, 96, 0.1)', 'transparent']} start={{x: 0, y: 0}} end={{x: 1, y: 0}} style={styles.muscleGradient}>
+            <LinearGradient colors={['rgba(46, 211, 198, 0.1)', 'transparent']} start={{x: 0, y: 0}} end={{x: 1, y: 0}} style={styles.muscleGradient}>
               <View style={styles.muscleLeft}>
                 <View style={styles.targetIconBg}>
-                  <Target color={NEON_GREEN} size={32} style={styles.iconGlowGreen} />
+                  <Target color={colors.accent} size={32} style={styles.iconGlowGreen} />
                 </View>
-                <View style={{ marginLeft: 15 }}>
+                <View style={{ marginLeft: 16 }}>
                   <Text style={styles.muscleTitle}>Primary Muscle Group</Text>
                   <Text style={styles.muscleValue}>{stats.topMuscle}</Text>
                 </View>
               </View>
-              <TrendingUp color="#666" size={24} />
+              <TrendingUp color={colors.textMuted} size={24} />
             </LinearGradient>
           </BlurView>
         </View>
@@ -300,58 +298,58 @@ export default function StatsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
+  container: { flex: 1, backgroundColor: colors.background },
   gradientBg: { flex: 1 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: { padding: 20, paddingTop: 40 },
   logoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   logoAndName: { flexDirection: 'row', alignItems: 'center' },
-  logoMark: { width: 32, height: 32, backgroundColor: NEON_GREEN, borderRadius: 16, justifyContent: 'center', alignItems: 'center', shadowColor: NEON_GREEN, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 10 },
-  appName: { color: '#FFF', fontSize: 22, fontWeight: 'bold', marginLeft: 10 },
-  dateText: { color: '#666', marginTop: 15, fontSize: 14 },
-  title: { color: '#FFF', fontSize: 32, fontWeight: 'bold', marginTop: 5 },
+  logoMark: { width: 32, height: 32, backgroundColor: colors.accent, borderRadius: 20, justifyContent: 'center', alignItems: 'center', shadowColor: colors.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 10 },
+  appName: { color: colors.text, fontSize: 20, fontWeight: '700', marginLeft: 10 },
+  dateText: { color: colors.textMuted, marginTop: 16, fontSize: 15 },
+  title: { color: colors.text, fontSize: 34, fontWeight: '800', marginTop: 6 },
   scrollContent: { paddingBottom: 100 },
 
-  glassContainerGuest: { marginHorizontal: 20, marginBottom: 25, borderRadius: 22, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255, 68, 68, 0.4)' },
+  glassContainerGuest: { marginHorizontal: 20, marginBottom: 26, borderRadius: 26, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255, 68, 68, 0.4)' },
   glassBlur: { padding: 20, alignItems: 'center' },
-  guestTitle: { color: '#FF4444', fontSize: 18, fontWeight: 'bold', marginBottom: 8, textShadowColor: 'rgba(255, 68, 68, 0.5)', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 10 },
-  guestText: { color: '#fff', fontSize: 14, textAlign: 'center', opacity: 0.8 },
+  guestTitle: { color: colors.danger, fontSize: 17, fontWeight: '600', marginBottom: 10, textShadowColor: 'rgba(255, 107, 90, 0.45)', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 10 },
+  guestText: { color: colors.text, fontSize: 15, textAlign: 'center', opacity: 0.8 },
 
-  toggleContainerWrapper: { marginHorizontal: 20, marginBottom: 25, borderRadius: 15, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.1)' },
-  toggleContainer: { flexDirection: 'row', padding: 5 },
-  toggleBtn: { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 10 },
-  toggleBtnActive: { backgroundColor: 'rgba(30, 215, 96, 0.2)', shadowColor: NEON_GREEN, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.2, shadowRadius: 10, elevation: 2 },
-  toggleText: { color: '#aaa', fontWeight: 'bold' },
-  toggleTextActive: { color: NEON_GREEN, textShadowColor: 'rgba(30, 215, 96, 0.5)', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 8 },
+  toggleContainerWrapper: { marginHorizontal: 20, marginBottom: 26, borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.1)' },
+  toggleContainer: { flexDirection: 'row', padding: 6 },
+  toggleBtn: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 12 },
+  toggleBtnActive: { backgroundColor: 'rgba(46, 211, 198, 0.2)', shadowColor: colors.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.2, shadowRadius: 10, elevation: 2 },
+  toggleText: { color: colors.textSecondary, fontWeight: '600' },
+  toggleTextActive: { color: colors.accent, textShadowColor: 'rgba(46, 211, 198, 0.5)', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 8 },
 
-  statsGrid: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 15 },
-  statBoxContainer: { width: '48%', borderRadius: 22, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.05)', backgroundColor: 'rgba(255, 255, 255, 0.02)' },
-  statIconWrapper: { padding: 12, borderRadius: 15, marginBottom: 15 },
-  statVal: { color: '#FFF', fontSize: 26, fontWeight: '900', letterSpacing: 0.5 },
-  statLabel: { color: '#888', fontSize: 12, marginTop: 4, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
+  statsGrid: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 16 },
+  statBoxContainer: { width: '48%', borderRadius: 26, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.05)', backgroundColor: 'rgba(255, 255, 255, 0.02)' },
+  statIconWrapper: { padding: 10, borderRadius: 18, marginBottom: 16 },
+  statVal: { color: colors.text, fontSize: 26, fontWeight: '900', letterSpacing: 0.5 },
+  statLabel: { color: colors.textSecondary, fontSize: 13, marginTop: 6, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
 
-  iconGlowOrange: { shadowColor: '#FF8800', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 10 },
-  iconGlowGreen: { shadowColor: NEON_GREEN, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 10 },
+  iconGlowOrange: { shadowColor: colors.streak, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 10 },
+  iconGlowGreen: { shadowColor: colors.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 10 },
   iconGlowBlue: { shadowColor: '#00EAFF', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 10 },
-  iconGlowYellow: { shadowColor: '#FFD700', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 10 },
+  iconGlowYellow: { shadowColor: colors.energy, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 10 },
 
-  sectionTitle: { color: '#FFF', fontSize: 18, fontWeight: 'bold', marginLeft: 20, marginTop: 20, marginBottom: 15, letterSpacing: 0.5 },
+  sectionTitle: { color: colors.text, fontSize: 17, fontWeight: '700', marginLeft: 20, marginTop: 20, marginBottom: 16, letterSpacing: 0.5 },
 
-  chartCardWrapper: { marginHorizontal: 20, borderRadius: 22, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.05)', backgroundColor: 'rgba(255, 255, 255, 0.02)' },
+  chartCardWrapper: { marginHorizontal: 20, borderRadius: 26, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.05)', backgroundColor: 'rgba(255, 255, 255, 0.02)' },
   glassBlurChart: { padding: 20 },
   barsContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', height: 190 },
   barWrapper: { alignItems: 'center', width: width * 0.08 },
-  barLabelTop: { color: '#888', fontSize: 9, marginBottom: 5, height: 12, fontWeight: 'bold' },
-  barBg: { width: '100%', backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 8, justifyContent: 'flex-end', overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
-  barFill: { width: '100%', borderRadius: 8 },
-  activeBarGlow: { shadowColor: NEON_GREEN, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 8, elevation: 5 },
-  barLabel: { color: '#666', fontSize: 12, marginTop: 10, fontWeight: '600' },
+  barLabelTop: { color: colors.textSecondary, fontSize: 11, marginBottom: 6, height: 12, fontWeight: '600' },
+  barBg: { width: '100%', backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 10, justifyContent: 'flex-end', overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
+  barFill: { width: '100%', borderRadius: 10 },
+  activeBarGlow: { shadowColor: colors.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 8, elevation: 5 },
+  barLabel: { color: colors.textMuted, fontSize: 13, marginTop: 10, fontWeight: '600' },
 
-  muscleCardWrapper: { marginHorizontal: 20, borderRadius: 22, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(30, 215, 96, 0.3)', backgroundColor: 'rgba(255, 255, 255, 0.02)', marginBottom: 20 },
+  muscleCardWrapper: { marginHorizontal: 20, borderRadius: 26, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(46, 211, 198, 0.3)', backgroundColor: 'rgba(255, 255, 255, 0.02)', marginBottom: 20 },
   glassBlurMuscle: { width: '100%' },
   muscleGradient: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20 },
   muscleLeft: { flexDirection: 'row', alignItems: 'center' },
-  targetIconBg: { backgroundColor: 'rgba(30, 215, 96, 0.1)', padding: 12, borderRadius: 16 },
-  muscleTitle: { color: '#888', fontSize: 12, fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 1 },
-  muscleValue: { color: '#FFF', fontSize: 22, fontWeight: '900', marginTop: 2, letterSpacing: 0.5 }
+  targetIconBg: { backgroundColor: 'rgba(46, 211, 198, 0.1)', padding: 10, borderRadius: 20 },
+  muscleTitle: { color: colors.textSecondary, fontSize: 13, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
+  muscleValue: { color: colors.text, fontSize: 20, fontWeight: '900', marginTop: 2, letterSpacing: 0.5 }
 });

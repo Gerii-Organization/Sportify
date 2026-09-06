@@ -1,21 +1,22 @@
-import React, { useState, useCallback } from 'react';
-import { StyleSheet, View, Text, SafeAreaView, ScrollView, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
+import { useState, useCallback } from 'react';
+import { StyleSheet, View, Text, SafeAreaView, ScrollView, TouchableOpacity, Platform } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import { Users, Trophy, ChevronLeft, Flame, Crown, User } from 'lucide-react-native';
+import { Users, Trophy, ChevronLeft, Flame } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
+import { colors } from '../theme';
+import { levelFromXp } from '../lib/level';
+import { gradients } from '../theme';
+import { useAuth } from '../context/AuthContext';
+import Avatar from '../components/Avatar';
+import AmbientGlow from '../components/AmbientGlow';
+import { SkeletonRows } from '../components/Skeleton';
+import useRefresh from '../lib/useRefresh';
 
-const NEON_GREEN = '#1ED760';
-const CARD_BG = '#121212';
-
-const AVATAR_THEMES = {
-  'a1': { color: '#1ED760', type: 'standard' },
-  'a2': { color: '#FFD700', type: 'royal' },
-  'a3': { color: '#9900FF', type: 'demon' },
-  'a4': { color: '#FF00FF', type: 'glitch' },
-};
 
 export default function LeaderboardScreen() {
+  const { refreshControl } = useRefresh(() => fetchData());
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState('friends');
   const [loading, setLoading] = useState(true);
   const [myId, setMyId] = useState(null);
@@ -25,13 +26,18 @@ export default function LeaderboardScreen() {
   useFocusEffect(
     useCallback(() => {
       fetchData();
-    }, [activeTab])
+    }, [activeTab, user?.id])
   );
 
   const fetchData = async () => {
     setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) {
+      // The global board is public, so guests still get to see it.
+      setMyId(null);
+      await fetchGlobalLeaderboard();
+      setLoading(false);
+      return;
+    }
     setMyId(user.id);
 
     if (activeTab === 'friends') {
@@ -43,20 +49,20 @@ export default function LeaderboardScreen() {
   };
 
   const fetchFriendsLeaderboard = async (userId) => {
-    // Aducem prieteniile acceptate
+    // Accepted friendships only.
     const { data: fData } = await supabase.from('friendships')
       .select('*')
       .eq('status', 'accepted')
       .or(`user_id.eq.${userId},friend_id.eq.${userId}`);
 
-    let ids = [userId]; // 🔴 Includem și user-ul curent în clasament!
+    let ids = [userId]; // The current user ranks alongside their friends.
     if (fData) {
       fData.forEach(f => {
         ids.push(f.user_id === userId ? f.friend_id : f.user_id);
       });
     }
 
-    // Aducem profilele ordonate după XP
+    // Profiles, highest XP first.
     const { data: pData } = await supabase.from('profiles')
       .select('*')
       .in('id', ids)
@@ -73,49 +79,22 @@ export default function LeaderboardScreen() {
     setLeaderboardData(data || []);
   };
 
-  const renderMiniAvatar = (profile, rank) => {
-    const xp = profile?.xp || 0;
-    const level = Math.floor(xp / 100) + 1;
-    const theme = AVATAR_THEMES[profile?.equipped_avatar] || AVATAR_THEMES['a1'];
-    
-    let strokeColor = theme.color;
-    let borderWidth = 1;
-
-    if (level >= 40) { strokeColor = '#FF00FF'; borderWidth = 3; }
-    else if (level >= 30) { strokeColor = '#00FFFF'; borderWidth = 2; }
-    else if (level >= 20) { strokeColor = '#FFD700'; borderWidth = 2; }
-    else if (level >= 10) { strokeColor = '#C0C0C0'; borderWidth = 2; }
-    else if (level >= 5) { strokeColor = '#CD7F32'; borderWidth = 2; }
-
-    let crownColor = null;
-    if (rank === 1) crownColor = '#FFD700'; 
-    if (rank === 2) crownColor = '#C0C0C0'; 
-    if (rank === 3) crownColor = '#CD7F32'; 
-
-    return (
-      <View style={[styles.avatarBase, { borderColor: strokeColor, borderWidth }]}>
-        <User size={20} color={theme.type === 'glitch' ? '#00EAFF' : theme.color} />
-        {crownColor && <Crown color={crownColor} size={20} fill={crownColor} style={styles.crownRank} />}
-      </View>
-    );
-  };
 
   const renderUserItem = (item, index) => {
-    const level = Math.floor((item.xp || 0) / 100) + 1;
+    const level = levelFromXp(item.xp);
     const isMe = item.id === myId;
 
     return (
-      <TouchableOpacity 
+      <TouchableOpacity activeOpacity={0.7} 
         key={item.id || index} 
         style={[styles.userCard, isMe && styles.myUserCard]}
         onPress={() => navigation.navigate('PublicProfileScreen', { userId: item.id })}
-        activeOpacity={0.7}
       >
         <View style={styles.rankBox}>
           <Text style={styles.rankText}>#{index + 1}</Text>
         </View>
 
-        {renderMiniAvatar(item, index + 1)}
+        <Avatar profile={item} rank={index + 1} />
 
         <View style={styles.userInfo}>
           <Text style={styles.userName}>{item.first_name || 'Athlete'} {isMe && '(Tu)'}</Text>
@@ -124,7 +103,7 @@ export default function LeaderboardScreen() {
 
         <View style={styles.userStats}>
           <View style={styles.statChip}>
-            <Flame color="#FF8800" size={14} fill="#FF8800" />
+            <Flame color={colors.streak} size={14} fill={colors.streak} />
             <Text style={styles.statChipText}>{item.current_streak || 0}</Text>
           </View>
           <View style={styles.statChipXP}>
@@ -137,12 +116,13 @@ export default function LeaderboardScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <LinearGradient colors={['#000000', '#05180B']} style={styles.gradientBg}>
+      <LinearGradient colors={gradients.screen} style={styles.gradientBg}>
+        <AmbientGlow tone="ember" height={280} intensity={0.4} />
         
         {/* HEADER DE NAVIGARE */}
         <View style={styles.navHeader}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-            <ChevronLeft color="#FFF" size={28} />
+          <TouchableOpacity accessibilityLabel="Go back" activeOpacity={0.7} onPress={() => navigation.goBack()} style={styles.backBtn}>
+            <ChevronLeft color={colors.text} size={28} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Leaderboard</Text>
           <View style={{width: 28}} /> {/* Spacer pentru centrare */}
@@ -151,7 +131,7 @@ export default function LeaderboardScreen() {
         {/* TOGGLE PENTRU CLASAMENTE */}
         <View style={styles.toggleContainerWrapper}>
           <View style={styles.toggleContainer}>
-            <TouchableOpacity 
+            <TouchableOpacity activeOpacity={0.7} 
               style={[styles.toggleBtn, activeTab === 'friends' && styles.toggleBtnActive]}
               onPress={() => setActiveTab('friends')}
             >
@@ -159,7 +139,7 @@ export default function LeaderboardScreen() {
               <Text style={[styles.toggleText, activeTab === 'friends' && styles.toggleTextActive]}>Friends Top</Text>
             </TouchableOpacity>
             
-            <TouchableOpacity 
+            <TouchableOpacity activeOpacity={0.7} 
               style={[styles.toggleBtn, activeTab === 'global' && styles.toggleBtnActive]}
               onPress={() => setActiveTab('global')}
             >
@@ -171,10 +151,11 @@ export default function LeaderboardScreen() {
 
         {loading ? (
           <View style={styles.centerContainer}>
-            <ActivityIndicator size="large" color={NEON_GREEN} />
+            <SkeletonRows count={7} />
           </View>
         ) : (
-          <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}
+          refreshControl={refreshControl}>
             {leaderboardData.map((user, index) => renderUserItem(user, index))}
           </ScrollView>
         )}
@@ -185,37 +166,37 @@ export default function LeaderboardScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
+  container: { flex: 1, backgroundColor: colors.background },
   gradientBg: { flex: 1 },
-  navHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 15, paddingTop: Platform.OS === 'android' ? 40 : 20, paddingBottom: 15 },
-  backBtn: { padding: 5 },
-  headerTitle: { color: '#FFF', fontSize: 22, fontWeight: 'bold' },
+  navHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: Platform.OS === 'android' ? 40 : 20, paddingBottom: 16 },
+  backBtn: { padding: 6 },
+  headerTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
   
-  toggleContainerWrapper: { paddingHorizontal: 20, marginBottom: 15 },
-  toggleContainer: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 15, padding: 5 },
-  toggleBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 12 },
-  toggleBtnActive: { backgroundColor: NEON_GREEN },
-  toggleText: { color: '#888', fontWeight: 'bold', marginLeft: 8 },
-  toggleTextActive: { color: '#000' },
+  toggleContainerWrapper: { paddingHorizontal: 20, marginBottom: 16 },
+  toggleContainer: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 18, padding: 6 },
+  toggleBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 14 },
+  toggleBtnActive: { backgroundColor: colors.accent },
+  toggleText: { color: colors.textSecondary, fontWeight: '600', marginLeft: 10 },
+  toggleTextActive: { color: colors.onAccent },
   
   centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   scrollContent: { paddingHorizontal: 20, paddingBottom: 50 },
 
-  userCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: CARD_BG, padding: 15, borderRadius: 20, marginBottom: 10, borderWidth: 1, borderColor: '#222' },
-  myUserCard: { borderColor: NEON_GREEN + '55', backgroundColor: 'rgba(30, 215, 96, 0.05)' },
+  userCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, padding: 16, borderRadius: 24, marginBottom: 10 },
+  myUserCard: { borderColor: colors.accent + '55', backgroundColor: 'rgba(46, 211, 198, 0.05)' },
   rankBox: { width: 30, alignItems: 'center' },
-  rankText: { color: '#666', fontWeight: 'bold', fontSize: 14 },
+  rankText: { color: colors.textMuted, fontWeight: '600', fontSize: 15 },
   
-  avatarBase: { width: 46, height: 46, borderRadius: 23, backgroundColor: '#1A1A1A', justifyContent: 'center', alignItems: 'center', marginLeft: 10 },
+  avatarBase: { width: 46, height: 46, borderRadius: 23, backgroundColor: colors.surface, justifyContent: 'center', alignItems: 'center', marginLeft: 10 },
   crownRank: { position: 'absolute', top: -14, left: -6, transform: [{rotate: '-15deg'}] },
   
-  userInfo: { flex: 1, marginLeft: 15 },
-  userName: { color: '#FFF', fontSize: 16, fontWeight: 'bold' },
-  userTitle: { color: NEON_GREEN, fontSize: 12, marginTop: 2 },
+  userInfo: { flex: 1, marginLeft: 16 },
+  userName: { color: colors.text, fontSize: 15, fontWeight: '600' },
+  userTitle: { color: colors.accent, fontSize: 13, marginTop: 2 },
   
   userStats: { alignItems: 'flex-end' },
-  statChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255, 136, 0, 0.1)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, marginBottom: 4 },
-  statChipText: { color: '#FF8800', fontWeight: 'bold', fontSize: 12, marginLeft: 4 },
-  statChipXP: { backgroundColor: '#222', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
-  statChipTextXP: { color: '#FFF', fontWeight: 'bold', fontSize: 12 },
+  statChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255, 136, 0, 0.1)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, marginBottom: 6 },
+  statChipText: { color: colors.streak, fontWeight: '600', fontSize: 13, marginLeft: 6 },
+  statChipXP: { backgroundColor: colors.surfaceHigh, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 },
+  statChipTextXP: { color: colors.text, fontWeight: '600', fontSize: 13 },
 });
