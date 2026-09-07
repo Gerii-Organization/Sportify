@@ -1,5 +1,6 @@
-import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
+import { attemptDevSignIn } from '../lib/devAutoLogin';
 
 /**
  * Session and profile, resolved once and shared.
@@ -17,6 +18,8 @@ export function AuthProvider({ children }) {
   const [profile, setProfile] = useState(null);
   /** True until the stored session has been read from disk. */
   const [initializing, setInitializing] = useState(true);
+  /** Development auto-login runs once per launch, never after a sign-out. */
+  const devSignInTried = useRef(false);
 
   const user = session?.user ?? null;
   const isLoggedIn = !!user;
@@ -34,11 +37,27 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let active = true;
 
-    supabase.auth.getSession().then(({ data }) => {
+    (async () => {
+      const { data } = await supabase.auth.getSession();
       if (!active) return;
-      setSession(data.session ?? null);
+
+      let current = data.session ?? null;
+
+      // Only ever on a cold start. Without the guard this would run again after
+      // signOut() and sign you straight back in, which makes the sign-out
+      // button impossible to test.
+      if (!current && !devSignInTried.current) {
+        devSignInTried.current = true;
+        // `initializing` deliberately stays true across this await. Releasing it
+        // first would render every screen as signed-out for a frame and then
+        // flip — the exact flicker this context exists to prevent.
+        current = await attemptDevSignIn();
+        if (!active) return;
+      }
+
+      setSession(current);
       setInitializing(false);
-    });
+    })();
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession ?? null);

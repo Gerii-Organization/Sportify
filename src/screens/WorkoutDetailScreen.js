@@ -6,7 +6,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { 
   ChevronLeft, Edit3, Plus, X, Play, CheckCircle2, Circle, Clock, 
-  Save, Trash2, Zap, Star, Flame, ChevronUp, ChevronDown, Globe, Lock 
+  Save, Trash2, Zap, Star, Flame, ChevronUp, ChevronDown, Globe, Lock, Info 
 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors } from '../theme';
@@ -32,6 +32,8 @@ export default function WorkoutDetailScreen({ route, navigation }) {
   const [mode, setMode] = useState('idle');
   const [timer, setTimer] = useState(0);
   const [isExerciseSelectorVisible, setIsExerciseSelectorVisible] = useState(false);
+  /** Which exercise has its form cue open in the picker. */
+  const [cueFor, setCueFor] = useState(null);
   const [exerciseQuery, setExerciseQuery] = useState('');
   const [muscleFilter, setMuscleFilter] = useState(null);
 
@@ -270,12 +272,28 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
   const processWorkoutCompletion = async (setsDone, setsTotal) => {
     setMode('idle');
-    let totalKg = 0;
-    currentWorkout.exercises.forEach(ex => {
-      ex.sets.forEach(set => {
-        if (set.completed && set.weight && set.reps) totalKg += (parseFloat(set.weight) * parseInt(set.reps));
-      });
-    });
+
+    // A snapshot of what was actually lifted, sent with the completion.
+    //
+    // Only the finished session used to be recorded — name, minutes, time — so
+    // "total weight lifted" had to be recomputed from the workout template.
+    // Templates get edited, which rewrote history: drop the bar 10kg today and
+    // last month's numbers moved with it. The sets are now stored alongside the
+    // session, and nothing after the fact can change them.
+    const performed = currentWorkout.exercises
+      .map((ex) => ({
+        name: ex.name,
+        muscle: ex.muscle || null,
+        sets: ex.sets
+          .filter((set) => set.completed && set.weight && set.reps)
+          .map((set) => ({ weight: Number(set.weight), reps: Number(set.reps) })),
+      }))
+      .filter((ex) => ex.sets.length > 0);
+
+    const totalKg = performed.reduce(
+      (total, ex) => total + ex.sets.reduce((sum, s) => sum + s.weight * s.reps, 0),
+      0
+    );
 
     const randomMsg = randomMotivationalMessage();
     const elapsedMinutes = Math.max(1, Math.ceil(timer / 60));
@@ -304,6 +322,9 @@ export default function WorkoutDetailScreen({ route, navigation }) {
         // Without the zone, a session logged after midnight local time records
         // against yesterday on the server and breaks the streak.
         p_tz: deviceTimeZone(),
+        // The server re-adds the volume from these rather than trusting the
+        // figure above — that number earns an XP bonus past 1000kg.
+        p_exercises: performed,
       });
 
       if (error || !result?.ok) {
@@ -329,10 +350,8 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     let newAchievements = [];
 
     if (user) {
-      const completedSets = currentWorkout.exercises.flatMap((ex) =>
-        ex.sets
-          .filter((set) => set.completed && set.weight && set.reps)
-          .map((set) => ({ name: ex.name, weight: Number(set.weight), reps: Number(set.reps) }))
+      const completedSets = performed.flatMap((ex) =>
+        ex.sets.map((set) => ({ name: ex.name, weight: set.weight, reps: set.reps }))
       );
 
       if (completedSets.length > 0) {
@@ -622,7 +641,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
             )}
 
             {workoutStats.isFirstWorkoutToday && (
-              <View style={[styles.duoCard, { borderColor: colors.streak, backgroundColor: '#1f1000' }]}>
+              <View style={[styles.duoCard, { borderColor: colors.streak, backgroundColor: 'rgba(255, 138, 43, 0.12)' }]}>
                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                   <View style={styles.streakCircle}>
                     <Flame color={colors.streak} size={36} fill={colors.streak} />
@@ -682,12 +701,56 @@ export default function WorkoutDetailScreen({ route, navigation }) {
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
                 ListEmptyComponent={<Text style={styles.noResults}>No exercises match that search.</Text>}
-                renderItem={({ item }) => (
-                  <TouchableOpacity accessibilityLabel="Add" activeOpacity={0.7} style={styles.exerciseDbItem} onPress={() => addNewExercise(item)}>
-                    <View><Text style={styles.exerciseDbName}>{item.name}</Text><Text style={styles.exerciseDbMuscle}>{item.muscle}</Text></View>
-                    <Plus color={colors.accent} size={20} />
-                  </TouchableOpacity>
-                )}
+                renderItem={({ item }) => {
+                  const showing = cueFor === item.id;
+
+                  return (
+                    <View style={styles.exerciseDbItem}>
+                      <View style={styles.exerciseDbRow}>
+                        <TouchableOpacity
+                          accessibilityLabel={`Add ${item.name}`}
+                          activeOpacity={0.7}
+                          style={{ flex: 1 }}
+                          onPress={() => addNewExercise(item)}
+                        >
+                          <Text style={styles.exerciseDbName}>{item.name}</Text>
+                          <Text style={styles.exerciseDbMuscle}>{item.muscle}</Text>
+                        </TouchableOpacity>
+
+                        {/* Separate target from Add. Wanting to know how an
+                            exercise is performed is the opposite of being ready
+                            to commit to it, and one tap should not do both. */}
+                        <TouchableOpacity
+                          accessibilityLabel={`How to do ${item.name}`}
+                          activeOpacity={0.7}
+                          hitSlop={8}
+                          onPress={() => setCueFor(showing ? null : item.id)}
+                          style={styles.exerciseInfoBtn}
+                        >
+                          <Info color={showing ? colors.accent : colors.textFaint} size={18} />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          accessibilityLabel={`Add ${item.name}`}
+                          activeOpacity={0.7}
+                          hitSlop={8}
+                          onPress={() => addNewExercise(item)}
+                        >
+                          <Plus color={colors.accent} size={20} />
+                        </TouchableOpacity>
+                      </View>
+
+                      {showing && item.cue ? (
+                        <View style={styles.cueBox}>
+                          <Text style={styles.cueText}>{item.cue}</Text>
+                          {item.watch ? (
+                            <Text style={styles.cueWatch}>Common mistake: {item.watch}</Text>
+                          ) : null}
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                }}
               />
             </View>
           </View>
@@ -737,7 +800,12 @@ const styles = StyleSheet.create({
   glassMenu: { backgroundColor: colors.sheet, width: '100%', borderRadius: 35, padding: 26, paddingBottom: 40 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
   menuTitle: { color: colors.text, fontSize: 20, fontWeight: '700', textAlign: 'center' },
-  exerciseDbItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: colors.border },
+  exerciseDbItem: { paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: colors.border },
+  exerciseDbRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 14 },
+  exerciseInfoBtn: { padding: 2 },
+  cueBox: { backgroundColor: colors.surface, borderRadius: 14, padding: 14, marginTop: 12, gap: 8 },
+  cueText: { color: colors.text, fontSize: 14, lineHeight: 20 },
+  cueWatch: { color: colors.textMuted, fontSize: 13, lineHeight: 18 },
   searchInput: {
     backgroundColor: colors.surfaceHigh,
     color: colors.text,
@@ -771,7 +839,7 @@ const styles = StyleSheet.create({
   duoCard: { backgroundColor: colors.card, width: '100%', borderRadius: 26, padding: 20, marginBottom: 20 },
   duoStatRow: { flexDirection: 'row', justifyContent: 'space-evenly', alignItems: 'center' },
   duoStatBox: { alignItems: 'center', flex: 1 },
-  duoDivider: { width: 2, height: 40, backgroundColor: '#333' },
+  duoDivider: { width: 2, height: 40, backgroundColor: colors.border },
   duoStatLabel: { color: colors.textSecondary, fontSize: 13, fontWeight: '600', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.7 },
   duoStatValue: { color: colors.text, fontSize: 26, fontWeight: '900' },
 
@@ -781,7 +849,7 @@ const styles = StyleSheet.create({
   unlockName: { color: colors.text, fontSize: 15, fontWeight: '600' },
   unlockDesc: { color: colors.textSecondary, fontSize: 13, marginTop: 2 },
 
-  streakCircle: { width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(255, 136, 0, 0.1)', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
+  streakCircle: { width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(255, 138, 43, 0.12)', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
   duoStreakTitle: { color: colors.streak, fontSize: 20, fontWeight: '900' },
   duoStreakSub: { color: colors.streak, fontSize: 13, marginTop: 6, fontWeight: '600' },
 

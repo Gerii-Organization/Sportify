@@ -1,39 +1,48 @@
 import { View, Text, StyleSheet } from 'react-native';
-import { Flame } from 'lucide-react-native';
 import { colors, spacing } from '../theme';
 import { formatHeaderDate } from '../lib/date';
 
 /**
- * The Sportify wordmark, today's date and a screen title.
- * Repeated verbatim in Dashboard, Training, Shop and Stats.
+ * Screen title, date, and an optional control row.
  *
- * `right` renders an optional control on the wordmark row — the avatar button
- * on Dashboard, the energy balance on Shop.
+ * The wordmark used to sit here on every screen. An app does not need to tell
+ * you its own name five times a session — the icon on the home screen already
+ * did that, and the space is better spent on the title you are actually
+ * reading. Removing it also lets the title move up into the position the eye
+ * lands on first.
  */
-export default function ScreenHeader({ title, right, subtitle }) {
+export default function ScreenHeader({ title, right, subtitle, compact = false }) {
   return (
-    <View style={styles.header}>
+    <View style={[styles.header, compact && styles.headerCompact]}>
       <View style={styles.row}>
-        <View style={styles.brand}>
-          <View style={styles.mark}>
-            <Flame size={18} color={colors.onAccent} fill={colors.onAccent} />
-          </View>
-          <Text style={styles.name}>Sportify</Text>
+        <View style={styles.titleBlock}>
+          <Text style={styles.date}>{subtitle || formatHeaderDate()}</Text>
+          {title ? (
+            <Text style={styles.title} numberOfLines={1} adjustsFontSizeToFit>
+              {title}
+            </Text>
+          ) : null}
         </View>
-        {right}
+        {right ? <View style={styles.actions}>{right}</View> : null}
       </View>
-      <Text style={styles.date}>{subtitle || formatHeaderDate()}</Text>
-      {title ? <Text style={styles.title}>{title}</Text> : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  header: { padding: spacing.lg },
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  brand: { flexDirection: 'row', alignItems: 'center' },
-  mark: { width: 32, height: 32, backgroundColor: colors.accent, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
-  name: { color: colors.text, fontSize: 20, fontWeight: '700', marginLeft: spacing.sm },
-  date: { color: colors.textMuted, marginTop: spacing.md, fontSize: 15 },
-  title: { color: colors.text, fontSize: 34, fontWeight: '800', marginTop: spacing.xs },
+  header: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.lg },
+  headerCompact: { paddingBottom: spacing.sm },
+  // Title and controls share a baseline-ish row rather than stacking, so the
+  // header takes about half the height it used to.
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md },
+  titleBlock: { flex: 1 },
+  actions: { flexShrink: 0 },
+  date: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+  },
+  title: { color: colors.text, fontSize: 28, fontWeight: '800', letterSpacing: -0.8, marginTop: 4 },
 });

@@ -4,11 +4,12 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
 import { ChevronLeft, UserPlus, MessageCircle, Clock, Check, Flame, Trophy, Activity, TrendingUp, UserMinus, Ban } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
-import { colors } from '../theme';
+import { colors, gradients } from '../theme';
 import { levelFromXp } from '../lib/level';
 import { useAuth } from '../context/AuthContext';
 import Avatar from '../components/Avatar';
 import EmptyState from '../components/EmptyState';
+import AmbientGlow from '../components/AmbientGlow';
 
 
 export default function PublicProfileScreen({ route, navigation }) {
@@ -45,7 +46,12 @@ export default function PublicProfileScreen({ route, navigation }) {
 
     const { data: pData } = await supabase.from('profiles').select('*').eq('id', userId).single();
     setProfile(pData);
-    const { data: wData } = await supabase.from('workout_completions').select('id, workout_name, completed_at, duration_minutes').eq('user_id', userId).order('completed_at', { ascending: false }).limit(5);
+    // Through an RPC rather than a direct select. The table was readable by any
+    // signed-in user, which leaked everyone's whole training history — and now
+    // that a session stores the sets it contained, that would have been the
+    // sets too. The function returns these four columns only, and refuses when
+    // either side has blocked the other.
+    const { data: wData } = await supabase.rpc('get_public_workouts', { p_user_id: userId });
     setRecentWorkouts(wData || []);
 
     if (user.id !== userId) {
@@ -101,6 +107,7 @@ export default function PublicProfileScreen({ route, navigation }) {
   if (isBlocked) {
     return (
       <SafeAreaView style={styles.container}>
+        <LinearGradient colors={gradients.screen} style={StyleSheet.absoluteFill} />
         <View style={styles.navHeader}><TouchableOpacity accessibilityLabel="Go back" activeOpacity={0.7} onPress={() => navigation.goBack()} style={styles.backBtn}><ChevronLeft color={colors.text} size={28} /></TouchableOpacity></View>
         <View style={styles.centerContainer}>
           <Ban color={colors.textMuted} size={60} style={{marginBottom: 20}} />
@@ -119,6 +126,8 @@ export default function PublicProfileScreen({ route, navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
+      <LinearGradient colors={gradients.screen} style={StyleSheet.absoluteFill} />
+      <AmbientGlow tone="accent" height={300} intensity={0.3} />
       <View style={styles.navHeader}><TouchableOpacity accessibilityLabel="Go back" activeOpacity={0.7} onPress={() => navigation.goBack()} style={styles.backBtn}><ChevronLeft color={colors.text} size={28} /></TouchableOpacity></View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
@@ -138,7 +147,7 @@ export default function PublicProfileScreen({ route, navigation }) {
               </TouchableOpacity>
 
               {friendStatus === 'friends' && (
-                <TouchableOpacity activeOpacity={0.7} style={[styles.iconBtn, { backgroundColor: '#333' }]} onPress={handleUnfriend} accessibilityLabel="Remove friend">
+                <TouchableOpacity activeOpacity={0.7} style={[styles.iconBtn, { backgroundColor: colors.surfaceHigh }]} onPress={handleUnfriend} accessibilityLabel="Remove friend">
                   <UserMinus color={colors.text} size={20} />
                 </TouchableOpacity>
               )}
@@ -178,5 +187,5 @@ const styles = StyleSheet.create({
   actionBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 16, borderRadius: 18 },
   iconBtn: { width: 50, height: 50, borderRadius: 25, justifyContent: 'center', alignItems: 'center' },
   
-  actionBtnPrimary: { backgroundColor: colors.accent, shadowColor: colors.accent, shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } }, actionBtnTextPrimary: { color: colors.onAccent }, actionBtnSecondary: { backgroundColor: colors.surface }, actionBtnTextSecondary: { color: colors.text }, actionBtnDisabled: { backgroundColor: colors.surfaceHigh }, actionBtnTextDisabled: { color: colors.textMuted }, actionBtnText: { fontSize: 15, fontWeight: '600', marginLeft: 10 }, statsRow: { flexDirection: 'row', justifyContent: 'space-evenly', backgroundColor: colors.card, marginHorizontal: 20, paddingVertical: 20, borderRadius: 28, marginBottom: 26 }, statBox: { alignItems: 'center', flex: 1 }, divider: { width: 1, backgroundColor: '#333', height: '80%', alignSelf: 'center' }, statValue: { color: colors.text, fontSize: 20, fontWeight: '700', marginTop: 10 }, statLabel: { color: colors.textSecondary, fontSize: 13, marginTop: 6, textTransform: 'uppercase', fontWeight: '600' }, sectionContainer: { paddingHorizontal: 20 }, sectionTitle: { color: colors.text, fontSize: 20, fontWeight: '700', marginBottom: 16 }, emptyText: { color: colors.textMuted, fontStyle: 'italic', textAlign: 'center', marginTop: 10 }, recentItem: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, padding: 16, borderRadius: 22, marginBottom: 10 }, recentIconBox: { backgroundColor: 'rgba(46, 211, 198, 0.1)', padding: 10, borderRadius: 16, marginRight: 16 }, recentTitle: { color: colors.text, fontSize: 15, fontWeight: '600' }, recentSub: { color: colors.textSecondary, fontSize: 13, marginTop: 6 }, durationTag: { backgroundColor: colors.surface, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 }, durationText: { color: colors.accent, fontWeight: '600', fontSize: 13 }
+  actionBtnPrimary: { backgroundColor: colors.accent, shadowColor: colors.accent, shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } }, actionBtnTextPrimary: { color: colors.onAccent }, actionBtnSecondary: { backgroundColor: colors.surface }, actionBtnTextSecondary: { color: colors.text }, actionBtnDisabled: { backgroundColor: colors.surfaceHigh }, actionBtnTextDisabled: { color: colors.textMuted }, actionBtnText: { fontSize: 15, fontWeight: '600', marginLeft: 10 }, statsRow: { flexDirection: 'row', justifyContent: 'space-evenly', backgroundColor: colors.card, marginHorizontal: 20, paddingVertical: 20, borderRadius: 28, marginBottom: 26 }, statBox: { alignItems: 'center', flex: 1 }, divider: { width: 1, backgroundColor: colors.border, height: '80%', alignSelf: 'center' }, statValue: { color: colors.text, fontSize: 20, fontWeight: '700', marginTop: 10 }, statLabel: { color: colors.textSecondary, fontSize: 13, marginTop: 6, textTransform: 'uppercase', fontWeight: '600' }, sectionContainer: { paddingHorizontal: 20 }, sectionTitle: { color: colors.text, fontSize: 20, fontWeight: '700', marginBottom: 16 }, emptyText: { color: colors.textMuted, fontStyle: 'italic', textAlign: 'center', marginTop: 10 }, recentItem: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, padding: 16, borderRadius: 22, marginBottom: 10 }, recentIconBox: { backgroundColor: 'rgba(46, 211, 198, 0.1)', padding: 10, borderRadius: 16, marginRight: 16 }, recentTitle: { color: colors.text, fontSize: 15, fontWeight: '600' }, recentSub: { color: colors.textSecondary, fontSize: 13, marginTop: 6 }, durationTag: { backgroundColor: colors.surface, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 }, durationText: { color: colors.accent, fontWeight: '600', fontSize: 13 }
 });

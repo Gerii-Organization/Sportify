@@ -3,7 +3,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { BlurView } from 'expo-blur';
-import { LayoutDashboard, ScanLine, Dumbbell, Users, Rss } from 'lucide-react-native';
+import { House, UtensilsCrossed, Dumbbell, Users, TrendingUp, Store } from 'lucide-react-native';
 
 import { AuthProvider } from './src/context/AuthContext';
 import { colors } from './src/theme';
@@ -15,25 +15,37 @@ import TrainingScreen from './src/screens/TrainingScreen';
 import WorkoutDetailScreen from './src/screens/WorkoutDetailScreen';
 import FriendsScreen from './src/screens/FriendsScreen';
 import ShopScreen from './src/screens/ShopScreen';
-import FeedScreen from './src/screens/FeedScreen';
 import PublicProfileScreen from './src/screens/PublicProfileScreen';
 import LeaderboardScreen from './src/screens/LeaderboardScreen';
 import StatsScreen from './src/screens/StatsScreen';
+import StreakScreen from './src/screens/StreakScreen';
+import MetricScreen from './src/screens/MetricScreen';
+import ProgressScreen from './src/screens/ProgressScreen';
+import HistoryScreen from './src/screens/HistoryScreen';
+import RecordsScreen from './src/screens/RecordsScreen';
 import ChatScreen from './src/screens/ChatScreen';
 import GroupChatScreen from './src/screens/GroupChatScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
-// Shop moved off the tab bar and onto the Dashboard header: it is somewhere you
-// go occasionally to spend what you earned, not one of the five things you do
-// every day. Feed takes the slot because it is checked far more often.
+// Feed used to sit here as its own tab. It is now a segment inside Social:
+// both are "other people", and spending two of the bar's slots on one idea left
+// no room for the parts of the app that pay off logging a workout.
+//
+// Labels are one word each because six tabs leave roughly 55pt of width apiece.
+// "Dashboard" and "Progress" would both truncate.
+//
+// Icons name the destination rather than the mechanism: a fork over a barcode
+// scanner (the screen is about food, not about scanning), a house over a
+// dashboard grid.
 const TABS = [
-  { name: 'Dashboard', component: DashboardScreen, icon: LayoutDashboard },
-  { name: 'Food', component: ScannerScreen, icon: ScanLine },
-  { name: 'Training', component: TrainingScreen, icon: Dumbbell },
-  { name: 'Feed', component: FeedScreen, icon: Rss },
-  { name: 'Social', component: FriendsScreen, icon: Users },
+  { name: 'Dashboard', label: 'Home', component: DashboardScreen, icon: House },
+  { name: 'Food', label: 'Food', component: ScannerScreen, icon: UtensilsCrossed },
+  { name: 'Training', label: 'Train', component: TrainingScreen, icon: Dumbbell },
+  { name: 'Social', label: 'Social', component: FriendsScreen, icon: Users },
+  { name: 'Progress', label: 'Progress', component: ProgressScreen, icon: TrendingUp },
+  { name: 'Shop', label: 'Shop', component: ShopScreen, icon: Store },
 ];
 
 /** Screens pushed above the tabs. All share the same header-less card style. */
@@ -43,7 +55,10 @@ const STACK_SCREENS = [
   { name: 'PublicProfileScreen', component: PublicProfileScreen, presentation: 'card' },
   { name: 'LeaderboardScreen', component: LeaderboardScreen, presentation: 'card' },
   { name: 'StatsScreen', component: StatsScreen, presentation: 'card' },
-  { name: 'ShopScreen', component: ShopScreen, presentation: 'card' },
+  { name: 'StreakScreen', component: StreakScreen, presentation: 'card' },
+  { name: 'MetricScreen', component: MetricScreen, presentation: 'card' },
+  { name: 'HistoryScreen', component: HistoryScreen, presentation: 'card' },
+  { name: 'RecordsScreen', component: RecordsScreen, presentation: 'card' },
   { name: 'ChatScreen', component: ChatScreen, presentation: 'card' },
   { name: 'GroupChatScreen', component: GroupChatScreen, presentation: 'card' },
 ];
@@ -54,18 +69,25 @@ function MainTabs() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: styles.tabBar,
-        tabBarBackground: () => <BlurView intensity={40} tint="dark" style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(28, 23, 18, 0.72)' }]} />,
+        // Tinted from the ground colour, not a fixed value. This was still the
+        // warm brown of a palette two redesigns ago, which gave the bar a
+        // slightly sepia cast against the slate everything else now sits on.
+        tabBarBackground: () => <BlurView intensity={40} tint="dark" style={[StyleSheet.absoluteFill, styles.tabBarTint]} />,
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.textFaint,
-        tabBarLabelStyle: { fontSize: 10, fontWeight: '600', letterSpacing: 0.2 },
+        // Six tabs leave about 55pt each; 9pt keeps one word on one line.
+        tabBarLabelStyle: { fontSize: 9, fontWeight: '600', letterSpacing: 0 },
       }}
     >
-      {TABS.map(({ name, component, icon: Icon }) => (
+      {TABS.map(({ name, label, component, icon: Icon }) => (
         <Tab.Screen
           key={name}
           name={name}
           component={component}
-          options={{ tabBarIcon: ({ color }) => <Icon color={color} size={24} /> }}
+          options={{
+            tabBarLabel: label,
+            tabBarIcon: ({ color }) => <Icon color={color} size={22} />,
+          }}
         />
       ))}
     </Tab.Navigator>
@@ -88,10 +110,11 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  tabBarTint: { backgroundColor: 'rgba(15, 18, 22, 0.72)' },
   tabBar: {
     position: 'absolute',
     height: 62,
-    marginHorizontal: 16,
+    marginHorizontal: 10,
     marginBottom: 16,
     borderRadius: 26,
     paddingTop: 8,

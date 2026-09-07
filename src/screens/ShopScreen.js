@@ -3,13 +3,15 @@ import { StyleSheet, Text, View, ScrollView, TouchableOpacity, SafeAreaView, Mod
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { useFocusEffect } from '@react-navigation/native';
-import { ShoppingBag, ChevronLeft, ChevronRight, Zap, Circle, User, Shield, Check, Flame, Crown, Swords, Ghost, Hexagon, Triangle, BatteryCharging, Trophy, Clock, Gift, Tag, Snowflake } from 'lucide-react-native';
+import { ShoppingBag, ChevronLeft, Zap, Circle, User, Shield, Check, Flame, Crown, Swords, Ghost, Hexagon, Triangle, BatteryCharging, Trophy, Clock, Tag, Snowflake } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors } from '../theme';
 import { RINGS, AVATARS, BADGES, TITLES, POWERUPS } from '../constants/cosmetics';
 import { gradients } from '../theme';
 import { useAuth } from '../context/AuthContext';
 import ScreenHeader from '../components/ScreenHeader';
+import DailyRewardCard from '../components/DailyRewardCard';
+import Avatar from '../components/Avatar';
 import AmbientGlow from '../components/AmbientGlow';
 import { SkeletonShelf } from '../components/Skeleton';
 import useRefresh from '../lib/useRefresh';
@@ -55,8 +57,9 @@ export default function ShopScreen({ navigation }) {
   const [selectedItem, setSelectedItem] = useState(null);
 
   const [boostExpiresAt, setBoostExpiresAt] = useState(null);
-  /** The spin resets at midnight; the card says so rather than failing on tap. */
-  const spinUsed = profileData?.last_spin_date === todayKey();
+  /** Resets at midnight; the card says so rather than failing on tap. */
+  const rewardClaimedToday = profileData?.last_reward_date === todayKey();
+  const [claiming, setClaiming] = useState(false);
   const [timeLeftStr, setTimeLeftStr] = useState(null);
 
   useEffect(() => {
@@ -109,7 +112,7 @@ export default function ShopScreen({ navigation }) {
 
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select('xp, energy_points, streak_freezes, equipped_ring, equipped_avatar, equipped_badge, equipped_title, owned_titles, coin_boost_active, last_spin_date, xp_boost_expires_at, current_streak, previous_streak')
+        .select('xp, energy_points, streak_freezes, equipped_ring, equipped_avatar, equipped_badge, equipped_title, owned_titles, coin_boost_active, last_reward_date, reward_day, xp_boost_expires_at, current_streak, previous_streak')
         .eq('id', user.id)
         .maybeSingle();
 
@@ -172,26 +175,43 @@ export default function ShopScreen({ navigation }) {
    * read the profile, added the prize in JavaScript and wrote the sum back, but
    * `xp` was missing from the SELECT, so the sum was always 0 + prize.
    */
-  const handleDailySpin = async () => {
-    setLoading(true);
-    const { data, error } = await supabase.rpc('daily_spin');
-    setLoading(false);
+  /**
+   * Claims today's rung of the ladder.
+   *
+   * The server decides which day you are on and what it pays, so a modified
+   * client cannot claim day 7 on a Monday. It also refuses a second claim on
+   * the same date, which is what makes the date check meaningful.
+   */
+  // Counted across every shelf so the bar means "the shop", not one category.
+  const allItems = [...rings, ...avatars, ...badges, ...titles];
+  const ownedCount = allItems.filter((i) => i.owned).length;
+  const totalCount = allItems.length;
 
-    if (error) {
-      Alert.alert('Spin failed', error.message);
-      return;
-    }
+  const handleClaimReward = async () => {
+    if (claiming || rewardClaimedToday) return;
+    setClaiming(true);
+
+    const { data, error } = await supabase.rpc('claim_daily_reward');
+    setClaiming(false);
+
+    if (error) return Alert.alert('Could not claim', error.message);
+
     if (!data?.ok) {
-      if (data?.reason === 'already_spun') {
-        Alert.alert('Come back tomorrow', 'You have already used your daily spin.');
+      if (data?.reason === 'already_claimed') {
+        Alert.alert('Come back tomorrow', 'Today\u2019s reward is already yours.');
       } else {
-        Alert.alert('Spin unavailable', 'Please try again in a moment.');
+        Alert.alert('Reward unavailable', 'Please try again in a moment.');
       }
       return;
     }
 
-    const prize = data.xp > 0 ? `JACKPOT! +${data.xp} XP 🔥` : `+${data.energy} Energy ⚡`;
-    Alert.alert('🎰 Lucky Spin', `You won: ${prize}`);
+    const won = [
+      data.energy ? `${data.energy} energy` : null,
+      data.xp ? `${data.xp} XP` : null,
+      data.freezes ? 'a streak freeze' : null,
+    ].filter(Boolean).join(' + ');
+
+    Alert.alert(`Day ${data.day}`, `You collected ${won}.`);
     fetchShopData();
     refreshProfile();
   };
@@ -480,16 +500,21 @@ export default function ShopScreen({ navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       <LinearGradient colors={gradients.screen} style={styles.gradientBg}>
-        <View style={styles.navRow}>
-          <TouchableOpacity
-            onPress={() => navigation.goBack()}
-            style={styles.backBtn}
-            accessibilityLabel="Go back"
-            activeOpacity={0.7}
-          >
-            <ChevronLeft color={colors.text} size={26} />
-          </TouchableOpacity>
-        </View>
+        {/* Shop is reachable both as a tab and, historically, as a pushed
+            card. `canGoBack` is what tells the two apart — a back arrow on a
+            root tab points at nothing. */}
+        {navigation.canGoBack() && (
+          <View style={styles.navRow}>
+            <TouchableOpacity
+              onPress={() => navigation.goBack()}
+              style={styles.backBtn}
+              accessibilityLabel="Go back"
+              activeOpacity={0.7}
+            >
+              <ChevronLeft color={colors.text} size={26} />
+            </TouchableOpacity>
+          </View>
+        )}
 
         <ScreenHeader
           title="Shop"
@@ -505,31 +530,35 @@ export default function ShopScreen({ navigation }) {
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}
           refreshControl={refreshControl}>
 
-          {/* The spin is free and expires daily, so it leads — and it is the one
-              card allowed a photographic gradient. Everything below it costs
+          {/* Free and expiring daily, so it leads. Everything below it costs
               energy and shares one restrained treatment, so the eye is not
-              asked to weigh four equally loud shelves. */}
-          <Press scale={0.98} onPress={handleDailySpin} style={styles.spinCard} accessibilityLabel="Daily lucky spin">
-            <LinearGradient
-              colors={spinUsed ? [colors.surfaceHigh, colors.surface] : ['#FF9A3C', '#E0490A']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.spinInner}
-            >
-              <View style={styles.spinGlyph}>
-                <Gift color={spinUsed ? colors.textMuted : colors.text} size={26} />
+              asked to weigh several equally loud shelves. */}
+          {/* What you are wearing right now.
+              A shop that opens straight onto shelves is a catalogue; the reason
+              any of it matters is how you appear to other people, and that was
+              only visible by leaving for your profile. Showing the current
+              loadout first makes the shelves an answer to something. */}
+          <FadeIn style={styles.loadout}>
+            <Avatar profile={profileData} size={62} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.loadoutName} numberOfLines={1}>
+                {profileData?.equipped_title || 'No title equipped'}
+              </Text>
+              <Text style={styles.loadoutNote}>
+                {ownedCount} of {totalCount} items unlocked
+              </Text>
+              <View style={styles.loadoutBar}>
+                <View style={[styles.loadoutFill, { width: `${totalCount ? (ownedCount / totalCount) * 100 : 0}%` }]} />
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.spinTitle, spinUsed && { color: colors.textSecondary }]}>
-                  {spinUsed ? 'Spun for today' : 'Daily spin'}
-                </Text>
-                <Text style={[styles.spinSub, spinUsed && { color: colors.textMuted }]}>
-                  {spinUsed ? 'Comes back tomorrow' : 'Free — energy or a burst of XP'}
-                </Text>
-              </View>
-              {!spinUsed && <ChevronRight color={colors.text} size={22} />}
-            </LinearGradient>
-          </Press>
+            </View>
+          </FadeIn>
+
+          <DailyRewardCard
+            day={profileData?.reward_day || 0}
+            claimedToday={rewardClaimedToday}
+            claiming={claiming}
+            onClaim={handleClaimReward}
+          />
 
           {SHELVES.map((shelf, shelfIndex) => {
             const items = shelf.pick({ powerups, titles, rings, avatars });
@@ -583,33 +612,29 @@ const styles = StyleSheet.create({
   gradientBg: { flex: 1 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: { padding: 20, paddingTop: 40 },
-  logoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  logoAndName: { flexDirection: 'row', alignItems: 'center' },
-  logoMark: { width: 32, height: 32, backgroundColor: colors.accent, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
-  appName: { color: colors.text, fontSize: 20, fontWeight: '700', marginLeft: 10 },
   screenTitle: { color: colors.textMuted, marginTop: 16, fontSize: 15, marginLeft: 20 },
   navRow: { paddingHorizontal: 16, paddingTop: 10, marginBottom: -14 },
   backBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface },
   balanceContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255, 215, 0, 0.2)' },
   balanceText: { color: colors.energy, fontSize: 17, fontWeight: '700', marginLeft: 10 },
+  loadout: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    backgroundColor: colors.card, borderRadius: 24,
+    padding: 16, marginHorizontal: 20, marginBottom: 16,
+  },
+  loadoutName: { color: colors.text, fontSize: 16, fontWeight: '700', letterSpacing: -0.3 },
+  loadoutNote: { color: colors.textMuted, fontSize: 12, marginTop: 3, marginBottom: 9 },
+  loadoutBar: { height: 6, borderRadius: 3, backgroundColor: colors.surfaceHigh, overflow: 'hidden' },
+  loadoutFill: { height: '100%', borderRadius: 3, backgroundColor: colors.accent },
   scrollContent: { paddingBottom: 120 },
   sectionTitle: { color: colors.text, fontSize: 20, fontWeight: '700', marginLeft: 20, marginTop: 20, marginBottom: 16 },
   horizontalScroll: { paddingHorizontal: 16, paddingRight: 26 },
 
-  spinCard: { marginHorizontal: 20, marginBottom: 30, borderRadius: 26, overflow: 'hidden' },
-  spinInner: { flexDirection: 'row', alignItems: 'center', padding: 20, gap: 16 },
-  spinGlyph: {
-    width: 46, height: 46, borderRadius: 23,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    alignItems: 'center', justifyContent: 'center',
-  },
   shelfBlock: { marginBottom: 30 },
   shelfHead: { paddingHorizontal: 20, marginBottom: 14 },
   shelfTitle: { color: colors.text, fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
   shelfNote: { color: colors.textMuted, fontSize: 13, marginTop: 3 },
   shelfRow: { paddingHorizontal: 20, gap: 12 },
-  spinTitle: { color: colors.text, fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
-  spinSub: { color: 'rgba(255,255,255,0.82)', fontSize: 13, marginTop: 3 },
 
   itemCard: { backgroundColor: colors.card, width: 140, borderRadius: 26, padding: 16, alignItems: 'center' },
   itemCardEquipped: { borderColor: colors.accent + 'AA', backgroundColor: 'rgba(46, 211, 198, 0.05)', shadowColor: colors.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.3, shadowRadius: 10, elevation: 5 },

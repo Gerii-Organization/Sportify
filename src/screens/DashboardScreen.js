@@ -4,9 +4,13 @@ import {
   Dimensions, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Alert, Animated
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { Flame, Trophy, Zap, User, LogIn, X, Bell, HelpCircle, Scale, Ruler, ChevronRight, Edit3, Footprints, Droplets, Clock, Moon, TrendingUp, Activity, Crown, CheckCircle2, Plus, Trash2, ChevronDown, ChevronUp, Edit2, Check, Star, Info } from 'lucide-react-native';
+import { Flame, Trophy, Menu, User, LogIn, X, Bell, HelpCircle, Scale, Ruler, ChevronRight, Edit3, Footprints, Droplets, Clock, Moon, TrendingUp, Activity, Crown, Plus, ChevronDown, ChevronUp, Edit2, Check, Star, Info } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Circle, G, Polygon, Defs, Filter, FeGaussianBlur } from 'react-native-svg';
+import Reanimated, { useSharedValue, useAnimatedProps, withTiming, withDelay, Easing } from 'react-native-reanimated';
+
+const AnimatedCircle = Reanimated.createAnimatedComponent(Circle);
+const AnimatedPolygon = Reanimated.createAnimatedComponent(Polygon);
 import { supabase } from '../lib/supabase';
 import { Pedometer } from 'expo-sensors';
 import { colors } from '../theme';
@@ -14,22 +18,38 @@ import { getAvatar, getRing } from '../constants/cosmetics';
 import { levelInfo } from '../lib/level';
 import { todayKey, formatDuration, formatRelativeDate } from '../lib/date';
 import { gradients } from '../theme';
-import ScreenHeader from '../components/ScreenHeader';
 import Avatar from '../components/Avatar';
 import { useAuth } from '../context/AuthContext';
 import EditProfileSheet from '../components/EditProfileSheet';
 import MacroRings, { macroTargets } from '../components/MacroRings';
-import { WATER_AMOUNTS } from '../constants/content';
+import { WATER_AMOUNTS, WATER_GOAL_ML } from '../constants/content';
 import AchievementGrid from '../components/AchievementGrid';
 import { mergeAchievements } from '../lib/achievements';
 import WeightSheet from '../components/WeightSheet';
 import { getSetting, setSetting } from '../lib/settings';
+import { syncReminders } from '../lib/reminders';
 import AmbientGlow from '../components/AmbientGlow';
 import useRefresh from '../lib/useRefresh';
-import StreakCalendar from '../components/StreakCalendar';
 import Press from '../components/Press';
+import ProgressArc from '../components/ProgressArc';
+import DailyQuests from '../components/DailyQuests';
 
 const { width } = Dimensions.get('window');
+
+/** Morning / afternoon / evening, from the device clock. */
+/** "7h 30m" back to 7.5, for the sleep dial. */
+function sleepHours(label) {
+  const m = /^(\d+)h\s*(\d+)?m?/.exec(String(label || ''));
+  if (!m) return 0;
+  return Number(m[1]) + (Number(m[2]) || 0) / 60;
+}
+
+function greetingFor(date) {
+  const h = date.getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 18) return 'Good afternoon';
+  return 'Good evening';
+}
 
 export default function DashboardScreen({ navigation, route }) {
   const { refreshControl } = useRefresh(() => fetchProfileAndStats());
@@ -40,18 +60,40 @@ export default function DashboardScreen({ navigation, route }) {
   const [isProfileModalVisible, setProfileModalVisible] = useState(false);
   const [isEditProfileVisible, setEditProfileVisible] = useState(false);
   const [isWeightSheetVisible, setWeightSheetVisible] = useState(false);
-  const [isStreakVisible, setStreakVisible] = useState(false);
-  /** Device preference, read by the rest timer before it schedules an alert. */
+  /** Device preferences. The rest timer and the daily reminders read these. */
   const [restAlerts, setRestAlerts] = useState(true);
+  const [streakReminders, setStreakReminders] = useState(true);
+  const [waterReminders, setWaterReminders] = useState(false);
 
   useEffect(() => {
     getSetting('restAlerts').then(setRestAlerts);
+    getSetting('streakReminders').then(setStreakReminders);
+    getSetting('waterReminders').then(setWaterReminders);
   }, []);
 
   const toggleRestAlerts = async () => {
     const next = !restAlerts;
     setRestAlerts(next);
     await setSetting('restAlerts', next);
+  };
+
+  /**
+   * Both reminder toggles resync immediately rather than waiting for the next
+   * launch. Switching one off has to cancel what is already pending, or the
+   * notification you just declined still arrives this evening.
+   */
+  const toggleStreakReminders = async () => {
+    const next = !streakReminders;
+    setStreakReminders(next);
+    await setSetting('streakReminders', next);
+    refreshReminders();
+  };
+
+  const toggleWaterReminders = async () => {
+    const next = !waterReminders;
+    setWaterReminders(next);
+    await setSetting('waterReminders', next);
+    refreshReminders();
   };
   const [isWaterModalVisible, setWaterModalVisible] = useState(false);
   const [isAddTaskModalVisible, setAddTaskModalVisible] = useState(false);
@@ -69,8 +111,59 @@ export default function DashboardScreen({ navigation, route }) {
     water: 0
   });
 
+  /** Drives the step ring's fill. Held here so it survives re-renders. */
+  /**
+   * Rebuilds the evening reminders from today's state.
+   *
+   * Deliberately reads `dailyStats` and `userProfile` rather than taking
+   * arguments: it is called from the toggles as well as after a fetch, and
+   * threading four values through both call sites is how they drift apart.
+   */
+  const streakDays = userProfile?.current_streak || 0;
+
+  const refreshReminders = useCallback(() => {
+    if (!isLoggedIn) return;
+    syncReminders({
+      trainedToday: dailyStats.activity > 0,
+      streak: userProfile?.current_streak || 0,
+      waterMl: dailyStats.water,
+      waterGoalMl: WATER_GOAL_ML,
+    });
+  }, [isLoggedIn, dailyStats.activity, dailyStats.water, userProfile?.current_streak]);
+
+  // Reschedules whenever the numbers it depends on change — finishing a workout
+  // cancels tonight's nudge without needing a relaunch.
+  useEffect(() => { refreshReminders(); }, [refreshReminders]);
+
+  const ringFill = useSharedValue(0);
+
+  useEffect(() => {
+    const goal = stepsGoal > 0 ? stepsGoal : 10000;
+    ringFill.value = withDelay(
+      200,
+      withTiming(Math.min(dailyStats.steps / goal, 1), {
+        duration: 900,
+        easing: Easing.out(Easing.cubic),
+      })
+    );
+  }, [dailyStats.steps, stepsGoal, ringFill]);
+
+  // The equipped ring decides the outline's perimeter, so it is resolved here
+  // rather than inside the render helper — the animated props depend on it.
+  const ringTheme = getRing(userProfile?.equipped_ring);
+
+  // This shape can be a polygon and carries a blur filter, so it draws its own
+  // outline instead of using ProgressArc. The fill comes from the same shared
+  // value, on the UI thread, so the whole screen moves together.
+  const animatedOutline = useAnimatedProps(() => ({
+    strokeDashoffset: ringTheme.perimeter * (1 - ringFill.value),
+  }));
+
+  const animatedPulse = useAnimatedProps(() => ({
+    strokeDashoffset: 190 * (1 - ringFill.value * 0.7),
+  }));
+
   const [tasks, setTasks] = useState([]);
-  const [isTasksCollapsed, setIsTasksCollapsed] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [isCustomExpanded, setIsCustomExpanded] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState('');
@@ -507,11 +600,12 @@ export default function DashboardScreen({ navigation, route }) {
   };
 
 const renderProgressShape = () => {
-    const theme = getRing(userProfile?.equipped_ring);
+    const theme = ringTheme;
     // Guard against divide-by-zero when the user has no step goal set.
     const safeStepsGoal = stepsGoal > 0 ? stepsGoal : 10000;
     const progress = Math.min(dailyStats.steps / safeStepsGoal, 1);
-    const offset = theme.perimeter - (theme.perimeter * progress);
+
+
 
     // Each ring is drawn three times: a blurred copy for the glow, a dark
     const renderShape = (points, isCircle = false) => {
@@ -522,7 +616,7 @@ const renderProgressShape = () => {
             <Circle cx="50" cy="50" r="45" stroke={theme.color} strokeWidth="8" fill="transparent" opacity="0.7" filter="url(#glow)" />
             {/* Track and progress arc, drawn sharp on top of the glow. */}
             <Circle cx="50" cy="50" r="45" stroke="#121212" strokeWidth="3" fill="transparent" />
-            <Circle cx="50" cy="50" r="45" stroke={theme.color} strokeWidth="3" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" />
+            <AnimatedCircle cx="50" cy="50" r="45" stroke={theme.color} strokeWidth="3" fill="transparent" strokeDasharray={theme.perimeter} strokeLinecap="round" animatedProps={animatedOutline} />
           </G>
         );
       }
@@ -532,7 +626,7 @@ const renderProgressShape = () => {
           <Polygon points={points} stroke={theme.color} strokeWidth="8" fill="transparent" strokeLinejoin="round" opacity="0.7" filter="url(#glow)" />
           {/* Track and progress outline. */}
           <Polygon points={points} stroke="#121212" strokeWidth="3" fill="transparent" strokeLinejoin="round" />
-          <Polygon points={points} stroke={theme.color} strokeWidth="3" fill="transparent" strokeDasharray={theme.perimeter} strokeDashoffset={offset} strokeLinecap="round" strokeLinejoin="round" />
+          <AnimatedPolygon points={points} stroke={theme.color} strokeWidth="3" fill="transparent" strokeDasharray={theme.perimeter} strokeLinecap="round" strokeLinejoin="round" animatedProps={animatedOutline} />
         </G>
       );
     };
@@ -556,7 +650,7 @@ const renderProgressShape = () => {
             {shapeContent}
             
             {theme.type === 'pulse' && (
-              <Circle cx="50" cy="50" r="32" stroke={theme.color} strokeWidth="1.5" fill="transparent" opacity={0.4} strokeDasharray={190} strokeDashoffset={offset * 0.7} filter="url(#glow)" />
+              <AnimatedCircle cx="50" cy="50" r="32" stroke={theme.color} strokeWidth="1.5" fill="transparent" opacity={0.4} strokeDasharray={190} filter="url(#glow)" animatedProps={animatedPulse} />
             )}
           </Svg>
           
@@ -585,53 +679,70 @@ const renderProgressShape = () => {
     );
   };
 
-  const renderTaskItem = (item) => {
-    const completed = isTaskAutoCompleted(item);
-    return (
-      <View key={item.id} style={[styles.taskCard, completed && styles.neonBorder]}>
-        <TouchableOpacity activeOpacity={0.7} style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }} onPress={() => toggleTask(item.id, item.completed)}>
-          {completed ? <CheckCircle2 size={24} color={colors.accent} /> : <View style={styles.circleOutline} />}
-          <View style={{ marginLeft: 16 }}>
-            <Text style={styles.taskTitleText}>{item.title}</Text>
-            {item.type === 'water' && <Text style={styles.taskSub}>{(dailyStats.water / 1000).toFixed(2)}L / {item.goal}L</Text>}
-            {item.type === 'gym' && <Text style={styles.taskSub}>{dailyStats.activity} min / {item.goal} min</Text>}
-          </View>
-        </TouchableOpacity>
-        {isEditMode && <TouchableOpacity accessibilityLabel="Delete" activeOpacity={0.7} onPress={() => deleteTask(item.id)}><Trash2 color={colors.danger} size={20} /></TouchableOpacity>}
-      </View>
-    );
+  /**
+   * The quest list, as plain data.
+   *
+   * Rendering used to happen here — two helpers returning JSX, assembled into an
+   * array. Describing each quest instead lets DailyQuests decide how to draw it,
+   * and keeps the "is this done" rules in one place rather than split between a
+   * predicate and two renderers.
+   */
+  const buildQuests = () => {
+    const list = [];
+    const gymTask = tasks.find((t) => t.type === 'gym');
+    const waterTask = tasks.find((t) => t.type === 'water');
+
+    if (gymTask) {
+      list.push({
+        key: gymTask.id,
+        id: gymTask.id,
+        type: 'gym',
+        title: gymTask.title,
+        done: isTaskAutoCompleted(gymTask),
+        detail: `${dailyStats.activity} / ${gymTask.goal} min`,
+        raw: gymTask,
+      });
+    } else {
+      list.push({ key: 'setup-gym', type: 'gym', title: 'Train for -- minutes', setup: true });
+    }
+
+    if (waterTask) {
+      list.push({
+        key: waterTask.id,
+        id: waterTask.id,
+        type: 'water',
+        title: waterTask.title,
+        done: isTaskAutoCompleted(waterTask),
+        detail: `${(dailyStats.water / 1000).toFixed(1)} / ${waterTask.goal} L`,
+        accessibilityLabel: 'Log water',
+        raw: waterTask,
+      });
+    } else {
+      list.push({ key: 'setup-water', type: 'water', title: 'Drink -- L of water', setup: true });
+    }
+
+    tasks.filter((t) => t.type === 'manual').forEach((t) => {
+      list.push({
+        key: t.id,
+        id: t.id,
+        type: 'manual',
+        title: t.title,
+        done: isTaskAutoCompleted(t),
+        raw: t,
+      });
+    });
+
+    return list;
   };
 
-  const renderSetupItem = (type, title) => {
-    return (
-      <View key={type} style={[styles.taskCard, { borderColor: colors.border }]}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-          <View style={[styles.circleOutline, { borderStyle: 'dashed', borderColor: '#444' }]} />
-          <View style={{ marginLeft: 16, flex: 1 }}>
-            <Text style={[styles.taskTitleText, { color: colors.textSecondary }]}>{title}</Text>
-          </View>
-        </View>
-        <TouchableOpacity activeOpacity={0.7} style={styles.setupBtn} onPress={() => { setTaskType(type); setAddTaskModalVisible(true); }}>
-          <Text style={styles.setupBtnText}>Set up</Text>
-        </TouchableOpacity>
-      </View>
-    );
+  const quests = buildQuests();
+
+  /** Water is measured, so its row logs rather than ticks. */
+  const onPressQuest = (quest) => {
+    if (quest.type === 'water') return setWaterModalVisible(true);
+    if (quest.type === 'gym') return;
+    toggleTask(quest.id, quest.raw.completed);
   };
-
-  const taskElements = [];
-  const gymTask = tasks.find(t => t.type === 'gym');
-  const waterTask = tasks.find(t => t.type === 'water');
-  const customTasks = tasks.filter(t => t.type === 'manual');
-
-  if (gymTask) taskElements.push(renderTaskItem(gymTask));
-  else taskElements.push(renderSetupItem('gym', 'Gym for -- minutes'));
-
-  if (waterTask) taskElements.push(renderTaskItem(waterTask));
-  else taskElements.push(renderSetupItem('water', 'Drink -- L Water'));
-
-  customTasks.forEach(t => taskElements.push(renderTaskItem(t)));
-
-  const visibleTasks = isTasksCollapsed ? taskElements.slice(0, 2) : taskElements;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -660,63 +771,77 @@ const renderProgressShape = () => {
         <ScrollView ref={scrollViewRef} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}
           refreshControl={refreshControl}>
 
-          <ScreenHeader
-            title={`Hello, ${isLoggedIn ? userProfile?.first_name || 'User' : 'Guest'}`}
-            right={
-              <View style={styles.headerActions}>
-                {isLoggedIn && (
-                  <>
-                    {/* Streak: flame and a number, nothing else. It is a status
-                        light, not a card — the detail lives in the calendar. */}
-                    <Press
-                      scale={0.94}
-                      style={styles.headerPill}
-                      onPress={() => setStreakVisible(true)}
-                      accessibilityLabel={`Streak: ${userProfile?.current_streak || 0} days. Open calendar.`}
-                    >
-                      <Flame
-                        color={colors.streak}
-                        size={15}
-                        fill={(userProfile?.current_streak || 0) > 0 ? colors.streak : 'transparent'}
-                      />
-                      <Text style={[styles.pillValue, { color: colors.streak }]}>
-                        {userProfile?.current_streak || 0}
-                      </Text>
-                    </Press>
+          {/* Avatar on the left, beside the name it belongs to — that is where a
+              profile photo reads as "you" rather than as a control. The menu
+              moves right as a hamburger, which says "settings" far more plainly
+              than a face does.
 
-                    {/* Energy reads as currency: the chevron is what tells you
-                        it goes somewhere rather than just reporting a number. */}
-                    <Press
-                      scale={0.94}
-                      style={styles.headerPill}
-                      onPress={() => navigation.navigate('ShopScreen')}
-                      accessibilityLabel={`${userProfile?.energy_points || 0} energy. Open shop.`}
-                    >
-                      <Zap color={colors.energy} size={15} fill={colors.energy} />
-                      <Text style={[styles.pillValue, { color: colors.energy }]}>
-                        {userProfile?.energy_points ?? 0}
-                      </Text>
-                      <ChevronRight color={colors.textFaint} size={13} />
-                    </Press>
-                  </>
-                )}
-
-                <Press scale={0.94} onPress={() => setMenuVisible(true)} accessibilityLabel="Open menu">
-                  <Avatar profile={userProfile} size={40} muted={!isLoggedIn} />
-                </Press>
+              The streak and energy pills drop to their own row: in the top-right
+              slot they were competing with the avatar for the same corner, and
+              here they get room to be read rather than glanced past. */}
+          {/* Everything on one row: identity left, status and menu right.
+              The status pills sat on their own line before, which cost a whole
+              band of vertical space to show two numbers. As compact chips they
+              stay glanceable and the ring moves up into view. */}
+          <View style={styles.topBar}>
+            <Press
+              scale={0.95}
+              style={styles.identity}
+              onPress={() => (isLoggedIn ? setProfileModalVisible(true) : navigation.navigate('AuthScreen'))}
+              accessibilityLabel={isLoggedIn ? 'Open your profile' : 'Sign in'}
+            >
+              <Avatar profile={userProfile} size={42} muted={!isLoggedIn} />
+              <View style={styles.identityText}>
+                <Text style={styles.greeting}>{greetingFor(new Date())}</Text>
+                <Text style={styles.userName} numberOfLines={1}>
+                  {isLoggedIn ? userProfile?.first_name || 'Athlete' : 'Guest'}
+                </Text>
               </View>
-            }
-          />
+            </Press>
+
+            {/* The energy count used to sit here as a second chip. It is a
+                shop balance — you look at it when you are about to spend, and
+                the shop shows it at the top of its own screen. On the dashboard
+                it was a number with nowhere to go.
+
+                Dropping it leaves room for the streak to say what it is. A bare
+                "5" next to a flame is a quantity of nothing in particular; the
+                streak is the figure people actually open the app to check, so
+                it gets the word. */}
+            <View style={styles.topRight}>
+              {isLoggedIn && (
+                <Press
+                  scale={0.95}
+                  style={[styles.streakChip, streakDays > 0 && styles.streakChipOn]}
+                  onPress={() => navigation.navigate('StreakScreen')}
+                  accessibilityLabel={`Streak: ${streakDays} days. Open calendar.`}
+                >
+                  <Flame
+                    color={streakDays > 0 ? colors.streak : colors.textFaint}
+                    size={16}
+                    fill={streakDays > 0 ? colors.streak : 'transparent'}
+                  />
+                  <Text style={[styles.streakChipText, streakDays > 0 && { color: colors.streak }]}>
+                    {streakDays > 0 ? `${streakDays} day${streakDays === 1 ? '' : 's'}` : 'No streak'}
+                  </Text>
+                </Press>
+              )}
+
+              <Press
+                scale={0.92}
+                style={styles.menuBtn}
+                onPress={() => setMenuVisible(true)}
+                accessibilityLabel="Open menu"
+              >
+                <Menu color={colors.text} size={20} />
+              </Press>
+            </View>
+          </View>
 
           {renderProgressShape()}
 
           <View style={styles.sectionHeader}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Text style={styles.sectionTitle}>Daily Quests</Text>
-              <TouchableOpacity activeOpacity={0.7} onPress={() => setIsTasksCollapsed(!isTasksCollapsed)} style={{ marginLeft: 10 }}>
-                {isTasksCollapsed ? <ChevronDown color={colors.accent} size={22} /> : <ChevronUp color={colors.accent} size={22} />}
-              </TouchableOpacity>
-            </View>
+            <Text style={styles.sectionTitle}>Daily Quests</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               {isEditMode && (
                 <TouchableOpacity accessibilityLabel="Add" activeOpacity={0.7} onPress={() => { setTaskType('manual'); setAddTaskModalVisible(true); }} style={[styles.editButtonBorder, { marginRight: 10 }]}>
@@ -729,44 +854,88 @@ const renderProgressShape = () => {
             </View>
           </View>
 
-          <View>
-            {visibleTasks}
-          </View>
+          <DailyQuests
+            quests={quests}
+            isEditMode={isEditMode}
+            onPressQuest={onPressQuest}
+            onSetup={(type) => { setTaskType(type); setAddTaskModalVisible(true); }}
+            onDelete={deleteTask}
+          />
 
-          <Text style={styles.eyebrow}>Daily Summary</Text>
-          <View style={styles.statsGrid}>
-            <StatCardWrapper
-              icon={<Flame size={15} color={colors.accent} />}
-              label="Calories"
+          <View style={styles.summaryHead}>
+            <Text style={styles.eyebrow}>Daily Summary</Text>
+            {isLoggedIn && (
+              <Press
+                scale={0.95}
+                style={styles.logWaterBtn}
+                onPress={() => setWaterModalVisible(true)}
+                accessibilityLabel="Log water"
+              >
+                <Droplets color={colors.water} size={14} />
+                <Text style={styles.logWaterText}>Log water</Text>
+              </Press>
+            )}
+          </View>
+          {/* Calories leads. It is the figure with a real target, the one
+              people check most, and treating all four as equal rows made the
+              block read as a settings list. The other three are supporting
+              numbers and are sized like it. */}
+          {/* Four columns in one band, each with its own gauge.
+              Previous versions treated the four as either equal rows or one
+              hero plus three extras. Both spent a lot of height. A band reads
+              in a single glance, keeps the four comparable, and leaves the
+              vertical space for the macro rings underneath.
+
+              The gauge is a vertical bar rather than a ring, so it does not
+              repeat the shape used by the step ring above and the macros
+              below. */}
+          {/* Colour as surface rather than as an accent line.
+              Every earlier version kept the same neutral card and coloured a
+              glyph or a bar inside it, so the four blocks were distinguished by
+              a detail you had to look at. Tinting the tile itself makes each
+              one recognisable before you read anything — and it lets the number
+              sit on its own without a gauge competing beside it. */}
+          <View style={styles.arcRow}>
+            <Arc
+              index={0}
+              color={colors.calories}
+              icon="flame"
               value={Math.round(dailyStats.calories)}
-              unit={`of ${getRecommendedCalories()}`}
-              color={colors.accent}
+              unit=""
+              label="Calories"
               progress={dailyStats.calories / getRecommendedCalories()}
+              onPress={() => navigation.navigate('MetricScreen', { metric: 'calories' })}
             />
-            <StatCardWrapper
-              icon={<Clock size={15} color={colors.activity} />}
-              label="Activity"
+            <Arc
+              index={1}
+              color={colors.activity}
+              icon="clock"
               value={dailyStats.activity}
               unit="min"
-              color={colors.activity}
+              label="Active"
               progress={dailyStats.activity / 60}
+              onPress={() => navigation.navigate('MetricScreen', { metric: 'activity' })}
             />
-            <StatCardWrapper
-              icon={<Moon size={15} color={colors.sleep} />}
-              label="Sleep"
-              value={dailyStats.sleep}
-              unit=""
-              color={colors.sleep}
-              hint={Platform.OS === 'ios' ? 'From Apple Health' : 'iOS only for now'}
-            />
-            <StatCardWrapper
-              icon={<Droplets size={15} color={colors.water} />}
-              label="Water"
+            <Arc
+              index={2}
+              color={colors.water}
+              icon="drop"
               value={(dailyStats.water / 1000).toFixed(1)}
               unit="L"
-              color={colors.water}
-              progress={dailyStats.water / 2500}
-              onPress={() => setWaterModalVisible(true)}
+              label="Water"
+              progress={dailyStats.water / WATER_GOAL_ML}
+              onPress={() => navigation.navigate('MetricScreen', { metric: 'water' })}
+            />
+            <Arc
+              index={3}
+              color={colors.sleep}
+              icon="moon"
+              value={dailyStats.sleep}
+              unit=""
+              label="Sleep"
+              scaleMax={12}
+              raw={sleepHours(dailyStats.sleep)}
+              onPress={() => navigation.navigate('MetricScreen', { metric: 'sleep' })}
             />
           </View>
 
@@ -850,10 +1019,16 @@ const renderProgressShape = () => {
             <View style={styles.menuDivider} />
             <ScrollView style={{ flex: 1 }}>
               <Text style={styles.menuGroupTitle}>Your data</Text>
+              {/* Analytics, history and records now live behind the Progress
+                  tab. Keeping the three menu rows as well would give each of
+                  them two entry points with different presentations — a pushed
+                  card from here, an inline panel from the tab bar. */}
               <MenuOption
-                icon={<Activity color={colors.textMuted} size={20}/>}
-                label="Analytics"
-                onPress={() => { setMenuVisible(false); navigation.navigate('StatsScreen'); }}
+                icon={<TrendingUp color={colors.textMuted} size={20}/>}
+                label="Progress"
+                value="Stats, history, records"
+                onPress={() => { setMenuVisible(false); navigation.navigate('Progress'); }}
+                disabled={!isLoggedIn}
               />
               <MenuOption
                 icon={<Scale color={colors.textMuted} size={20}/>}
@@ -868,6 +1043,20 @@ const renderProgressShape = () => {
                 label="Rest timer alerts"
                 value={restAlerts ? 'On' : 'Off'}
                 onPress={toggleRestAlerts}
+              />
+              <MenuOption
+                icon={<Flame color={colors.textMuted} size={20}/>}
+                label="Streak reminder"
+                value={streakReminders ? '19:00' : 'Off'}
+                onPress={toggleStreakReminders}
+                disabled={!isLoggedIn}
+              />
+              <MenuOption
+                icon={<Droplets color={colors.textMuted} size={20}/>}
+                label="Water reminders"
+                value={waterReminders ? '3 a day' : 'Off'}
+                onPress={toggleWaterReminders}
+                disabled={!isLoggedIn}
               />
               <MenuOption
                 icon={<Ruler color={colors.textMuted} size={20}/>}
@@ -1033,8 +1222,6 @@ const renderProgressShape = () => {
         </View>
       </Modal>
 
-      <StreakCalendar visible={isStreakVisible} onClose={() => setStreakVisible(false)} />
-
       <WeightSheet
         visible={isWeightSheetVisible}
         onClose={() => setWeightSheetVisible(false)}
@@ -1079,47 +1266,63 @@ function MenuOption({ icon, label, value, onPress, disabled }) {
   );
 }
 
+const ARC_ICONS = { flame: Flame, clock: Clock, drop: Droplets, moon: Moon };
+
 /**
- * A tile in Daily Summary.
+ * One gauge in the daily summary row.
  *
- * Same anatomy as the macro rings, which is what makes the two sections read as
- * one screen: a tinted glyph, the figure at full size, and a track underneath
- * that fills toward the goal.
+ * The ring fills on load, staggered across the four so the row reads left to
+ * right rather than snapping into place all at once.
  *
- * `progress` is optional. Sleep has no target worth drawing, so its tile omits
- * the bar rather than showing an empty one — an empty track reads as zero, not
- * as not-applicable.
+ * `scaleMax` covers the case where a figure has a range but no target — sleep
+ * runs on a 0–12 hour dial, so the ring still travels, but the centre shows the
+ * icon rather than a percentage. Calling 62% of twelve hours a score would be
+ * telling someone their sleep was 62% correct.
  */
-function StatCardWrapper({ icon, label, value, unit, color, onPress, progress, hint }) {
-  const pct = typeof progress === 'number' ? Math.min(Math.max(progress, 0), 1) : null;
+function Arc({ color, icon, value, unit, label, progress, scaleMax, raw, index = 0, onPress }) {
+  const Icon = ARC_ICONS[icon] || Flame;
+
+  const hasGoal = typeof progress === 'number';
+  const fill = hasGoal
+    ? Math.min(Math.max(progress, 0), 1)
+    : typeof scaleMax === 'number' && typeof raw === 'number'
+    ? Math.min(Math.max(raw / scaleMax, 0), 1)
+    : 0;
+
+  const shown = hasGoal ? Math.round(progress * 100) : null;
 
   return (
     <Press
-      scale={onPress ? 0.965 : 1}
-      style={styles.statCardWrapper}
+      scale={0.94}
       onPress={onPress}
-      disabled={!onPress}
-      accessibilityLabel={onPress ? `${label}: ${value} ${unit}. Tap to change.` : `${label}: ${value} ${unit}`}
+      style={styles.arcCol}
+      accessibilityLabel={
+        shown !== null
+          ? `${label}: ${value} ${unit}, ${shown} percent of goal. Open details.`
+          : `${label}: ${value}. Open details.`
+      }
     >
-      <View style={styles.statCardInner}>
-        <View style={styles.statTop}>
-          <View style={[styles.statGlyph, { backgroundColor: `${color}1F` }]}>{icon}</View>
-          <Text style={styles.statLabel}>{label}</Text>
+      <View style={styles.arcGauge}>
+        <ProgressArc
+          progress={fill}
+          color={color}
+          size={52}
+          strokeWidth={4}
+          delay={140 + index * 90}
+        />
+        <View style={styles.arcCentre}>
+          {shown !== null ? (
+            <Text style={[styles.arcPct, shown > 100 && { color }]}>{shown}%</Text>
+          ) : (
+            <Icon color={color} size={17} />
+          )}
         </View>
-
-        <View style={styles.statValueContainer}>
-          <Text style={styles.statValue}>{value}</Text>
-          {unit ? <Text style={styles.statUnit}>{unit}</Text> : null}
-        </View>
-
-        {pct !== null ? (
-          <View style={styles.statTrack}>
-            <View style={[styles.statFill, { width: `${pct * 100}%`, backgroundColor: color }]} />
-          </View>
-        ) : (
-          <Text style={styles.statHint} numberOfLines={1}>{hint || ' '}</Text>
-        )}
       </View>
+
+      <Text style={styles.arcValue} numberOfLines={1} adjustsFontSizeToFit>
+        {value}{unit ? ` ${unit}` : ''}
+      </Text>
+      <Text style={styles.arcLabel}>{label}</Text>
     </Press>
   );
 }
@@ -1161,25 +1364,9 @@ const styles = StyleSheet.create({
   gradientBg: { flex: 1 },
   scrollContent: { paddingBottom: 100 },
   header: { padding: 20 },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   // Pills, not cards: small, self-contained, and clearly separate from the
   // avatar beside them. The value carries the colour so the number is the
   // thing you read, not the container.
-  headerPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: colors.surfaceHigh,
-    paddingLeft: 11,
-    paddingRight: 9,
-    paddingVertical: 8,
-    borderRadius: 999,
-  },
-  pillValue: { fontSize: 14, fontWeight: '700', letterSpacing: -0.2 },
-  logoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  logoAndName: { flexDirection: 'row', alignItems: 'center' },
-  logoMark: { width: 32, height: 32, backgroundColor: colors.accent, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
-  appName: { color: colors.text, fontSize: 20, fontWeight: '700', marginLeft: 10 },
   dateText: { color: colors.textMuted, marginTop: 16, fontSize: 15 },
   welcomeText: { color: colors.text, fontSize: 34, fontWeight: '800' },
 
@@ -1199,17 +1386,15 @@ const styles = StyleSheet.create({
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 16, alignItems: 'center' },
   sectionTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
   editButtonBorder: { width: 42, height: 42, justifyContent: 'center', alignItems: 'center', borderRadius: 21, backgroundColor: colors.card },
-  emptyTaskPlaceholder: { height: 120, marginHorizontal: 20, borderRadius: 28, borderStyle: 'dashed', justifyContent: 'center', alignItems: 'center' },
-  emptyTaskText: { color: '#333', marginTop: 10, fontWeight: '600' },
 
-  taskCard: { backgroundColor: colors.card, marginHorizontal: 20, borderRadius: 24, padding: 20, flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  neonBorder: { borderColor: colors.accent + 'AA' },
-  circleOutline: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: colors.borderLight },
-  taskTitleText: { color: colors.text, fontSize: 15, fontWeight: '600' },
-  taskSub: { color: colors.textMuted, fontSize: 13 },
+  summaryHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingRight: 20 },
+  logWaterBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: 'rgba(79, 184, 232, 0.14)',
+    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999,
+  },
+  logWaterText: { color: colors.water, fontSize: 12, fontWeight: '700' },
 
-  setupBtn: { backgroundColor: colors.surfaceRaised, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 14 },
-  setupBtnText: { color: colors.text, fontSize: 13, fontWeight: '600' },
 
 
   eyebrow: {
@@ -1222,28 +1407,69 @@ const styles = StyleSheet.create({
     marginTop: 26,
     marginBottom: 12,
   },
-  statsGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 16, gap: 12 },
   // Two per row with a gap between, so the tiles line up with the macro card
   // below rather than sitting on their own rhythm.
-  statCardWrapper: { width: '47.5%', flexGrow: 1 },
-  statCardInner: {
-    backgroundColor: colors.card,
-    borderRadius: 22,
-    padding: 16,
-    minHeight: 118,
-    justifyContent: 'space-between',
-  },
-  statTop: { flexDirection: 'row', alignItems: 'center', gap: 9 },
-  statGlyph: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  statLabel: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
-  statValueContainer: { flexDirection: 'row', alignItems: 'baseline', gap: 5, marginTop: 10 },
-  statValue: { color: colors.text, fontSize: 26, fontWeight: '800', letterSpacing: -0.6 },
-  statUnit: { color: colors.textMuted, fontSize: 12, fontWeight: '600' },
   // A 3pt track is enough to read as progress without becoming a second
   // headline competing with the number above it.
-  statTrack: { height: 3, borderRadius: 2, backgroundColor: colors.surfaceHigh, marginTop: 12, overflow: 'hidden' },
-  statFill: { height: '100%', borderRadius: 2 },
-  statHint: { color: colors.textFaint, fontSize: 11, marginTop: 12 },
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    gap: 12,
+  },
+  topRight: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  // Chips, not pills: icon plus number only. At this size a word would wrap or
+  // truncate, and the icon already says which number it is.
+  streakChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 7,
+    paddingHorizontal: 13, paddingVertical: 9, borderRadius: 999,
+    backgroundColor: colors.surface,
+  },
+  streakChipOn: { backgroundColor: 'rgba(255, 138, 43, 0.14)' },
+  streakChipText: { color: colors.textMuted, fontSize: 13, fontWeight: '700', letterSpacing: -0.2 },
+  identity: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  identityText: { flex: 1 },
+  greeting: { color: colors.textMuted, fontSize: 13, fontWeight: '500' },
+  userName: { color: colors.text, fontSize: 21, fontWeight: '800', letterSpacing: -0.5, marginTop: 1 },
+  menuBtn: {
+    width: 42, height: 42, borderRadius: 21,
+    backgroundColor: colors.surface,
+    alignItems: 'center', justifyContent: 'center',
+  },
+
+  // Equal halves rather than content-width pills: two numbers of similar
+  // importance should not be sized by how many digits they happen to have.
+
+  // The glyph sits inside the ring rather than beside it, so the tile has one
+  // visual anchor instead of two.
+  // 3pt, inset to the text column so it reads as belonging to this row rather
+  // than as a divider between rows.
+
+  // What is left is more actionable than what is eaten, so it gets the accent.
+
+
+  // 44pt tall, 4pt wide: enough to read as a level without becoming a chart.
+
+  // Along the bottom edge, full bleed: progress belongs to the tile rather than
+  // sitting inside it as another element.
+
+  arcRow: {
+    flexDirection: 'row',
+    backgroundColor: colors.card,
+    borderRadius: 24,
+    marginHorizontal: 16,
+    paddingVertical: 18,
+    paddingHorizontal: 6,
+  },
+  arcCol: { flex: 1, alignItems: 'center', gap: 2 },
+  arcGauge: { width: 52, height: 52, alignItems: 'center', justifyContent: 'center' },
+  arcCentre: { position: 'absolute', alignItems: 'center', justifyContent: 'center' },
+  arcPct: { color: colors.text, fontSize: 13, fontWeight: '700', letterSpacing: -0.2 },
+  arcValue: { color: colors.text, fontSize: 14, fontWeight: '700', marginTop: 6 },
+  arcLabel: { color: colors.textMuted, fontSize: 11, fontWeight: '600' },
+
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end' },
   modalContentTasks: { backgroundColor: colors.sheet, borderTopLeftRadius: 35, borderTopRightRadius: 35, padding: 26, width: '100%', maxHeight: '85%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 26 },
@@ -1258,7 +1484,7 @@ const styles = StyleSheet.create({
   divider: { height: 1, backgroundColor: colors.surfaceHigh, marginVertical: 16 },
   suggestedGridTasks: { flexDirection: 'row', justifyContent: 'space-between' },
   suggestedItem: { alignItems: 'center', paddingVertical: 26, borderRadius: 28, backgroundColor: colors.surfaceRaised, width: '48%', borderWidth: 1, borderColor: 'transparent' },
-  selectedItem: { backgroundColor: '#252525', borderColor: colors.borderLight },
+  selectedItem: { backgroundColor: colors.surfaceRaised, borderColor: colors.borderLight },
   suggestedText: { color: colors.textMuted, marginTop: 10, fontWeight: '600' },
 
   menuOverlaySide: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', flexDirection: 'row' },
@@ -1289,7 +1515,7 @@ const styles = StyleSheet.create({
   modalContentWater: { backgroundColor: colors.card, borderRadius: 32, padding: 26, width: '85%', alignItems: 'center' },
   modalTitle: { color: colors.text, fontSize: 26, fontWeight: '800', marginBottom: 26 },
   selectionGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', width: '100%' },
-  amountButton: { backgroundColor: '#1c2533', paddingVertical: 20, borderRadius: 20, marginBottom: 16, width: '47%', alignItems: 'center' },
+  amountButton: { backgroundColor: colors.surfaceRaised, paddingVertical: 20, borderRadius: 20, marginBottom: 16, width: '47%', alignItems: 'center' },
   amountButtonText: { color: colors.text, fontWeight: '600', fontSize: 15 },
   undoWaterBtn: {
     paddingVertical: 10,

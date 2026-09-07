@@ -1,11 +1,11 @@
 import { useState, useCallback, useEffect } from 'react';
 import { 
-  View, Text, StyleSheet, FlatList, TouchableOpacity, 
+  View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
   Modal, SafeAreaView, TextInput, KeyboardAvoidingView, Platform, Alert 
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
-import { Plus, Dumbbell, Play, Trash2, Zap, Layout, ChevronDown, ChevronUp, RotateCcw, Copy } from 'lucide-react-native';
+import { Plus, Dumbbell, Play, Zap, Layout, ChevronDown, ChevronUp, RotateCcw, Bookmark } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors } from '../theme';
 import { gradients } from '../theme';
@@ -13,26 +13,33 @@ import ScreenHeader from '../components/ScreenHeader';
 import AmbientGlow from '../components/AmbientGlow';
 import EmptyState from '../components/EmptyState';
 import useRefresh from '../lib/useRefresh';
-import { formatRelativeDate } from '../lib/date';
-import { exercisesInGroup } from '../constants/exercises';
+import { formatRelativeDate, todayKey, currentWeekKeys, startOfWeekIso } from '../lib/date';
+import { exercisesInGroup, MUSCLES } from '../constants/exercises';
 import { useAuth } from '../context/AuthContext';
 import Press from '../components/Press';
 import FadeIn from '../components/FadeIn';
-import Avatar from '../components/Avatar';
+import WeeklyGoal from '../components/WeeklyGoal';
+import WorkoutCard from '../components/WorkoutCard';
 
 
 export default function TrainingScreen({ navigation }) {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const { refreshControl } = useRefresh(() => fetchMyWorkouts());
   const [myWorkouts, setMyWorkouts] = useState([]);
   const [suggestedWorkouts, setSuggestedWorkouts] = useState([]);
   const [mainMenuVisible, setMainMenuVisible] = useState(false);
   /** Most recent finished session, offered as a one-tap repeat. */
   const [lastSession, setLastSession] = useState(null);
-  /** 'mine' = your saved workouts, 'browse' = public ones plus what we suggest. */
+  /** Local day keys, this calendar week, on which a workout was finished. */
+  const [trainedDays, setTrainedDays] = useState([]);
+  /** 'mine' = your own plans, 'saved' = other people's you bookmarked,
+   *  'browse' = everything public. */
   const [view, setView] = useState('mine');
   const [publicWorkouts, setPublicWorkouts] = useState([]);
+  const [savedWorkouts, setSavedWorkouts] = useState([]);
   const [browseLoading, setBrowseLoading] = useState(false);
+  /** Browse filter. null means every muscle group. */
+  const [browseMuscle, setBrowseMuscle] = useState(null);
   const [isBuiltInExpanded, setIsBuiltInExpanded] = useState(false);
   const [isNamingModalVisible, setIsNamingModalVisible] = useState(false);
   const [newWorkoutName, setNewWorkoutName] = useState('');
@@ -73,18 +80,66 @@ export default function TrainingScreen({ navigation }) {
     // Only offer it if the workout still exists — it may have been deleted.
     const stillExists = last && (data || []).some((w) => String(w.id) === String(last.workout_id));
     setLastSession(stillExists ? last : null);
+
+    // Distinct days, not sessions: two workouts on Monday is one day of the
+    // weekly target, which is how anyone counts "four times a week".
+    const { data: thisWeek } = await supabase
+      .from('workout_completions')
+      .select('completed_at')
+      .eq('user_id', user.id)
+      .gte('completed_at', startOfWeekIso());
+
+    setTrainedDays([...new Set((thisWeek || []).map((w) => todayKey(new Date(w.completed_at))))]);
   };
 
   const fetchPublicWorkouts = useCallback(async () => {
     setBrowseLoading(true);
-    const { data } = await supabase.rpc('browse_workouts', { p_limit: 30, p_search: null });
+    // The muscle filter runs on the server. Filtering here would apply to the
+    // 30 rows that already came back, so "Legs only" would quietly miss plans
+    // that fell outside the first page.
+    const { data } = await supabase.rpc('browse_workouts', {
+      p_limit: 30,
+      p_search: null,
+      p_muscle: browseMuscle,
+    });
     setPublicWorkouts(data || []);
     setBrowseLoading(false);
+  }, [browseMuscle]);
+
+  const fetchSavedWorkouts = useCallback(async () => {
+    const { data } = await supabase.rpc('get_saved_workouts');
+    setSavedWorkouts(data || []);
   }, []);
 
   useEffect(() => {
-    if (view === 'browse' && publicWorkouts.length === 0) fetchPublicWorkouts();
-  }, [view, publicWorkouts.length, fetchPublicWorkouts]);
+    if (view === 'browse') fetchPublicWorkouts();
+  }, [view, browseMuscle, fetchPublicWorkouts]);
+
+  useEffect(() => {
+    if (view === 'saved') fetchSavedWorkouts();
+  }, [view, fetchSavedWorkouts]);
+
+  /**
+   * Bookmark, distinct from copying.
+   *
+   * Copying clones the plan into your own list, which is right when you mean to
+   * change it and wrong when you only want to find it again — the copy stops
+   * following the author's edits, and your list fills with plans you never
+   * tried. Saving keeps the pointer.
+   */
+  const toggleSave = async (workoutId) => {
+    const { data: nowSaved, error } = await supabase.rpc('toggle_saved_workout', {
+      p_workout_id: workoutId,
+    });
+
+    if (error) return Alert.alert('Could not save this', error.message);
+
+    setPublicWorkouts((list) =>
+      list.map((w) => (w.id === workoutId ? { ...w, is_saved: nowSaved } : w))
+    );
+    if (!nowSaved) setSavedWorkouts((list) => list.filter((w) => w.id !== workoutId));
+    else fetchSavedWorkouts();
+  };
 
   const handleCopy = async (workoutId, name) => {
     const { data, error } = await supabase.rpc('copy_workout', { p_workout_id: workoutId });
@@ -271,7 +326,8 @@ export default function TrainingScreen({ navigation }) {
 
         <View style={styles.segments}>
           {[
-            { id: 'mine', label: 'My workouts' },
+            { id: 'mine', label: 'Mine' },
+            { id: 'saved', label: 'Saved' },
             { id: 'browse', label: 'Browse' },
           ].map((tab) => {
             const active = view === tab.id;
@@ -292,32 +348,65 @@ export default function TrainingScreen({ navigation }) {
 
         <FlatList
         refreshControl={refreshControl}
-        data={view === 'mine' ? myWorkouts : publicWorkouts}
+        data={view === 'mine' ? myWorkouts : view === 'saved' ? savedWorkouts : publicWorkouts}
         keyExtractor={item => String(item.id)}
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
-          view === 'mine' && lastSession ? (
-            <TouchableOpacity
-              activeOpacity={0.7}
-              style={styles.repeatCard}
-              onPress={() => {
-                const workout = myWorkouts.find((w) => String(w.id) === String(lastSession.workout_id));
-                if (workout) openWorkoutDetail(workout);
-              }}
-              accessibilityLabel={`Repeat ${lastSession.workout_name}`}
+          view === 'browse' ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.muscleFilterRow}
             >
-              <View style={styles.repeatIcon}>
-                <RotateCcw color={colors.accent} size={20} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.repeatLabel}>Pick up where you left off</Text>
-                <Text style={styles.repeatName} numberOfLines={1}>{lastSession.workout_name}</Text>
-                <Text style={styles.repeatMeta}>
-                  {formatRelativeDate(lastSession.completed_at)} · {lastSession.duration_minutes} min
-                </Text>
-              </View>
-              <Play color={colors.onAccent} size={16} fill={colors.onAccent} style={styles.repeatPlay} />
-            </TouchableOpacity>
+              {[null, ...MUSCLES].map((muscle) => {
+                const active = browseMuscle === muscle;
+                return (
+                  <Press
+                    key={muscle || 'all'}
+                    scale={0.96}
+                    style={[styles.muscleChip, active && styles.muscleChipOn]}
+                    onPress={() => setBrowseMuscle(muscle)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                  >
+                    <Text style={[styles.muscleChipText, active && styles.muscleChipTextOn]}>
+                      {muscle || 'All'}
+                    </Text>
+                  </Press>
+                );
+              })}
+            </ScrollView>
+          ) : view === 'mine' ? (
+            <>
+              <WeeklyGoal
+                target={profile?.workouts_per_week}
+                doneDays={trainedDays}
+                weekKeys={currentWeekKeys()}
+              />
+              {lastSession ? (
+              <TouchableOpacity
+                activeOpacity={0.7}
+                style={styles.repeatCard}
+                onPress={() => {
+                  const workout = myWorkouts.find((w) => String(w.id) === String(lastSession.workout_id));
+                  if (workout) openWorkoutDetail(workout);
+                }}
+                accessibilityLabel={`Repeat ${lastSession.workout_name}`}
+              >
+                <View style={styles.repeatIcon}>
+                  <RotateCcw color={colors.accent} size={20} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.repeatLabel}>Pick up where you left off</Text>
+                  <Text style={styles.repeatName} numberOfLines={1}>{lastSession.workout_name}</Text>
+                  <Text style={styles.repeatMeta}>
+                    {formatRelativeDate(lastSession.completed_at)} · {lastSession.duration_minutes} min
+                  </Text>
+                </View>
+                <Play color={colors.onAccent} size={16} fill={colors.onAccent} style={styles.repeatPlay} />
+              </TouchableOpacity>
+              ) : null}
+            </>
           ) : null
         }
         ListFooterComponent={
@@ -334,12 +423,22 @@ export default function TrainingScreen({ navigation }) {
           ) : null
         }
         ListEmptyComponent={
-          view === 'browse' ? (
+          view === 'saved' ? (
+            <EmptyState
+              icon={<Bookmark color={colors.textFaint} size={44} />}
+              title="Nothing saved"
+              message="Found a workout you like in Browse? The bookmark keeps it here without copying it into your own list."
+              actionLabel="Browse workouts"
+              onAction={() => setView('browse')}
+            />
+          ) : view === 'browse' ? (
             browseLoading ? null : (
               <EmptyState
                 icon={<Layout color={colors.textFaint} size={44} />}
-                title="No public workouts yet"
-                message="Nobody has shared one so far. Publish yours from the workout screen and it will show up here."
+                title={browseMuscle ? `No ${browseMuscle.toLowerCase()} workouts` : 'No public workouts yet'}
+                message={browseMuscle
+                  ? 'Nobody has shared one that trains this group yet. Try another filter.'
+                  : 'Nobody has shared one so far. Publish yours from the workout screen and it will show up here.'}
                 actionLabel="Build a workout"
                 onAction={() => setMainMenuVisible(true)}
               />
@@ -354,63 +453,18 @@ export default function TrainingScreen({ navigation }) {
           />
           )
         }
-        renderItem={({ item, index }) =>
-          view === 'browse' ? (
-            <FadeIn index={index}>
-              <View style={styles.browseCard}>
-                <View style={styles.browseTop}>
-                  <Avatar profile={{ equipped_avatar: item.author_avatar, xp: item.author_xp }} size={34} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.workoutName} numberOfLines={1}>{item.name}</Text>
-                    <Text style={styles.browseAuthor}>
-                      {item.is_mine ? 'Yours' : `by ${item.author_name}`}
-                      {item.copy_count > 0 ? `  ·  ${item.copy_count} copied` : ''}
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.browseTags}>
-                  <View style={styles.tag}>
-                    <Text style={styles.tagText}>{item.exercise_count} exercises</Text>
-                  </View>
-                  {(item.muscles || []).slice(0, 3).map((m) => (
-                    <View key={m} style={styles.tag}><Text style={styles.tagText}>{m}</Text></View>
-                  ))}
-                </View>
-
-                {!item.is_mine && (
-                  <Press
-                    scale={0.97}
-                    style={styles.copyBtn}
-                    onPress={() => handleCopy(item.id, item.name)}
-                    accessibilityLabel={`Copy ${item.name}`}
-                  >
-                    <Copy color={colors.accent} size={15} />
-                    <Text style={styles.copyBtnText}>Add to my workouts</Text>
-                  </Press>
-                )}
-              </View>
-            </FadeIn>
-          ) : (
-          <View style={styles.glassCard}>
-            <TouchableOpacity activeOpacity={0.7} style={styles.workoutMain} onPress={() => openWorkoutDetail(item)}>
-              <View style={styles.iconCircle}><Dumbbell color={colors.accent} size={20} /></View>
-              <View>
-                <Text style={styles.workoutName}>{item.name}</Text>
-                {item.duration && <Text style={{color: colors.textMuted, fontSize: 13}}>{item.duration} • {item.intensity}</Text>}
-              </View>
-            </TouchableOpacity>
-            <View style={styles.actionButtons}>
-              <TouchableOpacity accessibilityLabel="Delete" activeOpacity={0.7} onPress={() => confirmDeleteWorkout(item.id)} style={styles.deleteBtn}>
-                <Trash2 color={colors.danger} size={18} />
-              </TouchableOpacity>
-              <TouchableOpacity activeOpacity={0.7} accessibilityLabel="Start workout" style={styles.playBtn} onPress={() => openWorkoutDetail(item)}>
-                <Play color={colors.onAccent} size={16} fill="#000" />
-              </TouchableOpacity>
-            </View>
-          </View>
-          )
-        }
+        renderItem={({ item, index }) => (
+          <FadeIn index={Math.min(index, 6)}>
+            <WorkoutCard
+              workout={item}
+              variant={view}
+              onOpen={() => openWorkoutDetail(item)}
+              onDelete={() => confirmDeleteWorkout(item.id)}
+              onCopy={() => handleCopy(item.id, item.name)}
+              onToggleSave={() => toggleSave(item.id)}
+            />
+          </FadeIn>
+        )}
       />
 
       <Modal visible={mainMenuVisible} transparent animationType="fade">
@@ -478,9 +532,6 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   gradientBg: { flex: 1 },
   header: { padding: 20, paddingTop: 40 },
-  logoAndName: { flexDirection: 'row', alignItems: 'center' },
-  logoMark: { width: 32, height: 32, backgroundColor: colors.accent, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
-  appName: { color: colors.text, fontSize: 20, fontWeight: '700', marginLeft: 10 },
   dateText: { color: colors.textMuted, marginTop: 16, fontSize: 15 },
   title: { color: colors.text, fontSize: 34, fontWeight: '800', marginTop: 6 },
   repeatCard: {
@@ -513,6 +564,14 @@ const styles = StyleSheet.create({
   // --- Segmented control ---------------------------------------------------
   // The two things you can do here, side by side, instead of a floating plus
   // that hid one of them behind a menu.
+  muscleFilterRow: { flexDirection: 'row', gap: 8, paddingBottom: 14, paddingRight: 20 },
+  muscleChip: {
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999,
+    backgroundColor: colors.surface,
+  },
+  muscleChipOn: { backgroundColor: colors.accent },
+  muscleChipText: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
+  muscleChipTextOn: { color: colors.onAccent },
   segments: {
     flexDirection: 'row',
     marginHorizontal: 20,

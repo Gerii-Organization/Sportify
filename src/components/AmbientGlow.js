@@ -18,13 +18,14 @@ const { width: SCREEN_W } = Dimensions.get('window');
  * equivalent of a CSS blur filter on an arbitrary layer.
  *
  * Props:
- *   tone       'ember' (warm, default) or 'accent' (teal)
+ *   tone       'ember' (cool aurora, default), 'accent' (teal) or 'warm' (fire)
  *   height     how far down the screen it reaches
  *   intensity  0–1 opacity of the whole layer
  */
 const TONES = {
-  ember: { inner: '#FFB03A', mid: '#E0490A' },
+  ember: { inner: '#7FD9FF', mid: '#1E7FC4' },
   accent: { inner: '#4FE8D8', mid: '#149C93' },
+  warm: { inner: '#FFB84D', mid: '#E8631A' },
 };
 
 export default function AmbientGlow({ tone = 'ember', height = 340, intensity = 0.5 }) {

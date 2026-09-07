@@ -195,7 +195,7 @@ const styles = StyleSheet.create({
   userTitle: { color: colors.accent, fontSize: 13, marginTop: 2 },
   
   userStats: { alignItems: 'flex-end' },
-  statChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255, 136, 0, 0.1)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, marginBottom: 6 },
+  statChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255, 138, 43, 0.12)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, marginBottom: 6 },
   statChipText: { color: colors.streak, fontWeight: '600', fontSize: 13, marginLeft: 6 },
   statChipXP: { backgroundColor: colors.surfaceHigh, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 },
   statChipTextXP: { color: colors.text, fontWeight: '600', fontSize: 13 },

@@ -25,38 +25,51 @@ export const colors = {
   accentStrong: 'rgba(46, 211, 198, 0.65)',
 
   // --- Surfaces, back to front ----------------------------------------
+  // Neutral, with a trace of the accent's hue rather than a warm cast. The
+  // previous ground was brown-black, which fought the teal sitting on it and
+  // read as slightly dirty. A deep slate lets the accent stay the only warm-or-
+  // cool decision on screen, and keeps the ember glow reading as light rather
+  // than as more of the same colour.
+  //
   // Each step is lighter than the last. Never put a card on a surface of the
   // same value — the elevation IS the separation.
-  background: '#0A0806',
-  surface: '#12100D',
-  card: '#17130F',
-  surfaceRaised: '#1E1913',
-  surfaceHigh: '#25201A',
-  sheet: '#1A1611',
+  background: '#08090C',
+  surface: '#15181D',
+  card: '#1E222A',
+  surfaceRaised: '#282D36',
+  surfaceHigh: '#333944',
+  sheet: '#171B21',
 
   // --- Borders --------------------------------------------------------
   // Only for state. A resting card has none.
-  border: 'rgba(255, 255, 255, 0.07)',
-  borderLight: 'rgba(255, 255, 255, 0.12)',
+  border: 'rgba(255, 255, 255, 0.08)',
+  borderLight: 'rgba(255, 255, 255, 0.14)',
 
   // --- Text -----------------------------------------------------------
-  // Warm-biased greys. A neutral grey on a warm ground reads as dirty.
-  text: '#FAF7F3',
-  textSecondary: '#A89A8C',
-  textMuted: '#8A7E72',
-  textFaint: '#5E554D',
-  textDisabled: '#463F39',
+  // Cool-neutral greys to match the ground. A warm grey on a slate surface
+  // looks like a print artefact.
+  text: '#F7F8FA',
+  textSecondary: '#AEB4BC',
+  textMuted: '#8B929B',
+  textFaint: '#616872',
+  textDisabled: '#454B54',
 
-  // --- Semantic: rewards live in the warm family ----------------------
+  // --- Semantic ---------------------------------------------------------
+  // Six hues, kept far enough apart on the wheel that no two read as the same
+  // thing at a glance. Activity stays mint rather than returning to light
+  // blue: with the streak back on orange there is room for it, but two blues
+  // plus a periwinkle and a violet was already crowded.
+  //
+  // Orange and gold are the only warm colours, and both mean "earned" —
+  // streak and currency. Everything measured stays cool.
   streak: '#FF8A2B',
-  energy: '#FFC93C',
-  calories: '#FF7043',
+  energy: '#FFD84A',
+  calories: '#2ED3C6',
 
-  // --- Semantic: measurements stay cool -------------------------------
-  water: '#8FA0FF',
-  sleep: '#B49BFF',
-  activity: '#6FD6FF',
-  xp: '#8FA0FF',
+  water: '#4FB8E8',
+  sleep: '#7C8CF0',
+  activity: '#3FDCA6',
+  xp: '#7C8CF0',
 
   danger: '#FF6B5A',
   success: '#5FD98A',
@@ -119,9 +132,9 @@ export const elevation = {
 
 export const gradients = {
   /** Screen ground. Almost flat — the atmosphere comes from AmbientGlow. */
-  screen: ['#0A0806', '#0E0B08'],
+  screen: ['#141920', '#07080B'],
   /** Chat and other content-dense screens: completely flat. */
-  flat: ['#0A0806', '#0A0806'],
+  flat: ['#0F1216', '#08090C'],
   /** The sunrise halo. Only behind hero figures, never behind numbers. */
   ember: ['#FFB03A', '#E0490A', 'rgba(200, 40, 0, 0)'],
   /** Accent wash for the primary button and active states. */

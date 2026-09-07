@@ -33,3 +33,32 @@ export function randomMotivationalMessage() {
 
 /** Quick-add amounts on the water modal, in millilitres. */
 export const WATER_AMOUNTS = [250, 500, 750, 1000];
+
+/**
+ * Daily water target, in millilitres.
+ *
+ * Was written as a bare 2500 on the dashboard and 2.5 in the metric config, so
+ * the ring and the detail screen could disagree if either were edited.
+ */
+export const WATER_GOAL_ML = 2500;
+
+/**
+ * The seven-day login ladder.
+ *
+ * Must match the CASE inside claim_daily_reward(). The server grants; this only
+ * draws. If they drift, the app shows a reward it does not hand out — so change
+ * both or neither.
+ *
+ * Deliberately visible in full: knowing on Monday what Sunday holds is the
+ * whole mechanic. The random spin this replaced could not be anticipated, so
+ * there was never a reason to come back on any particular day.
+ */
+export const DAILY_REWARDS = [
+  { day: 1, energy: 30 },
+  { day: 2, energy: 50 },
+  { day: 3, energy: 75 },
+  { day: 4, energy: 100 },
+  { day: 5, xp: 40 },
+  { day: 6, energy: 150 },
+  { day: 7, energy: 200, freezes: 1 },
+];

@@ -25,7 +25,11 @@ import CommentSheet from '../components/CommentSheet';
  */
 const PAGE_SIZE = 20;
 
-export default function FeedScreen() {
+/**
+ * `embedded` drops the screen's own background and title so it can render as a
+ * panel inside Social, which now owns both halves of "other people".
+ */
+export default function FeedScreen({ embedded = false }) {
   const { user } = useAuth();
   const navigation = useNavigation();
 
@@ -124,12 +128,8 @@ export default function FeedScreen() {
     );
   };
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <LinearGradient colors={gradients.screen} style={styles.gradient}>
-        <AmbientGlow tone="accent" height={260} intensity={0.26} />
-        <ScreenHeader title="Feed" subtitle="You and your friends" />
-
+  const content = (
+    <>
         {loading ? (
           <SkeletonRows count={5} />
         ) : (
@@ -165,6 +165,10 @@ export default function FeedScreen() {
           />
         )}
 
+    </>
+  );
+
+  const sheet = (
         <CommentSheet
           event={commentsFor}
           visible={!!commentsFor}
@@ -178,6 +182,18 @@ export default function FeedScreen() {
             )
           }
         />
+  );
+
+  if (embedded) return <>{content}{sheet}</>;
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <LinearGradient colors={gradients.screen} style={styles.gradient}>
+        <AmbientGlow tone="accent" height={260} intensity={0.26} />
+        <ScreenHeader title="Feed" subtitle="You and your friends" />
+
+        {content}
+        {sheet}
       </LinearGradient>
     </SafeAreaView>
   );

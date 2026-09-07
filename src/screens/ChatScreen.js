@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   StyleSheet, View, Text, SafeAreaView, TextInput, TouchableOpacity, 
   FlatList, KeyboardAvoidingView, Platform, ActivityIndicator, Alert, Modal, Image
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ChevronLeft, Send, Check, CheckCheck, X, MoreVertical, ImageIcon } from 'lucide-react-native';
+import { ChevronLeft, Send, Check, CheckCheck, X, Search, ImageIcon } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import * as ImagePicker from 'expo-image-picker';
 
@@ -17,6 +17,11 @@ export default function ChatScreen({ route, navigation }) {
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
   
+  /** Conversation search. The messages are already in memory, so this filters
+   *  what is rendered rather than going back to the server. */
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+
   const [editingMessage, setEditingMessage] = useState(null);
   const [editInput, setEditInput] = useState('');
   const flatListRef = useRef(null);
@@ -140,10 +145,24 @@ export default function ChatScreen({ route, navigation }) {
     setEditingMessage(null);
   };
 
-  const showMoreOptions = () => {
-    Alert.alert("Chat options", "These features are coming soon:", [
-      { text: "Change background" }, { text: "Search conversation" }, { text: "Media & links" }, { text: "Close", style: "cancel" }
-    ]);
+  /**
+   * The header button used to open an alert listing three things that were
+   * "coming soon" — every one of them a no-op. A control that does nothing when
+   * tapped is worse than no control: it spends the user's attention and returns
+   * nothing. Of the three, search is the one worth having, so the button is now
+   * search and the other two are gone rather than promised.
+   */
+  const visibleMessages = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return messages;
+    return messages.filter(
+      (m) => !m.is_deleted && (m.content || '').toLowerCase().includes(query)
+    );
+  }, [messages, searchQuery]);
+
+  const closeSearch = () => {
+    setSearchOpen(false);
+    setSearchQuery('');
   };
 
 
@@ -151,7 +170,7 @@ export default function ChatScreen({ route, navigation }) {
     const isMe = item.sender_id === myId;
     // FlatList gives us the index, so the previous message is one lookup away —
     // no need to precompute a grouped structure.
-    const showDay = needsSeparator(item.created_at, messages[index - 1]?.created_at);
+    const showDay = needsSeparator(item.created_at, visibleMessages[index - 1]?.created_at);
 
     return (
       <>
@@ -204,17 +223,55 @@ export default function ChatScreen({ route, navigation }) {
             </View>
           </TouchableOpacity>
 
-          <TouchableOpacity activeOpacity={0.7} onPress={showMoreOptions} style={styles.headerBtn} accessibilityLabel="More options">
-            <MoreVertical color={colors.text} size={24} />
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={() => (searchOpen ? closeSearch() : setSearchOpen(true))}
+            style={styles.headerBtn}
+            accessibilityLabel={searchOpen ? 'Close search' : 'Search conversation'}
+          >
+            {searchOpen
+              ? <X color={colors.text} size={24} />
+              : <Search color={colors.text} size={22} />}
           </TouchableOpacity>
         </View>
+
+        {searchOpen && (
+          <View style={styles.searchBar}>
+            <Search color={colors.textFaint} size={16} />
+            <TextInput
+              style={styles.searchField}
+              placeholder="Search this conversation"
+              placeholderTextColor={colors.textFaint}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              autoFocus
+              autoCorrect={false}
+              returnKeyType="search"
+            />
+            {searchQuery.trim() ? (
+              <Text style={styles.searchCount}>
+                {visibleMessages.length}
+              </Text>
+            ) : null}
+          </View>
+        )}
 
         {loading ? (
           <View style={styles.centerContainer}><ActivityIndicator color={colors.accent} /></View>
         ) : (
           <FlatList
-            ref={flatListRef} data={messages} keyExtractor={(item) => item.id.toString()} renderItem={renderMessage}
-            contentContainerStyle={styles.chatList} onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })} onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
+            ref={flatListRef}
+            data={visibleMessages}
+            keyExtractor={(item) => item.id.toString()}
+            renderItem={renderMessage}
+            contentContainerStyle={styles.chatList}
+            ListEmptyComponent={
+              searchQuery.trim()
+                ? <Text style={styles.searchEmpty}>No messages match "{searchQuery.trim()}".</Text>
+                : null
+            }
+            onContentSizeChange={() => { if (!searchQuery.trim()) flatListRef.current?.scrollToEnd({ animated: true }); }}
+            onLayout={() => { if (!searchQuery.trim()) flatListRef.current?.scrollToEnd({ animated: true }); }}
           />
         )}
 
@@ -263,6 +320,14 @@ const styles = StyleSheet.create({
   avatarBase: { backgroundColor: colors.surface, justifyContent: 'center', alignItems: 'center' },
   
   centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  searchBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: colors.surface, borderRadius: 14,
+    marginHorizontal: 16, marginBottom: 10, paddingHorizontal: 14, paddingVertical: 10,
+  },
+  searchField: { flex: 1, color: colors.text, fontSize: 15, padding: 0 },
+  searchCount: { color: colors.textMuted, fontSize: 13, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  searchEmpty: { color: colors.textMuted, textAlign: 'center', marginTop: 40, paddingHorizontal: 24 },
   chatList: { padding: 16, flexGrow: 1, justifyContent: 'flex-end' },
   
   messageBubble: { maxWidth: '80%', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24, marginBottom: 10 },

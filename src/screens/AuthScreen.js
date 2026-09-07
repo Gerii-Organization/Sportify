@@ -3,9 +3,11 @@ import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, 
   Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView 
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import AmbientGlow from '../components/AmbientGlow';
 import { supabase } from '../lib/supabase';
 import { X } from 'lucide-react-native';
-import { colors } from '../theme';
+import { colors, gradients } from '../theme';
 import { GOALS } from '../constants/content';
 
 
@@ -110,6 +112,8 @@ export default function AuthScreen({ navigation }) {
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.container}>
+      <LinearGradient colors={gradients.screen} style={StyleSheet.absoluteFill} />
+      <AmbientGlow tone="ember" height={320} intensity={0.42} />
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
 
         <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} style={styles.closeBtn} onPress={() => navigation.goBack()}>

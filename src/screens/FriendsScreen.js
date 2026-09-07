@@ -13,6 +13,7 @@ import { gradients } from '../theme';
 import { useAuth } from '../context/AuthContext';
 import Avatar from '../components/Avatar';
 import AmbientGlow from '../components/AmbientGlow';
+import FeedScreen from './FeedScreen';
 import { SkeletonRows } from '../components/Skeleton';
 import useRefresh from '../lib/useRefresh';
 import Press from '../components/Press';
@@ -24,6 +25,14 @@ import { shortTime } from '../lib/date';
 export default function FriendsScreen() {
   const { refreshControl } = useRefresh(() => fetchData());
   const { user } = useAuth();
+  /**
+   * Feed and chats are the same category — other people — and were two tabs
+   * apart. The feed is what your friends did; this is who they are and what you
+   * said to them. Splitting them meant the tab bar spent two of its five slots
+   * on one idea.
+   */
+  const [section, setSection] = useState('chats');
+
   const [loading, setLoading] = useState(true);
   const [myId, setMyId] = useState(null);
   const navigation = useNavigation();
@@ -346,7 +355,7 @@ export default function FriendsScreen() {
         {/* HEADER */}
         <View style={styles.header}>
           <View style={styles.titleRow}>
-            <Text style={styles.headerTitle}>Chats</Text>
+            <Text style={styles.headerTitle}>Social</Text>
             {totalUnread > 0 && (
               <View style={styles.titleBadge}>
                 <Text style={styles.titleBadgeText}>{totalUnread > 99 ? '99+' : totalUnread}</Text>
@@ -371,7 +380,29 @@ export default function FriendsScreen() {
           </View>
         </View>
 
-        {loading ? (
+        <View style={styles.sectionTabs}>
+          {[{ id: 'chats', label: 'Chats' }, { id: 'feed', label: 'Feed' }].map((t) => {
+            const active = section === t.id;
+            return (
+              <Press
+                key={t.id}
+                scale={0.98}
+                style={[styles.sectionTab, active && styles.sectionTabOn]}
+                onPress={() => setSection(t.id)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+              >
+                <Text style={[styles.sectionTabText, active && styles.sectionTabTextOn]}>
+                  {t.label}
+                </Text>
+              </Press>
+            );
+          })}
+        </View>
+
+        {section === 'feed' ? (
+          <FeedScreen embedded />
+        ) : loading ? (
           <SkeletonRows count={6} />
         ) : (
           <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}
@@ -412,11 +443,12 @@ export default function FriendsScreen() {
         )}
       </LinearGradient>
 
-      {/* FAB OVERLAY & MENIU */}
-      {isFabMenuOpen && (
+      {/* FAB OVERLAY & MENIU — chats only. It adds friends and starts groups,
+          neither of which is an action on a feed. */}
+      {isFabMenuOpen && section === 'chats' && (
         <TouchableOpacity style={styles.fabOverlay} activeOpacity={1} onPress={() => setIsFabMenuOpen(false)} />
       )}
-      <View style={styles.fabContainer}>
+      <View style={[styles.fabContainer, section !== 'chats' && { display: 'none' }]}>
         {isFabMenuOpen && (
           <View style={styles.fabMenu}>
             <TouchableOpacity activeOpacity={0.7} style={styles.fabMenuItem} onPress={() => { setIsFabMenuOpen(false); setSearchModalVisible(true); }}>
@@ -578,6 +610,18 @@ export default function FriendsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   gradientBg: { flex: 1 },
+  sectionTabs: {
+    flexDirection: 'row',
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    padding: 4,
+    marginHorizontal: 20,
+    marginBottom: 14,
+  },
+  sectionTab: { flex: 1, paddingVertical: 9, alignItems: 'center', borderRadius: 12 },
+  sectionTabOn: { backgroundColor: colors.surfaceHigh },
+  sectionTabText: { color: colors.textMuted, fontSize: 13, fontWeight: '600' },
+  sectionTabTextOn: { color: colors.text },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: Platform.OS === 'android' ? 40 : 20 },
   headerTitle: { color: colors.text, fontSize: 26, fontWeight: '800' },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },

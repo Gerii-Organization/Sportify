@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../lib/supabase';
-import { colors, radius, spacing } from '../theme';
+import { colors, radius, spacing, gradients } from '../theme';
 import { todayKey } from '../lib/date';
 import BottomSheet from './BottomSheet';
 
@@ -141,7 +141,7 @@ function WeightChart({ weights }) {
         return (
           <View key={index} style={styles.barSlot}>
             <LinearGradient
-              colors={isLatest ? [colors.accent, '#055924'] : [colors.borderLight, colors.surface]}
+              colors={isLatest ? gradients.accent : [colors.borderLight, colors.surface]}
               style={[styles.bar, { height: `${height}%` }]}
             />
           </View>

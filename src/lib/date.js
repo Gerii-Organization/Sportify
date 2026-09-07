@@ -37,6 +37,35 @@ export function recentDayKeys(count) {
   });
 }
 
+/**
+ * The seven local day keys of the current week, Monday first.
+ *
+ * Distinct from `recentDayKeys(7)`, which is a rolling window ending today. A
+ * weekly target is measured against a calendar week: on Tuesday you have used
+ * two days of your allowance, not seven.
+ *
+ * `getDay()` returns 0 for Sunday, so the shift makes Monday index 0.
+ */
+export function currentWeekKeys() {
+  const now = new Date();
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  monday.setDate(monday.getDate() - ((now.getDay() + 6) % 7));
+
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(d.getDate() + i);
+    return todayKey(d);
+  });
+}
+
+/** Local midnight on this week's Monday, as an ISO string for `gte` queries. */
+export function startOfWeekIso() {
+  const now = new Date();
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  monday.setDate(monday.getDate() - ((now.getDay() + 6) % 7));
+  return monday.toISOString();
+}
+
 /** "Monday, Mar 3" — the date line shown in screen headers. */
 export function formatHeaderDate(date = new Date()) {
   return date.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
