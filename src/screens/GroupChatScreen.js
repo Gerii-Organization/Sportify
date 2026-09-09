@@ -44,7 +44,7 @@ export default function GroupChatScreen({ route, navigation }) {
       const { data: members } = await supabase.from('group_members').select('user_id').eq('group_id', groupId);
       if (members && members.length > 0) {
         const memberIds = members.map(m => m.user_id);
-        const { data: profiles } = await supabase.from('profiles').select('id, first_name').in('id', memberIds);
+        const { data: profiles } = await supabase.from('public_profiles').select('id, first_name').in('id', memberIds);
         const namesMap = {};
         profiles.forEach(p => namesMap[p.id] = p.first_name);
         setMemberNames(namesMap);

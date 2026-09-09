@@ -38,6 +38,7 @@ const SHELVES = [
   { key: 'title',   type: 'title',   title: 'Titles',    note: 'Shown next to your name',     pick: (d) => d.titles },
   { key: 'ring',    type: 'ring',    title: 'Progress rings', note: 'The shape around your daily steps', pick: (d) => d.rings },
   { key: 'avatar',  type: 'avatar',  title: 'Avatar frames',  note: 'How friends see you in lists',      pick: (d) => d.avatars },
+  { key: 'badge',   type: 'badge',   title: 'Badges',    note: 'Sits beside your name',        pick: (d) => d.badges },
 ];
 
 export default function ShopScreen({ navigation }) {
@@ -60,6 +61,9 @@ export default function ShopScreen({ navigation }) {
   /** Resets at midnight; the card says so rather than failing on tap. */
   const rewardClaimedToday = profileData?.last_reward_date === todayKey();
   const [claiming, setClaiming] = useState(false);
+  /** Which shelf is showing. Five stacked rows meant the expensive items at the
+   *  end of each never got seen; a filter puts one category on screen whole. */
+  const [category, setCategory] = useState('powerup');
   const [timeLeftStr, setTimeLeftStr] = useState(null);
 
   useEffect(() => {
@@ -560,26 +564,41 @@ export default function ShopScreen({ navigation }) {
             onClaim={handleClaimReward}
           />
 
-          {SHELVES.map((shelf, shelfIndex) => {
-            const items = shelf.pick({ powerups, titles, rings, avatars });
-            if (!items?.length) return null;
+          {/* Chips, then one category as a grid.
+              Five horizontally-scrolling shelves meant you never saw a whole
+              category at once, and the priciest item — the one worth saving
+              for — sat off the right edge of every row. */}
+          <FadeIn style={styles.chipRow}>
+            {SHELVES.map((shelf) => {
+              const active = category === shelf.key;
+              return (
+                <Press
+                  key={shelf.key}
+                  scale={0.96}
+                  style={[styles.chip, active && styles.chipOn]}
+                  onPress={() => setCategory(shelf.key)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                >
+                  <Text style={[styles.chipText, active && styles.chipTextOn]}>{shelf.title}</Text>
+                </Press>
+              );
+            })}
+          </FadeIn>
+
+          {(() => {
+            const shelf = SHELVES.find((x) => x.key === category);
+            const items = shelf?.pick({ powerups, titles, rings, avatars, badges }) || [];
 
             return (
-              <FadeIn key={shelf.key} index={shelfIndex} style={styles.shelfBlock}>
-                <View style={styles.shelfHead}>
-                  <Text style={styles.shelfTitle}>{shelf.title}</Text>
-                  <Text style={styles.shelfNote}>{shelf.note}</Text>
-                </View>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.shelfRow}
-                >
+              <FadeIn index={1}>
+                <Text style={styles.shelfNote}>{shelf?.note}</Text>
+                <View style={styles.grid}>
                   {items.map((item) => renderItemCard(item, shelf.type))}
-                </ScrollView>
+                </View>
               </FadeIn>
             );
-          })}
+          })()}
 
         </ScrollView>
 
@@ -630,13 +649,19 @@ const styles = StyleSheet.create({
   sectionTitle: { color: colors.text, fontSize: 20, fontWeight: '700', marginLeft: 20, marginTop: 20, marginBottom: 16 },
   horizontalScroll: { paddingHorizontal: 16, paddingRight: 26 },
 
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 20, marginBottom: 14 },
+  chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: colors.surface },
+  chipOn: { backgroundColor: colors.accent },
+  chipText: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
+  chipTextOn: { color: colors.onAccent },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingHorizontal: 20 },
   shelfBlock: { marginBottom: 30 },
   shelfHead: { paddingHorizontal: 20, marginBottom: 14 },
   shelfTitle: { color: colors.text, fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
   shelfNote: { color: colors.textMuted, fontSize: 13, marginTop: 3 },
   shelfRow: { paddingHorizontal: 20, gap: 12 },
 
-  itemCard: { backgroundColor: colors.card, width: 140, borderRadius: 26, padding: 16, alignItems: 'center' },
+  itemCard: { backgroundColor: colors.card, width: '48%', flexGrow: 1, borderRadius: 26, padding: 16, alignItems: 'center' },
   itemCardEquipped: { borderColor: colors.accent + 'AA', backgroundColor: 'rgba(46, 211, 198, 0.05)', shadowColor: colors.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.3, shadowRadius: 10, elevation: 5 },
   itemPreviewBox: { width: 70, height: 70, borderRadius: 35, backgroundColor: 'rgba(255,255,255,0.02)', justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
   previewContainer: { width: 50, height: 50, justifyContent: 'center', alignItems: 'center' },

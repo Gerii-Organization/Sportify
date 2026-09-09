@@ -6,14 +6,20 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import AmbientGlow from '../components/AmbientGlow';
 import { supabase } from '../lib/supabase';
-import { X } from 'lucide-react-native';
+import { X, ChevronLeft } from 'lucide-react-native';
 import { colors, gradients } from '../theme';
 import { GOALS } from '../constants/content';
+import { SIGNUP_STEPS, WEEKLY_OPTIONS } from '../constants/onboarding';
+import SplitPicker from '../components/SplitPicker';
 
 
 export default function AuthScreen({ navigation }) {
   const [isRegistering, setIsRegistering] = useState(false);
   const [loading, setLoading] = useState(false);
+  /** Position in the sign-up flow. Login is one screen and ignores this. */
+  const [step, setStep] = useState(0);
+  /** Validation message for the current step, shown under the fields. */
+  const [stepError, setStepError] = useState(null);
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -25,52 +31,39 @@ export default function AuthScreen({ navigation }) {
   const [height, setHeight] = useState('');
   const [workouts, setWorkouts] = useState('');
   const [goal, setGoal] = useState('');
+  const [split, setSplit] = useState([]);
 
   const toggleAuthMode = () => {
     setEmail(''); setPassword(''); setConfirmPassword('');
     setFirstName(''); setSex(''); setAge(''); setWeight('');
-    setHeight(''); setWorkouts(''); setGoal('');
+    setHeight(''); setWorkouts(''); setGoal(''); setSplit([]);
+    setStep(0); setStepError(null);
     setIsRegistering(!isRegistering);
   };
 
+  /** Everything the step validators read, in one object. */
+  const form = { email, password, confirmPassword, firstName, age, sex, weight, height, workouts, goal, split };
+
+  const goNext = () => {
+    const error = SIGNUP_STEPS[step].validate(form);
+    if (error) return setStepError(error);
+
+    setStepError(null);
+    if (step < SIGNUP_STEPS.length - 1) setStep(step + 1);
+    else handleAuth();
+  };
+
+  const goBack = () => {
+    setStepError(null);
+    if (step > 0) setStep(step - 1);
+    else navigation.goBack();
+  };
+
   const handleAuth = async () => {
-    if (!email || !password) return Alert.alert('Error', 'Email and password are required.');
-    if (isRegistering) {
-      if (!firstName || !age || !sex || !weight || !height || !workouts || !goal) {
-        return Alert.alert('Missing fields', 'Please fill in all details and choose a goal.');
-      }
-
-      if (password.length < 6) {
-        return Alert.alert('Invalid format', 'Password must be at least 6 characters long.');
-      }
-      if (password !== confirmPassword) {
-        return Alert.alert('Error', 'Passwords do not match.');
-      }
-
-      const parsedAge = parseInt(age);
-      if (isNaN(parsedAge) || parsedAge < 1 || parsedAge > 100) {
-        return Alert.alert('Invalid format', 'Age must be between 1 and 100.');
-      }
-
-      const upperSex = sex.trim().toUpperCase();
-      if (upperSex !== 'M' && upperSex !== 'F') {
-        return Alert.alert('Invalid format', 'Sex must be only "M" or "F".');
-      }
-
-      const parsedHeight = parseFloat(height);
-      if (isNaN(parsedHeight) || parsedHeight < 100 || parsedHeight > 210) {
-        return Alert.alert('Invalid format', 'Height must be between 100 and 210 cm.');
-      }
-
-      const parsedWeight = parseFloat(weight);
-      if (isNaN(parsedWeight) || parsedWeight < 30 || parsedWeight > 300) {
-        return Alert.alert('Invalid format', 'Please enter a valid weight (in kg).');
-      }
-
-      const parsedWorkouts = parseInt(workouts);
-      if (isNaN(parsedWorkouts) || parsedWorkouts < 1 || parsedWorkouts > 7) {
-        return Alert.alert('Invalid format', 'Workouts per week must be between 1 and 7.');
-      }
+    // Registration is validated step by step on the way here, so this only has
+    // to cover the login path — two fields, one screen, no steps.
+    if (!isRegistering && (!email.trim() || !password)) {
+      return Alert.alert('Error', 'Email and password are required.');
     }
 
     setLoading(true);
@@ -89,6 +82,9 @@ export default function AuthScreen({ navigation }) {
           height: parseFloat(height),
           workouts_per_week: parseInt(workouts),
           goal: goal,
+          // Null rather than an empty array when skipped: the advice code tests
+          // for a split's presence, and [] would read as "has one, it is empty".
+          split: split.length ? split : null,
         });
 
         if (profileError) Alert.alert('Profile Error', profileError.message);
@@ -116,72 +112,140 @@ export default function AuthScreen({ navigation }) {
       <AmbientGlow tone="ember" height={320} intensity={0.42} />
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
 
-        <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} style={styles.closeBtn} onPress={() => navigation.goBack()}>
-          <X color={colors.text} size={32} />
+        {/* Back one step, or out of the flow from the first one. Closing from
+            step four and losing four answers is the worst thing this screen
+            could do. */}
+        <TouchableOpacity
+          accessibilityLabel={isRegistering && step > 0 ? 'Previous step' : 'Close'}
+          activeOpacity={0.7}
+          style={styles.closeBtn}
+          onPress={isRegistering ? goBack : () => navigation.goBack()}
+        >
+          {isRegistering && step > 0
+            ? <ChevronLeft color={colors.text} size={32} />
+            : <X color={colors.text} size={32} />}
         </TouchableOpacity>
 
         <View style={styles.card}>
-          <Text style={styles.title}>{isRegistering ? "Let's get started" : 'Welcome back'}</Text>
+          {isRegistering ? (
+            <>
+              {/* A bar rather than a count: "step 3 of 5" is a number to read,
+                  a filled bar is understood without reading. */}
+              <View style={styles.progressTrack}>
+                <View style={[styles.progressFill, { width: `${((step + 1) / SIGNUP_STEPS.length) * 100}%` }]} />
+              </View>
 
-          <View style={styles.form}>
-            <CustomInput label="Email" value={email} onChange={setEmail} placeholder="vic@test.com" autoCap="none" />
-            <CustomInput label="Password" value={password} onChange={setPassword} placeholder="******" secure />
+              <Text style={styles.title}>{SIGNUP_STEPS[step].title}</Text>
+              <Text style={styles.note}>{SIGNUP_STEPS[step].note}</Text>
 
-            {isRegistering && (
-              <>
-                <CustomInput label="Confirm Password" value={confirmPassword} onChange={setConfirmPassword} placeholder="******" secure />
-                
-                <View style={styles.divider} />
-                <Text style={styles.sectionTitle}>Your Goal</Text>
+              <View style={styles.form}>
+                {step === 0 && (
+                  <>
+                    <CustomInput label="Email" value={email} onChange={setEmail} placeholder="you@example.com" autoCap="none" keyboard="email-address" />
+                    <CustomInput label="Password" value={password} onChange={setPassword} placeholder="At least 6 characters" secure />
+                    <CustomInput label="Confirm password" value={confirmPassword} onChange={setConfirmPassword} placeholder="Type it again" secure />
+                  </>
+                )}
 
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.goalContainer}>
-                  {GOALS.map(g => (
-                    <TouchableOpacity activeOpacity={0.7}
-                      key={g.id}
-                      style={[styles.chip, goal === g.id && styles.chipActive]}
-                      onPress={() => setGoal(g.id)}
-                    >
-                      <Text style={[styles.chipText, goal === g.id && styles.chipTextActive]}>{g.label}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
+                {step === 1 && (
+                  <View style={styles.goalGrid}>
+                    {GOALS.map((g) => (
+                      <TouchableOpacity
+                        key={g.id}
+                        activeOpacity={0.7}
+                        style={[styles.goalCard, goal === g.id && styles.goalCardActive]}
+                        onPress={() => { setGoal(g.id); setStepError(null); }}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: goal === g.id }}
+                      >
+                        <Text style={[styles.goalText, goal === g.id && styles.goalTextActive]}>{g.label}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
 
-                <Text style={styles.sectionTitle}>Personal Details</Text>
-                
-                <CustomInput label="First Name" value={firstName} onChange={setFirstName} placeholder="Victor" />
-                
-                <View style={styles.row}>
-                   <View style={{flex: 1}}>
-                     <CustomInput label="Age (1-100)" value={age} onChange={setAge} placeholder="25" keyboard="numeric" />
-                   </View>
-                   <View style={{width: 15}} />
-                   <View style={{flex: 1}}>
-                     <CustomInput label="Sex (M/F)" value={sex} onChange={setSex} placeholder="M" autoCap="characters" />
-                   </View>
-                </View>
+                {step === 2 && (
+                  <>
+                    <CustomInput label="First name" value={firstName} onChange={setFirstName} placeholder="Victor" />
+                    <CustomInput label="Age" value={age} onChange={setAge} placeholder="25" keyboard="numeric" />
+                    <Text style={styles.label}>Sex</Text>
+                    <View style={styles.pickRow}>
+                      {[['M', 'Male'], ['F', 'Female']].map(([value, label]) => (
+                        <TouchableOpacity
+                          key={value}
+                          activeOpacity={0.7}
+                          style={[styles.pick, sex === value && styles.pickActive]}
+                          onPress={() => { setSex(value); setStepError(null); }}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: sex === value }}
+                        >
+                          <Text style={[styles.pickText, sex === value && styles.pickTextActive]}>{label}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </>
+                )}
 
-                <View style={styles.row}>
-                   <View style={{flex: 1}}>
-                     <CustomInput label="Weight (kg)" value={weight} onChange={setWeight} placeholder="80" keyboard="numeric" />
-                   </View>
-                   <View style={{width: 15}} />
-                   <View style={{flex: 1}}>
-                     <CustomInput label="Height (cm)" value={height} onChange={setHeight} placeholder="185" keyboard="numeric" />
-                   </View>
-                </View>
+                {step === 3 && (
+                  <>
+                    <CustomInput label="Weight (kg)" value={weight} onChange={setWeight} placeholder="80" keyboard="numeric" />
+                    <CustomInput label="Height (cm)" value={height} onChange={setHeight} placeholder="185" keyboard="numeric" />
+                  </>
+                )}
 
-                <CustomInput label="Workouts / week (1-7)" value={workouts} onChange={setWorkouts} placeholder="4" keyboard="numeric" />
-              </>
-            )}
+                {step === 5 && (
+                  <SplitPicker value={split} perWeek={workouts} onChange={setSplit} />
+                )}
 
-            <TouchableOpacity activeOpacity={0.7} style={styles.mainButton} onPress={handleAuth} disabled={loading}>
-              {loading ? <ActivityIndicator color={colors.onAccent} /> : <Text style={styles.mainButtonText}>{isRegistering ? 'Create Account' : 'Log In'}</Text>}
-            </TouchableOpacity>
+                {step === 4 && (
+                  <View style={styles.weekRow}>
+                    {WEEKLY_OPTIONS.map((n) => (
+                      <TouchableOpacity
+                        key={n}
+                        activeOpacity={0.7}
+                        style={[styles.weekPick, String(n) === workouts && styles.weekPickActive]}
+                        onPress={() => { setWorkouts(String(n)); setStepError(null); }}
+                        accessibilityLabel={`${n} workouts per week`}
+                        accessibilityState={{ selected: String(n) === workouts }}
+                      >
+                        <Text style={[styles.weekText, String(n) === workouts && styles.weekTextActive]}>{n}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
 
-            <TouchableOpacity activeOpacity={0.7} style={styles.switchButton} onPress={toggleAuthMode}>
-              <Text style={styles.switchText}>{isRegistering ? 'Already have an account? Log in' : "Don't have an account? Sign up for free"}</Text>
-            </TouchableOpacity>
-          </View>
+                {stepError ? <Text style={styles.error}>{stepError}</Text> : null}
+
+                <TouchableOpacity activeOpacity={0.7} style={styles.mainButton} onPress={goNext} disabled={loading}>
+                  {loading
+                    ? <ActivityIndicator color={colors.onAccent} />
+                    : <Text style={styles.mainButtonText}>
+                        {step === SIGNUP_STEPS.length - 1 ? 'Create account' : 'Continue'}
+                      </Text>}
+                </TouchableOpacity>
+
+                <TouchableOpacity activeOpacity={0.7} style={styles.switchButton} onPress={toggleAuthMode}>
+                  <Text style={styles.switchText}>Already have an account? Log in</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          ) : (
+            <>
+              <Text style={styles.title}>Welcome back</Text>
+              <View style={styles.form}>
+                <CustomInput label="Email" value={email} onChange={setEmail} placeholder="you@example.com" autoCap="none" keyboard="email-address" />
+                <CustomInput label="Password" value={password} onChange={setPassword} placeholder="******" secure />
+
+                <TouchableOpacity activeOpacity={0.7} style={styles.mainButton} onPress={handleAuth} disabled={loading}>
+                  {loading ? <ActivityIndicator color={colors.onAccent} /> : <Text style={styles.mainButtonText}>Log in</Text>}
+                </TouchableOpacity>
+
+                <TouchableOpacity activeOpacity={0.7} style={styles.switchButton} onPress={toggleAuthMode}>
+                  <Text style={styles.switchText}>Don't have an account? Sign up for free</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          )}
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -206,19 +270,36 @@ const styles = StyleSheet.create({
   scrollContent: { padding: 20, paddingTop: 60, paddingBottom: 40 },
   card: { backgroundColor: colors.card, borderRadius: 30, padding: 26 },
   title: { color: colors.text, fontSize: 26, fontWeight: '800', marginBottom: 26, textAlign: 'center' },
-  sectionTitle: { color: colors.accent, fontSize: 15, fontWeight: '600', marginBottom: 10, marginTop: 10 },
-  goalContainer: { flexDirection: 'row', marginBottom: 20 },
-  chip: { backgroundColor: colors.surface, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24, marginRight: 10 },
-  chipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
-  chipText: { color: colors.textSecondary, fontWeight: '600' },
-  chipTextActive: { color: colors.onAccent },
+  progressTrack: { height: 4, borderRadius: 2, backgroundColor: colors.surfaceHigh, overflow: 'hidden', marginBottom: 24 },
+  progressFill: { height: '100%', borderRadius: 2, backgroundColor: colors.accent },
+  note: { color: colors.textMuted, fontSize: 14, lineHeight: 20, textAlign: 'center', marginTop: -14, marginBottom: 24 },
+  error: { color: colors.danger, fontSize: 14, textAlign: 'center', marginBottom: 4 },
+
+  goalGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 10 },
+  goalCard: {
+    width: '48%', flexGrow: 1, backgroundColor: colors.surface,
+    borderRadius: 18, paddingVertical: 22, alignItems: 'center',
+  },
+  goalCardActive: { backgroundColor: colors.accent },
+  goalText: { color: colors.textSecondary, fontSize: 15, fontWeight: '700' },
+  goalTextActive: { color: colors.onAccent },
+
+  pickRow: { flexDirection: 'row', gap: 10, marginBottom: 20 },
+  pick: { flex: 1, backgroundColor: colors.surface, borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
+  pickActive: { backgroundColor: colors.accent },
+  pickText: { color: colors.textSecondary, fontSize: 15, fontWeight: '600' },
+  pickTextActive: { color: colors.onAccent },
+
+  weekRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 6, marginBottom: 10 },
+  weekPick: { flex: 1, aspectRatio: 1, backgroundColor: colors.surface, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  weekPickActive: { backgroundColor: colors.accent },
+  weekText: { color: colors.textSecondary, fontSize: 16, fontWeight: '700' },
+  weekTextActive: { color: colors.onAccent },
   inputContainer: { marginBottom: 20 },
   label: { color: colors.textSecondary, fontSize: 13, marginBottom: 10, fontWeight: '600', marginLeft: 6 },
   input: { backgroundColor: colors.surface, color: colors.text, padding: 16, borderRadius: 14, fontSize: 15 },
-  row: { flexDirection: 'row', justifyContent: 'space-between' },
   mainButton: { backgroundColor: colors.accent, padding: 20, borderRadius: 18, alignItems: 'center', marginTop: 10 },
   mainButtonText: { color: colors.onAccent, fontWeight: '700', fontSize: 17 },
   switchButton: { marginTop: 20, alignItems: 'center' },
   switchText: { color: colors.textSecondary, fontSize: 15 },
-  divider: { height: 1, backgroundColor: colors.surfaceHigh, marginVertical: 20 }
 });

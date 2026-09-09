@@ -6,7 +6,7 @@ import {
   History, Trophy, Lock,
 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
-import { colors, gradients, spacing, TAB_BAR_CLEARANCE } from '../theme';
+import { colors, gradients, spacing } from '../theme';
 import { todayKey, recentDayKeys, currentWeekKeys, startOfWeekIso } from '../lib/date';
 import { useAuth } from '../context/AuthContext';
 import useLoad from '../lib/useLoad';
@@ -37,8 +37,9 @@ const EMPTY = { sessions: [], steps: [], streak: 0, weights: [], trainedDays: []
  */
 /**
  * `embedded` drops the screen's own chrome — back button, gradient, glow — so it
- * can sit inside a tab that already paints them. A tab has nothing to go back
- * to, and two stacked gradients double the ambient glow.
+ * can render as a panel inside ProgressScreen, which already paints them.
+ * ProgressScreen owns the single back button, and two stacked gradients would
+ * double the ambient glow.
  */
 export default function StatsScreen({ navigation, embedded = false }) {
   const { user, profile } = useAuth();
@@ -134,7 +135,7 @@ export default function StatsScreen({ navigation, embedded = false }) {
           />
         ) : (
           <ScrollView
-            contentContainerStyle={embedded ? styles.scrollEmbedded : styles.scroll}
+            contentContainerStyle={styles.scroll}
             showsVerticalScrollIndicator={false}
             refreshControl={refreshControl}
           >
@@ -508,9 +509,6 @@ const styles = StyleSheet.create({
   back: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
   navTitle: { color: colors.text, fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
   scroll: { paddingHorizontal: spacing.lg, paddingBottom: 60 },
-  // Inside the Progress tab the list ends behind the floating bar instead of
-  // above it, so the panel needs the taller clearance.
-  scrollEmbedded: { paddingHorizontal: spacing.lg, paddingBottom: TAB_BAR_CLEARANCE + 30 },
 
   toggle: {
     flexDirection: 'row', backgroundColor: colors.surface,

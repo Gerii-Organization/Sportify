@@ -23,7 +23,6 @@ const LETTERS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 export default function WeeklyGoal({ target, doneDays, weekKeys }) {
   if (!target) return null;
 
-  const today = todayKey();
   const done = doneDays.length;
   const hit = done >= target;
   const remaining = Math.max(target - done, 0);
@@ -49,22 +48,37 @@ export default function WeeklyGoal({ target, doneDays, weekKeys }) {
         </View>
       </View>
 
-      <View style={styles.week}>
-        {weekKeys.map((key, i) => {
-          const trained = doneDays.includes(key);
-          // Days that have not happened yet are drawn fainter, so an empty
-          // Saturday on a Tuesday does not read as a day you missed. YYYY-MM-DD
-          // sorts lexicographically, so a string compare is the whole test.
-          const future = key > today;
+      <WeekStrip doneDays={doneDays} weekKeys={weekKeys} />
+    </View>
+  );
+}
 
-          return (
-            <View key={key} style={styles.day}>
-              <View style={[styles.dot, trained && styles.dotOn, !trained && future && styles.dotFuture]} />
-              <Text style={[styles.letter, trained && styles.letterOn]}>{LETTERS[i]}</Text>
-            </View>
-          );
-        })}
-      </View>
+/**
+ * The seven days as dots, Monday first.
+ *
+ * Exported because two screens draw it: the full card here on the Progress
+ * overview, and the merged advice card on the workouts screen. One copy means
+ * the "future days are fainter" rule cannot drift between them.
+ */
+export function WeekStrip({ doneDays, weekKeys }) {
+  const today = todayKey();
+
+  return (
+    <View style={styles.week}>
+      {weekKeys.map((key, i) => {
+        const trained = doneDays.includes(key);
+        // Days that have not happened yet are drawn fainter, so an empty
+        // Saturday on a Tuesday does not read as a day you missed. YYYY-MM-DD
+        // sorts lexicographically, so a string compare is the whole test.
+        const future = key > today;
+
+        return (
+          <View key={key} style={styles.day}>
+            <View style={[styles.dot, trained && styles.dotOn, !trained && future && styles.dotFuture]} />
+            <Text style={[styles.letter, trained && styles.letterOn]}>{LETTERS[i]}</Text>
+          </View>
+        );
+      })}
     </View>
   );
 }

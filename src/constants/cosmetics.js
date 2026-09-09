@@ -66,11 +66,13 @@ export const POWERUPS = [
 /** Default ids used when a profile has nothing equipped. */
 export const DEFAULT_RING_ID = 'r1';
 export const DEFAULT_AVATAR_ID = 'a1';
+export const DEFAULT_BADGE_ID = 'b1';
 
 const byId = (list) => Object.fromEntries(list.map((item) => [item.id, item]));
 
 const RING_BY_ID = byId(RINGS);
 const AVATAR_BY_ID = byId(AVATARS);
+const BADGE_BY_ID = byId(BADGES);
 
 /** Look up an equipped ring, falling back to the free default. */
 export function getRing(id) {
@@ -80,4 +82,16 @@ export function getRing(id) {
 /** Look up an equipped avatar, falling back to the free default. */
 export function getAvatar(id) {
   return AVATAR_BY_ID[id] || AVATAR_BY_ID[DEFAULT_AVATAR_ID];
+}
+
+/**
+ * Look up an equipped badge.
+ *
+ * Badges were fully built and completely unreachable: the list, the shop's
+ * preview renderer, the equip handler and the profiles column all existed, but
+ * SHELVES had no badge entry so none could be bought, and nothing rendered one.
+ * This is the lookup the display side was missing.
+ */
+export function getBadge(id) {
+  return BADGE_BY_ID[id] || BADGE_BY_ID[DEFAULT_BADGE_ID];
 }

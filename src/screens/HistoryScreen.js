@@ -3,7 +3,7 @@ import { View, Text, ScrollView, SafeAreaView, StyleSheet, ActivityIndicator } f
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChevronLeft, ChevronDown, Dumbbell, Clock, Weight } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
-import { colors, gradients, spacing, TAB_BAR_CLEARANCE } from '../theme';
+import { colors, gradients, spacing } from '../theme';
 import { formatRelativeDate, formatClockTime } from '../lib/date';
 import { useAuth } from '../context/AuthContext';
 import useLoad from '../lib/useLoad';
@@ -28,8 +28,9 @@ import ErrorState from '../components/ErrorState';
  */
 /**
  * `embedded` drops the screen's own chrome — back button, gradient, glow — so it
- * can sit inside a tab that already paints them. A tab has nothing to go back
- * to, and two stacked gradients double the ambient glow.
+ * can render as a panel inside ProgressScreen, which already paints them.
+ * ProgressScreen owns the single back button, and two stacked gradients would
+ * double the ambient glow.
  */
 export default function HistoryScreen({ navigation, embedded = false }) {
   const { user } = useAuth();
@@ -41,7 +42,7 @@ export default function HistoryScreen({ navigation, embedded = false }) {
     return unwrap(
       supabase
         .from('workout_completions')
-        .select('id, workout_name, duration_minutes, total_volume_kg, exercises, completed_at')
+        .select('id, workout_name, duration_minutes, total_volume_kg, exercises, notes, completed_at')
         .eq('user_id', user.id)
         .order('completed_at', { ascending: false })
         .limit(150)
@@ -69,7 +70,7 @@ export default function HistoryScreen({ navigation, embedded = false }) {
           <ErrorState message={error} onRetry={reload} />
         ) : (
           <ScrollView
-            contentContainerStyle={embedded ? styles.scrollEmbedded : styles.scroll}
+            contentContainerStyle={styles.scroll}
             showsVerticalScrollIndicator={false}
             refreshControl={refreshControl}
           >
@@ -95,7 +96,7 @@ export default function HistoryScreen({ navigation, embedded = false }) {
                     // strength and simply lose their arrow — dimming them would
                     // read as "unavailable" rather than "nothing more to see".
                     const detail = session.exercises || [];
-                    const expandable = detail.length > 0;
+                    const expandable = detail.length > 0 || !!session.notes;
 
                     return (
                       <Press
@@ -129,6 +130,10 @@ export default function HistoryScreen({ navigation, embedded = false }) {
 
                         {open && (
                           <View style={styles.detail}>
+                            {session.notes ? (
+                              <Text style={styles.note}>{session.notes}</Text>
+                            ) : null}
+
                             {detail.map((exercise, i) => (
                               <View key={`${exercise.name}-${i}`} style={styles.exercise}>
                                 <Text style={styles.exerciseName} numberOfLines={1}>{exercise.name}</Text>
@@ -214,9 +219,6 @@ const styles = StyleSheet.create({
   back: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
   navTitle: { color: colors.text, fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
   scroll: { paddingHorizontal: spacing.lg, paddingBottom: 60 },
-  // Inside the Progress tab the list ends behind the floating bar instead of
-  // above it, so the panel needs the taller clearance.
-  scrollEmbedded: { paddingHorizontal: spacing.lg, paddingBottom: TAB_BAR_CLEARANCE + 30 },
 
   summary: {
     flexDirection: 'row',
@@ -245,6 +247,8 @@ const styles = StyleSheet.create({
   chevronOpen: { transform: [{ rotate: '180deg' }] },
 
   detail: { marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.border, gap: 10 },
+  // Italic and quieter than the sets: it is what you thought, not what you did.
+  note: { color: colors.textSecondary, fontSize: 13, fontStyle: 'italic', lineHeight: 19, marginBottom: 4 },
   exercise: { gap: 3 },
   exerciseName: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
   exerciseSets: { color: colors.text, fontSize: 14, fontWeight: '600', fontVariant: ['tabular-nums'] },

@@ -34,7 +34,7 @@ export default function ChatScreen({ route, navigation }) {
       setMyId(user.id);
 
       // Load the friend's profile so we can show their avatar in the header.
-      const { data: fProfile } = await supabase.from('profiles').select('*').eq('id', friendId).single();
+      const { data: fProfile } = await supabase.from('public_profiles').select('*').eq('id', friendId).single();
       setFriendProfile(fProfile);
 
       const { data: initialMessages } = await supabase.from('messages').select('*')

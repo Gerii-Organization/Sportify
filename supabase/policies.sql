@@ -1,328 +1,397 @@
+-- Sportify — database reference
+--
+-- Generated from the live project's catalogue, not written by hand, so it
+-- reflects what is actually deployed. The previous version had drifted badly:
+-- it documented daily_spin (since dropped) and none of the fifteen functions
+-- added after it, so anyone cloning the repo got a description of a database
+-- that no longer existed.
+--
+-- This file is DOCUMENTATION, not a migration. Applying it will not build the
+-- schema — tables and column definitions are not here. Migrations live in the
+-- Supabase project's own history.
+--
+-- Two rules the whole design rests on:
+--
+-- 1. RLS IS THE ONLY BOUNDARY. The anon key ships inside the app bundle and is
+--    extractable, so anything a policy permits is effectively public to anyone
+--    holding it. Filtering in the client is presentation, never protection.
+--
+-- 2. PERMISSIVE POLICIES COMBINE WITH OR. Two policies on one table mean the
+--    looser one wins. This has bitten the project three times — block
+--    enforcement, then workout_completions, and it is still open on profiles
+--    (see the note at the end). After adding any policy, check the table for
+--    others:
+--
+--      select tablename, policyname, cmd, roles, qual
+--        from pg_policies
+--       where schemaname = 'public' and qual::text not like '%auth.uid()%';
+
+
 -- ============================================================================
--- Sportify — server-side fixes
---
--- Run this in the Supabase dashboard: SQL Editor -> New query -> Run.
--- Everything here is idempotent; running it twice is safe.
---
--- These cannot be fixed in the app. With the anon key, any client can query
--- any table directly — filtering in JavaScript hides rows from the UI but does
--- not stop someone reading them. Row-level security is the actual boundary.
+-- Row Level Security
 -- ============================================================================
 
+-- Enabled on every table except one.
+alter table public.achievements        enable row level security;
+alter table public.blocks              enable row level security;
+alter table public.body_weight_log     enable row level security;
+alter table public.daily_stats         enable row level security;
+alter table public.daily_steps         enable row level security;
+alter table public.feed_comments       enable row level security;
+alter table public.feed_events         enable row level security;
+alter table public.feed_likes          enable row level security;
+alter table public.friendships         enable row level security;
+alter table public.group_members       enable row level security;
+alter table public.group_messages      enable row level security;
+alter table public.groups              enable row level security;
+alter table public.messages            enable row level security;
+alter table public.personal_records    enable row level security;
+alter table public.profiles            enable row level security;
+alter table public.saved_workouts      enable row level security;
+alter table public.scanned_foods       enable row level security;
+alter table public.tasks               enable row level security;
+alter table public.todos               enable row level security;
+alter table public.user_achievements   enable row level security;
+alter table public.user_inventory      enable row level security;
+alter table public.user_workouts       enable row level security;
+alter table public.workout_completions enable row level security;
+alter table public.workout_exercises   enable row level security;
+alter table public.workouts            enable row level security;
 
--- ----------------------------------------------------------------------------
--- 1. Groups — a user may only see groups they belong to.
---
--- FriendsScreen used to run `select * from groups` with no filter, so every
--- user could list every group in the app. The client now filters by
--- membership; this makes it enforceable.
--- ----------------------------------------------------------------------------
-
-alter table public.groups enable row level security;
-alter table public.group_members enable row level security;
-alter table public.group_messages enable row level security;
-
-drop policy if exists "read own groups" on public.groups;
-create policy "read own groups" on public.groups
-  for select using (
-    exists (
-      select 1 from public.group_members m
-      where m.group_id = groups.id and m.user_id = auth.uid()
-    )
-  );
-
-drop policy if exists "create groups" on public.groups;
-create policy "create groups" on public.groups
-  for insert with check (created_by = auth.uid());
-
-drop policy if exists "read members of own groups" on public.group_members;
-create policy "read members of own groups" on public.group_members
-  for select using (
-    exists (
-      select 1 from public.group_members mine
-      where mine.group_id = group_members.group_id and mine.user_id = auth.uid()
-    )
-  );
-
-drop policy if exists "add members to own groups" on public.group_members;
-create policy "add members to own groups" on public.group_members
-  for insert with check (
-    user_id = auth.uid()
-    or exists (
-      select 1 from public.groups g
-      where g.id = group_members.group_id and g.created_by = auth.uid()
-    )
-  );
-
-drop policy if exists "leave group" on public.group_members;
-create policy "leave group" on public.group_members
-  for delete using (user_id = auth.uid());
-
-drop policy if exists "read group messages" on public.group_messages;
-create policy "read group messages" on public.group_messages
-  for select using (
-    exists (
-      select 1 from public.group_members m
-      where m.group_id = group_messages.group_id and m.user_id = auth.uid()
-    )
-  );
-
-drop policy if exists "send group messages" on public.group_messages;
-create policy "send group messages" on public.group_messages
-  for insert with check (
-    sender_id = auth.uid()
-    and exists (
-      select 1 from public.group_members m
-      where m.group_id = group_messages.group_id and m.user_id = auth.uid()
-    )
-  );
+-- NOT ENABLED: public.meals — a legacy table, 0 rows, nothing reads it.
+-- Left as-is deliberately rather than remediated: enabling RLS with no policies
+-- blocks all access, and dropping a table is not a decision to make in passing.
+--   alter table public.meals enable row level security;   -- or drop it
 
 
--- ----------------------------------------------------------------------------
--- 2. Direct messages — participants only, and blocked pairs cannot exchange.
---
--- The app checked the `blocks` table only on PublicProfileScreen. Blocked
--- users still appeared in chat lists, search and the leaderboard, and messages
--- between them still delivered.
--- ----------------------------------------------------------------------------
+-- ============================================================================
+-- Owner-only tables
+-- ============================================================================
+-- The plain case: you see and change your own rows, nobody else's.
 
-alter table public.messages enable row level security;
-alter table public.blocks enable row level security;
+create policy "own rows" on public.body_weight_log     for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy "own rows" on public.personal_records    for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy "own rows" on public.saved_workouts      for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy "own rows" on public.daily_stats         for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy "own rows" on public.daily_steps         for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy "own rows" on public.scanned_foods       for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy "own rows" on public.tasks               for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy "own rows" on public.user_inventory      for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy "own rows" on public.workout_completions for all using (user_id = auth.uid()) with check (user_id = auth.uid());
 
-create or replace function public.is_blocked_pair(a uuid, b uuid)
-returns boolean
-language sql
-stable
-security definer
-set search_path = public
-as $$
-  select exists (
-    select 1 from public.blocks
-    where (blocker_id = a and blocked_id = b)
-       or (blocker_id = b and blocked_id = a)
-  );
-$$;
+-- workout_completions once carried a second policy granting every signed-in
+-- user SELECT on every row. Verified at the time: acting as one account, 33
+-- rows across 7 owners were readable. It was dropped; the public profile now
+-- reads through get_public_workouts, which returns four columns and honours
+-- blocks. Row-level policies cannot hide columns, which is why that had to
+-- become a function.
 
-drop policy if exists "read own messages" on public.messages;
-create policy "read own messages" on public.messages
-  for select using (
-    (sender_id = auth.uid() or receiver_id = auth.uid())
-    and not public.is_blocked_pair(sender_id, receiver_id)
-  );
 
-drop policy if exists "send messages" on public.messages;
-create policy "send messages" on public.messages
-  for insert with check (
-    sender_id = auth.uid()
-    and not public.is_blocked_pair(sender_id, receiver_id)
-  );
+-- ============================================================================
+-- Workouts: yours always, others' only when published
+-- ============================================================================
 
-drop policy if exists "edit own messages" on public.messages;
-create policy "edit own messages" on public.messages
-  for update using (sender_id = auth.uid() or receiver_id = auth.uid());
+create policy "own rows" on public.user_workouts
+  for all using (user_id = auth.uid()) with check (user_id = auth.uid());
 
-drop policy if exists "read own blocks" on public.blocks;
-create policy "read own blocks" on public.blocks
-  for select using (blocker_id = auth.uid() or blocked_id = auth.uid());
+create policy "read public workouts" on public.user_workouts
+  for select to authenticated using (is_public or user_id = auth.uid());
 
-drop policy if exists "manage own blocks" on public.blocks;
+-- is_public defaults to false. Publishing is opt-in, per author, per workout.
+
+
+-- ============================================================================
+-- Social: friendship, blocks, messages
+-- ============================================================================
+-- Blocks are enforced here rather than in the client. A client-side check is
+-- cosmetic: anyone with the anon key queries the table directly.
+
 create policy "manage own blocks" on public.blocks
   for all using (blocker_id = auth.uid()) with check (blocker_id = auth.uid());
 
+create policy "read own blocks" on public.blocks
+  for select using (blocker_id = auth.uid() or blocked_id = auth.uid());
 
--- ----------------------------------------------------------------------------
--- 3. Per-user tables — you may only touch your own rows.
--- ----------------------------------------------------------------------------
+create policy "read own friendships" on public.friendships
+  for select to authenticated using (user_id = auth.uid() or friend_id = auth.uid());
 
-do $$
-declare t text;
-begin
-  foreach t in array array[
-    'daily_stats', 'daily_steps', 'tasks', 'workout_completions',
-    'user_workouts', 'user_inventory', 'scanned_foods'
-  ]
-  loop
-    execute format('alter table public.%I enable row level security', t);
-    execute format('drop policy if exists "own rows" on public.%I', t);
-    execute format(
-      'create policy "own rows" on public.%I for all using (user_id = auth.uid()) with check (user_id = auth.uid())',
-      t
-    );
-  end loop;
-end $$;
+create policy "send friend request" on public.friendships
+  for insert to authenticated
+  with check (user_id = auth.uid() and not is_blocked_pair(user_id, friend_id));
+
+create policy "respond to friend request" on public.friendships
+  for update to authenticated using (friend_id = auth.uid()) with check (friend_id = auth.uid());
+
+create policy "remove friendship" on public.friendships
+  for delete to authenticated using (user_id = auth.uid() or friend_id = auth.uid());
+
+create policy "read own messages" on public.messages
+  for select using (
+    (sender_id = auth.uid() or receiver_id = auth.uid())
+    and not is_blocked_pair(sender_id, receiver_id)
+  );
+
+create policy "send messages" on public.messages
+  for insert with check (sender_id = auth.uid() and not is_blocked_pair(sender_id, receiver_id));
+
+create policy "edit own messages" on public.messages
+  for update using (sender_id = auth.uid() or receiver_id = auth.uid());
 
 
--- ----------------------------------------------------------------------------
--- 4. Profiles — readable by everyone (leaderboard), writable only by the owner.
---
--- This is the important one. Every XP, energy and streak update in the app is
--- currently a client-side read-modify-write, which is how the daily spin was
--- able to overwrite total XP with 0. The RPCs below replace those writes with
--- atomic server-side increments.
--- ----------------------------------------------------------------------------
+-- ============================================================================
+-- Groups: membership is the key
+-- ============================================================================
 
-alter table public.profiles enable row level security;
+create policy "create groups" on public.groups
+  for insert with check (created_by = auth.uid());
 
-drop policy if exists "profiles are public" on public.profiles;
-create policy "profiles are public" on public.profiles
-  for select using (true);
+create policy "read own groups" on public.groups
+  for select using (exists (select 1 from group_members m where m.group_id = groups.id and m.user_id = auth.uid()));
 
-drop policy if exists "update own profile" on public.profiles;
-create policy "update own profile" on public.profiles
-  for update using (id = auth.uid()) with check (id = auth.uid());
+create policy "rename own group" on public.groups
+  for update to authenticated using (created_by = auth.uid()) with check (created_by = auth.uid());
 
-drop policy if exists "insert own profile" on public.profiles;
+create policy "delete own group" on public.groups
+  for delete to authenticated using (created_by = auth.uid());
+
+create policy "read members of own groups" on public.group_members
+  for select using (exists (select 1 from group_members mine where mine.group_id = group_members.group_id and mine.user_id = auth.uid()));
+
+create policy "add members to own groups" on public.group_members
+  for insert with check (
+    user_id = auth.uid()
+    or exists (select 1 from groups g where g.id = group_members.group_id and g.created_by = auth.uid())
+  );
+
+create policy "leave group" on public.group_members
+  for delete to authenticated using (
+    user_id = auth.uid()
+    or exists (select 1 from groups g where g.id = group_members.group_id and g.created_by = auth.uid())
+  );
+
+create policy "read group messages" on public.group_messages
+  for select using (exists (select 1 from group_members m where m.group_id = group_messages.group_id and m.user_id = auth.uid()));
+
+create policy "send group messages" on public.group_messages
+  for insert with check (
+    sender_id = auth.uid()
+    and exists (select 1 from group_members m where m.group_id = group_messages.group_id and m.user_id = auth.uid())
+  );
+
+
+-- ============================================================================
+-- Feed: yours and your friends'
+-- ============================================================================
+-- Rows are written by triggers on workouts, records and achievements, never by
+-- the client — which is why there is no insert policy for feed_events.
+
+create policy "read friends feed" on public.feed_events
+  for select to authenticated using (user_id = auth.uid() or is_friend(user_id));
+
+create policy "delete own event" on public.feed_events
+  for delete to authenticated using (user_id = auth.uid());
+
+create policy "read likes" on public.feed_likes
+  for select to authenticated using (exists (
+    select 1 from feed_events e where e.id = feed_likes.event_id and (e.user_id = auth.uid() or is_friend(e.user_id))
+  ));
+
+create policy "like as self" on public.feed_likes
+  for insert to authenticated with check (user_id = auth.uid());
+
+create policy "unlike own" on public.feed_likes
+  for delete to authenticated using (user_id = auth.uid());
+
+create policy "read comments" on public.feed_comments
+  for select to authenticated using (exists (
+    select 1 from feed_events e where e.id = feed_comments.event_id and (e.user_id = auth.uid() or is_friend(e.user_id))
+  ));
+
+create policy "comment as self" on public.feed_comments
+  for insert to authenticated with check (user_id = auth.uid());
+
+create policy "delete own comment" on public.feed_comments
+  for delete to authenticated using (user_id = auth.uid());
+
+
+-- ============================================================================
+-- Shared reference data
+-- ============================================================================
+
+-- The twelve achievement definitions: names, descriptions, thresholds. Static
+-- content, correctly readable by everyone signed in.
+create policy "read achievements" on public.achievements
+  for select to authenticated using (true);
+
+-- Who has unlocked what. Readable by any signed-in user so a profile can show
+-- someone's badges.
+create policy "read unlocked" on public.user_achievements
+  for select to authenticated using (true);
+
+
+-- ============================================================================
+-- Legacy tables
+-- ============================================================================
+-- `workouts` and `workout_exercises` predate `user_workouts`, which stores its
+-- exercises as jsonb on the row. Nothing in the app reads either any more, but
+-- the policies are still deployed, so they are recorded here — a file that
+-- documents most of the database is the problem this rewrite was fixing.
+
+create policy "Select workouts" on public.workouts for select using (auth.uid() = user_id);
+create policy "Insert workouts" on public.workouts for insert with check (auth.uid() = user_id);
+create policy "Update workouts" on public.workouts for update using (auth.uid() = user_id);
+create policy "Delete workouts" on public.workouts for delete using (auth.uid() = user_id);
+
+create policy "Select exercises" on public.workout_exercises
+  for select using (exists (select 1 from workouts where workouts.id = workout_exercises.workout_id and workouts.user_id = auth.uid()));
+
+create policy "Insert exercises" on public.workout_exercises
+  for insert with check (exists (select 1 from workouts where workouts.id = workout_exercises.workout_id and workouts.user_id = auth.uid()));
+
+
+-- ============================================================================
+-- Profiles — SEE THE NOTE BELOW
+-- ============================================================================
+
 create policy "insert own profile" on public.profiles
   for insert with check (id = auth.uid());
 
+create policy "update own profile" on public.profiles
+  for update using (id = auth.uid()) with check (id = auth.uid());
 
--- ----------------------------------------------------------------------------
--- 5. Atomic reward RPCs.
+-- Own row only. Both previous SELECT policies let any signed-in session read
+-- every row, and being permissive they OR'd together, so dropping one changed
+-- nothing. Measured before the change: 19 rows visible to one account, 18 of
+-- them other people, all 18 with a weight recorded.
+create policy "read own profile" on public.profiles
+  for select to authenticated using (id = auth.uid());
+
+
+-- The public half, as a view.
 --
--- Call these instead of reading a value, adding to it and writing it back.
--- Two devices finishing a workout at once will no longer lose one of the
--- rewards, and a column missing from a SELECT can no longer zero a column.
--- ----------------------------------------------------------------------------
-
-create or replace function public.award_xp(xp_delta int, energy_delta int default 0)
-returns public.profiles
-language sql
-volatile
-security definer
-set search_path = public
-as $$
-  update public.profiles
-     set xp = coalesce(xp, 0) + greatest(xp_delta, 0),
-         energy_points = coalesce(energy_points, 0) + greatest(energy_delta, 0)
-   where id = auth.uid()
-  returning *;
-$$;
-
-create or replace function public.daily_spin()
-returns json
-language plpgsql
-volatile
-security definer
-set search_path = public
-as $$
-declare
-  me public.profiles;
-  roll float := random();
-  energy_won int := 0;
-  xp_won int := 0;
-begin
-  select * into me from public.profiles where id = auth.uid();
-  if me is null then
-    return json_build_object('ok', false, 'reason', 'no_profile');
-  end if;
-
-  -- The date check lives here so a user cannot spin repeatedly by editing the
-  -- client or changing their device clock.
-  if me.last_spin_date = current_date then
-    return json_build_object('ok', false, 'reason', 'already_spun');
-  end if;
-
-  if roll > 0.9 then
-    xp_won := 150;
-  elsif roll > 0.6 then
-    energy_won := 100;
-  else
-    energy_won := 30;
-  end if;
-
-  update public.profiles
-     set xp = coalesce(xp, 0) + xp_won,
-         energy_points = coalesce(energy_points, 0) + energy_won,
-         last_spin_date = current_date
-   where id = auth.uid();
-
-  return json_build_object('ok', true, 'xp', xp_won, 'energy', energy_won);
-end $$;
-
-create or replace function public.purchase_item(
-  p_item_id text,
-  p_item_type text,
-  p_price int
-)
-returns json
-language plpgsql
-volatile
-security definer
-set search_path = public
-as $$
-declare
-  me public.profiles;
-begin
-  select * into me from public.profiles where id = auth.uid() for update;
-  if me is null then
-    return json_build_object('ok', false, 'reason', 'no_profile');
-  end if;
-
-  -- Price and balance are both checked server-side; the client can no longer
-  -- claim an item costs less than it does.
-  if coalesce(me.energy_points, 0) < p_price then
-    return json_build_object('ok', false, 'reason', 'insufficient_funds');
-  end if;
-
-  update public.profiles
-     set energy_points = coalesce(energy_points, 0) - p_price
-   where id = auth.uid();
-
-  if p_item_type <> 'powerup' and p_item_type <> 'title' then
-    insert into public.user_inventory (user_id, item_id, item_type, purchased_at)
-    values (auth.uid(), p_item_id, p_item_type, now())
-    on conflict (user_id, item_id) do nothing;
-  end if;
-
-  return json_build_object('ok', true);
-end $$;
-
-grant execute on function public.award_xp(int, int) to authenticated;
-grant execute on function public.daily_spin() to authenticated;
-grant execute on function public.purchase_item(text, text, int) to authenticated;
-
-
--- ----------------------------------------------------------------------------
--- 6. Daily quests never reset.
+-- Row-level policies cannot restrict columns, so "everyone may see a name and a
+-- level, nobody may see a weight" is not expressible as a policy. The view runs
+-- as its owner (security_invoker = false) and selects only the safe columns.
 --
--- `tasks.completed` is a plain boolean with no date, so once a custom task was
--- ticked it stayed green forever. This column records which day it was last
--- completed; a task counts as done only when it matches today.
--- ----------------------------------------------------------------------------
+-- Supabase's linter flags this as `security_definer_view`. That is the
+-- mechanism, not a mistake: reading past the row policy is the entire point,
+-- and what it returns is fixed by the column list below.
+create view public.public_profiles as
+  select p.id, p.first_name, p.xp, p.current_streak, p.workouts_per_week,
+         p.equipped_avatar, p.equipped_ring, p.equipped_badge, p.equipped_title,
+         p.created_at
+    from public.profiles p;
 
-alter table public.tasks add column if not exists completed_on date;
+alter view public.public_profiles set (security_invoker = false);
+revoke all    on public.public_profiles from anon;
+grant  select on public.public_profiles to authenticated;
 
--- Existing ticked tasks are treated as completed today, so nothing looks like
--- it regressed the first time the app runs after this migration.
-update public.tasks set completed_on = current_date where completed = true and completed_on is null;
+-- Leaderboard, friend search, public profile, chat header and the comment and
+-- group sheets all read the view. Anything reading profiles directly is reading
+-- its own row.
 
 
 -- ============================================================================
--- APPLIED 2026-09-06 via three follow-up migrations. Kept here as a record of
--- what the live database now contains.
---
---   dedupe_policies_and_enforce_blocks
---     Postgres OR-combines permissive policies. The original Romanian-named
---     policies were still in place alongside the ones above, and the looser
---     rule always won — so the block checks on `messages` were doing nothing.
---     Those superseded policies are now dropped, and `friendships` gained
---     explicit rules it never had.
---
---   complete_purchase_item_rpc
---     purchase_item now applies the power-up effects and title grants itself,
---     under a row lock, instead of leaving them to the client.
---
---   restrict_rpc_execution_to_signed_in_users
---     EXECUTE revoked from PUBLIC and anon on all four functions.
---
--- Still outstanding, needs a decision:
---
---   public.meals has RLS disabled and is reachable with the anon key. It is a
---   legacy table with 0 rows that no screen references. Either drop it, or:
---     ALTER TABLE public.meals ENABLE ROW LEVEL SECURITY;
---   (with no policies, that denies all access — correct for an unused table).
---
---   Legacy tables todos, workouts, workout_exercises are also empty and unused;
---   `workouts` + `workout_exercises` are a normalised design that was abandoned
---   in favour of the JSON blob in user_workouts.
+-- Functions
 -- ============================================================================
+-- All SECURITY DEFINER, all filtering by auth.uid() internally, all revoked
+-- from anon. They exist because row-level policies cannot express column-level
+-- rules, cross-row arithmetic, or anything that must be atomic.
+--
+--   add_water(p_ml int, p_tz text)                     -> json
+--       Adds to today's total under a row lock and awards the goal XP in the
+--       same transaction. Replaced a client read-modify-write where two quick
+--       taps both read the same value and one was lost.
+--
+--   award_xp(xp_delta int, energy_delta int)           -> json
+--       Increments in the database. Reading, adding and writing back is what
+--       let the old daily spin reset people's totals to zero.
+--
+--   browse_workouts(p_limit int, p_search text, p_muscle text)
+--       Public workouts, optionally filtered by muscle. The filter is here
+--       rather than in the client because the limit applies first.
+--
+--   check_achievements()                               -> new unlocks
+--   claim_daily_reward()                               -> json
+--       The seven-day login ladder. Server decides the day and the amount, and
+--       refuses a second claim on the same date.
+--
+--   complete_workout(..., p_tz text, p_exercises jsonb)-> json
+--       Writes the session with its set snapshot, advances the streak (spending
+--       a freeze on a missed day), and pays out. Re-derives volume from the
+--       sets rather than trusting the client figure, which earns an XP bonus.
+--
+--   copy_workout(p_workout_id uuid)                    -> clones, sets cleared
+--   get_exercise_history(p_name text)                  -> per-session bests
+--   get_feed(p_limit int, p_before timestamptz)        -> paged feed
+--   get_logged_exercises()                             -> everything trained
+--   get_public_workouts(p_user_id uuid)                -> four columns, honours blocks
+--   get_saved_workouts()                               -> bookmarks
+--   get_streak_calendar(p_month date, p_tz text)       -> days trained
+--   grant_streak_freeze()
+--   is_blocked_pair(a uuid, b uuid)                    -> used inside policies
+--   is_friend(other uuid)                              -> used inside policies
+--   purchase_item(p_item_id text, p_item_type text, p_price int)
+--       Checks the balance and grants in one transaction.
+--   submit_sets(p_sets jsonb)                          -> only genuine records
+--       Compares estimated 1RM server-side so a modified client cannot claim a
+--       record it did not earn.
+--   toggle_saved_workout(p_workout_id uuid)            -> boolean
+--       Refuses to save a workout the caller is not allowed to see.
+--
+--   add_water(p_ml int, p_tz text)                     -> json
+--   claim_daily_reward()                               -> json
+--   get_achievement_progress()                         -> progress per badge
+--   set_workout_note(p_completion_id uuid, p_note text)
+--   delete_my_account()                                -> json
+--       Erases every row the account owns, across all tables, then the auth
+--       row. Named explicitly rather than relying on foreign keys: nine tables
+--       cascade, nine are ON DELETE NO ACTION and would abort the delete, and
+--       seven have no key to auth.users at all. Files go separately, through
+--       the Storage API — storage.objects blocks direct SQL deletion.
+--
+-- GRANTS. Postgres gives EXECUTE on a new function to PUBLIC by default, and
+-- PUBLIC includes anon, so `revoke ... from anon` alone leaves the privilege in
+-- place — sixteen functions here were anon-callable for exactly that reason.
+-- The pattern is:
+--
+--   revoke execute on function <sig> from public;
+--   grant  execute on function <sig> to authenticated;
+--
+-- Trigger functions (no direct grants needed): feed_on_workout,
+-- feed_on_record, feed_on_achievement.
+
+
+-- ============================================================================
+-- Storage
+-- ============================================================================
+-- workout_covers: public to read, 3 MB, jpeg/png/webp only. Files are stored at
+-- <user-id>/<workout-id>.jpg, so the first path segment is the owner and writes
+-- are scoped to it. chat_images predates this and has no size or type limit,
+-- which is a bucket anyone signed in can fill.
+
+create policy "read workout covers" on storage.objects
+  for select using (bucket_id = 'workout_covers');
+
+create policy "write own covers" on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'workout_covers' and (storage.foldername(name))[1] = auth.uid()::text);
+
+create policy "update own covers" on storage.objects
+  for update to authenticated
+  using (bucket_id = 'workout_covers' and (storage.foldername(name))[1] = auth.uid()::text);
+
+create policy "delete own covers" on storage.objects
+  for delete to authenticated
+  using (bucket_id = 'workout_covers' and (storage.foldername(name))[1] = auth.uid()::text);
+
+
+-- ============================================================================
+-- Still open
+-- ============================================================================
+--
+--   public.meals          RLS disabled. Legacy, 0 rows, nothing reads it.
+--                         Enable it with no policies, or drop the table.
+--
+--   leaked password       A dashboard setting, not SQL: Auth > Policies.
+--   protection            Checks new passwords against HaveIBeenPwned.

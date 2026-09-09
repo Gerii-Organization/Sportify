@@ -13,7 +13,7 @@ const AnimatedCircle = Reanimated.createAnimatedComponent(Circle);
 const AnimatedPolygon = Reanimated.createAnimatedComponent(Polygon);
 import { supabase } from '../lib/supabase';
 import { Pedometer } from 'expo-sensors';
-import { colors } from '../theme';
+import { colors, levelTiers } from '../theme';
 import { getAvatar, getRing } from '../constants/cosmetics';
 import { levelInfo } from '../lib/level';
 import { todayKey, formatDuration, formatRelativeDate } from '../lib/date';
@@ -22,12 +22,15 @@ import Avatar from '../components/Avatar';
 import { useAuth } from '../context/AuthContext';
 import EditProfileSheet from '../components/EditProfileSheet';
 import MacroRings, { macroTargets } from '../components/MacroRings';
-import { WATER_AMOUNTS, WATER_GOAL_ML } from '../constants/content';
+import { WATER_GOAL_ML } from '../constants/content';
 import AchievementGrid from '../components/AchievementGrid';
 import { mergeAchievements } from '../lib/achievements';
 import WeightSheet from '../components/WeightSheet';
 import { getSetting, setSetting } from '../lib/settings';
 import { syncReminders } from '../lib/reminders';
+import { readSleepMinutes } from '../lib/health';
+import { deleteAccount } from '../lib/deleteAccount';
+import WaterSheet from '../components/WaterSheet';
 import AmbientGlow from '../components/AmbientGlow';
 import useRefresh from '../lib/useRefresh';
 import Press from '../components/Press';
@@ -121,6 +124,49 @@ export default function DashboardScreen({ navigation, route }) {
    */
   const streakDays = userProfile?.current_streak || 0;
 
+  /**
+   * Deletes the account, after saying plainly what goes.
+   *
+   * Two prompts rather than one. The first names what is destroyed; the second
+   * exists because the list is long enough that people stop reading, and this
+   * is the one action in the app with no undo. Play requires the feature; it
+   * does not require making it easy to do by accident.
+   */
+  const confirmDeleteAccount = () => {
+    Alert.alert(
+      'Delete your account?',
+      'This removes your profile, workouts, history, records, photos, messages ' +
+      'and friendships. It cannot be undone and nothing is kept.',
+      [
+        { text: 'Keep my account', style: 'cancel' },
+        {
+          text: 'Continue',
+          style: 'destructive',
+          onPress: () => Alert.alert(
+            'Last chance',
+            'Everything is erased immediately. There is no recovery.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Delete forever',
+                style: 'destructive',
+                onPress: async () => {
+                  try {
+                    await deleteAccount(user?.id);
+                    setMenuVisible(false);
+                    fetchProfileAndStats();
+                  } catch (e) {
+                    Alert.alert('Could not delete the account', e.message);
+                  }
+                },
+              },
+            ]
+          ),
+        },
+      ]
+    );
+  };
+
   const refreshReminders = useCallback(() => {
     if (!isLoggedIn) return;
     syncReminders({
@@ -207,17 +253,17 @@ export default function DashboardScreen({ navigation, route }) {
 
 
   const saveSleepToSupabase = async (totalSleepMinutes) => {
-    try {
-      if (!user) return;
+    if (!user) return;
 
-      const now = new Date();
-      const todayStr = todayKey();
+    const { error } = await supabase.from('daily_stats').upsert(
+      { user_id: user.id, date: todayKey(), sleep_minutes: totalSleepMinutes },
+      { onConflict: 'user_id,date' }
+    );
 
-      await supabase.from('daily_stats').upsert(
-        { user_id: user.id, date: todayStr, sleep_minutes: totalSleepMinutes },
-        { onConflict: 'user_id,date' }
-      );
-    } catch (e) { }
+    // Not worth an alert — the figure is read again on the next launch — but
+    // swallowing it entirely is how the sleep column stayed empty without
+    // anyone finding out.
+    if (error) console.warn(`[Sportify] Could not save sleep: ${error.message}`);
   };
 
   useEffect(() => {
@@ -227,15 +273,24 @@ export default function DashboardScreen({ navigation, route }) {
     }
   }, [route.params?.newActivityMinutes, navigation]);
 
+  /**
+   * One upsert instead of select-then-update-or-insert.
+   *
+   * The old shape read the row, decided, then wrote — and the pedometer fires
+   * often, so two of those could interleave: both find no row, both insert, and
+   * the second hits `daily_steps_user_id_record_date_key`. That error landed in
+   * an empty catch, so the step count silently stopped saving for the rest of
+   * the day. The unique constraint is what makes the single statement possible.
+   */
   const saveStepsToSupabase = async (steps) => {
-    try {
-      if (!user) return;
-      const todayStr = todayKey();
-      const { data: existing } = await supabase.from('daily_steps').select('id').eq('user_id', user.id).eq('record_date', todayStr).maybeSingle();
+    if (!user) return;
 
-      if (existing) await supabase.from('daily_steps').update({ step_count: steps }).eq('id', existing.id);
-      else await supabase.from('daily_steps').insert([{ user_id: user.id, record_date: todayStr, step_count: steps }]);
-    } catch (e) { }
+    const { error } = await supabase.from('daily_steps').upsert(
+      { user_id: user.id, record_date: todayKey(), step_count: steps },
+      { onConflict: 'user_id,record_date' }
+    );
+
+    if (error) console.warn(`[Sportify] Could not save steps: ${error.message}`);
   };
 
   useEffect(() => {
@@ -270,41 +325,34 @@ export default function DashboardScreen({ navigation, route }) {
     return () => { if (subscription) subscription.remove(); };
   }, []);
 
+  /**
+   * Last night's sleep from Apple Health.
+   *
+   * The reading, the window and the overlap handling live in lib/health.js —
+   * see the note there for the three bugs this replaces, which together are why
+   * every stored sleep figure was zero.
+   */
+  // `user?.id` is in the deps, not an empty array. The session resolves after
+  // the first render, so an effect that runs once captures the version of
+  // saveSleepToSupabase that closed over `user === null` — and its `if (!user)
+  // return` means the write never happens. Same stale-closure shape that left
+  // screens empty after signing in.
   useEffect(() => {
-    if (Platform.OS !== 'ios') return;
-    let isCancelled = false;
-    const syncSleepFromHealth = async () => {
-      try {
-        const AppleHealthKitModule = await import('react-native-health');
-        const AppleHealthKit = AppleHealthKitModule.default;
-        const permissions = { permissions: { read: [AppleHealthKit.Constants.Permissions.SleepAnalysis] } };
+    if (!user) return undefined;
+    let cancelled = false;
 
-        AppleHealthKit.initHealthKit(permissions, (err) => {
-          if (err || isCancelled) return;
-          const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
-          const options = { startDate: startOfDay.toISOString(), endDate: new Date().toISOString() };
+    (async () => {
+      const minutes = await readSleepMinutes();
+      // null means "could not read" — a missing native module, a refused
+      // permission. Writing 0 for that would record a night of no sleep.
+      if (cancelled || minutes === null) return;
 
-          AppleHealthKit.getSleepSamples(options, async (error, samples) => {
-            if (error || isCancelled) return;
-            let totalSleepMinutes = 0;
-            (samples || []).forEach(sample => {
-              const start = new Date(sample.startDate);
-              const end = new Date(sample.endDate);
-              const minutes = (end - start) / (1000 * 60);
-              if (!Number.isNaN(minutes) && minutes > 0) totalSleepMinutes += minutes;
-            });
-            totalSleepMinutes = Math.round(totalSleepMinutes);
-            if (!isCancelled && totalSleepMinutes > 0) {
-              await saveSleepToSupabase(totalSleepMinutes);
-              setDailyStats(prev => ({ ...prev, sleep: formatDuration(totalSleepMinutes) }));
-            }
-          });
-        });
-      } catch (e) { }
-    };
-    syncSleepFromHealth();
-    return () => { isCancelled = true; };
-  }, []);
+      await saveSleepToSupabase(minutes);
+      if (!cancelled) setDailyStats((prev) => ({ ...prev, sleep: formatDuration(minutes) }));
+    })();
+
+    return () => { cancelled = true; };
+  }, [user?.id]);
 
   useFocusEffect(useCallback(() => {
     // user?.id is in the deps because useCallback pins the closure: without it
@@ -406,8 +454,16 @@ export default function DashboardScreen({ navigation, route }) {
       const totalWaterMl = statLog?.water_ml ?? 0;
       const totalSleepMinutes = statLog?.sleep_minutes ?? 0;
 
+      // Only activity is written here, because only activity is computed here.
+      //
+      // This used to send water and sleep back too, straight from the read a
+      // few lines above — a read-modify-write on values this function does not
+      // own. Sleep syncs from Apple Health on its own timer: if that landed
+      // between the read and this write, the fresh figure was overwritten with
+      // the stale zero. Same for water if you tapped +250 in the gap. It is the
+      // shape that wiped people's XP on the daily spin.
       await supabase.from('daily_stats').upsert(
-        { user_id: user.id, date: todayStr, activity_minutes: totalActivityMinutes, water_ml: totalWaterMl, sleep_minutes: totalSleepMinutes },
+        { user_id: user.id, date: todayStr, activity_minutes: totalActivityMinutes },
         { onConflict: 'user_id,date' }
       );
 
@@ -427,47 +483,32 @@ export default function DashboardScreen({ navigation, route }) {
     }
   };
 
-  const addWater = async (amount) => {
-    // Amount may be negative — the modal offers an undo for a mis-tapped entry.
-    const newWaterValue = Math.max(0, dailyStats.water + amount);
-    setDailyStats(prev => ({ ...prev, water: newWaterValue }));
-    setWaterModalVisible(false);
+  /**
+   * Logs water through one server call.
+   *
+   * Was a read-modify-write: select the row, add the amount, write it back. Two
+   * taps of +250 in quick succession both read the same starting value and both
+   * write the same total, so one is lost. The goal XP had the same race one
+   * level up — both could observe the crossing and award twice.
+   *
+   * add_water locks the day's row, does the arithmetic and the award in a
+   * single transaction, and returns the resulting total. The optimistic update
+   * below is replaced by that figure rather than trusted.
+   */
+  /**
+   * What to do once the sheet has logged something.
+   *
+   * The sheet owns the call, so the total comes back from the server rather
+   * than being recomputed here — adding the amount locally is the shape that
+   * loses one of two quick taps.
+   */
+  const onWaterLogged = (result) => {
+    setDailyStats((prev) => ({ ...prev, water: result.water_ml }));
 
-    try {
-      if (!user) return;
-      const todayStr = todayKey();
-
-      const { data: currentStat } = await supabase.from('daily_stats').select('id, water_ml').eq('user_id', user.id).eq('date', todayStr).maybeSingle();
-
-      if (currentStat) await supabase.from('daily_stats').update({ water_ml: (currentStat.water_ml ?? 0) + amount }).eq('id', currentStat.id);
-      else await supabase.from('daily_stats').insert([{ user_id: user.id, date: todayStr, activity_minutes: 0, water_ml: amount }]);
-
-      const waterTask = tasks.find(t => t.type === 'water');
-      if (waterTask) {
-        // Award only on the transition across the goal, not on every sip after
-        // it. Comparing the value before and after is what makes that possible.
-        const wasCompleted = (dailyStats.water / 1000) >= waterTask.goal;
-        const isCompletedNow = (newWaterValue / 1000) >= waterTask.goal;
-
-        if (!wasCompleted && isCompletedNow) {
-          // award_xp increments in the database. Reading xp, adding 30 and
-          // writing it back is the pattern that let the daily spin reset
-          // everyone's total to zero.
-          const { data: updated } = await supabase.rpc('award_xp', {
-            xp_delta: 30,
-            energy_delta: 0,
-          });
-
-          if (updated) {
-            setUserProfile((prev) => ({ ...prev, xp: updated.xp }));
-            showXpToast(30, 'Water goal reached 💧');
-            checkAchievements();
-          }
-        }
-      }
-    } catch (e) {
-      // A failed water write is not worth interrupting the user for; the value
-      // reverts on the next refresh.
+    if (result.goal_reached) {
+      setUserProfile((prev) => (prev ? { ...prev, xp: (prev.xp || 0) + result.xp } : prev));
+      showXpToast(result.xp, 'Water goal reached 💧');
+      checkAchievements();
     }
   };
 
@@ -575,11 +616,19 @@ export default function DashboardScreen({ navigation, route }) {
         borderWidth = 3;
         extraStyles = { shadowColor: '#fff', shadowOpacity: 0.2, shadowRadius: 5 };
       } else {
-        if (currentLevel >= 40) { strokeColor = '#FF00FF'; borderWidth = 4; extraStyles = { shadowColor: '#FF00FF', shadowOpacity: 0.8, shadowRadius: 10 }; }
-        else if (currentLevel >= 30) { strokeColor = '#00FFFF'; borderWidth = 3; extraStyles = { shadowColor: '#00FFFF', shadowOpacity: 0.5 }; }
-        else if (currentLevel >= 20) { strokeColor = colors.energy; borderWidth = 3; }
-        else if (currentLevel >= 10) { strokeColor = '#C0C0C0'; borderWidth = 2; }
-        else if (currentLevel >= 5) { strokeColor = '#CD7F32'; borderWidth = 2; }
+        // From theme.levelTiers, the same ladder Avatar.js reads.
+        //
+        // This block used to carry its own copy, still on the pre-redesign
+        // magenta and cyan — so a level 40 account showed #FF6BD6 in every list
+        // and #FF00FF here, two colours for one rank on one screen.
+        const tier = levelTiers.find((t) => currentLevel >= t.minLevel);
+        if (tier) {
+          strokeColor = tier.color;
+          borderWidth = tier.borderWidth;
+          if (tier.glow) {
+            extraStyles = { shadowColor: tier.color, shadowOpacity: 0.7, shadowRadius: 10 };
+          }
+        }
       }
     }
 
@@ -615,7 +664,7 @@ const renderProgressShape = () => {
             {/* Glow: same shape, thicker stroke, Gaussian blur. */}
             <Circle cx="50" cy="50" r="45" stroke={theme.color} strokeWidth="8" fill="transparent" opacity="0.7" filter="url(#glow)" />
             {/* Track and progress arc, drawn sharp on top of the glow. */}
-            <Circle cx="50" cy="50" r="45" stroke="#121212" strokeWidth="3" fill="transparent" />
+            <Circle cx="50" cy="50" r="45" stroke={colors.surface} strokeWidth="3" fill="transparent" />
             <AnimatedCircle cx="50" cy="50" r="45" stroke={theme.color} strokeWidth="3" fill="transparent" strokeDasharray={theme.perimeter} strokeLinecap="round" animatedProps={animatedOutline} />
           </G>
         );
@@ -625,7 +674,7 @@ const renderProgressShape = () => {
           {/* Glow, following the exact polygon outline. */}
           <Polygon points={points} stroke={theme.color} strokeWidth="8" fill="transparent" strokeLinejoin="round" opacity="0.7" filter="url(#glow)" />
           {/* Track and progress outline. */}
-          <Polygon points={points} stroke="#121212" strokeWidth="3" fill="transparent" strokeLinejoin="round" />
+          <Polygon points={points} stroke={colors.surface} strokeWidth="3" fill="transparent" strokeLinejoin="round" />
           <AnimatedPolygon points={points} stroke={theme.color} strokeWidth="3" fill="transparent" strokeDasharray={theme.perimeter} strokeLinecap="round" strokeLinejoin="round" animatedProps={animatedOutline} />
         </G>
       );
@@ -793,40 +842,45 @@ const renderProgressShape = () => {
               <Avatar profile={userProfile} size={42} muted={!isLoggedIn} />
               <View style={styles.identityText}>
                 <Text style={styles.greeting}>{greetingFor(new Date())}</Text>
+                {/* shrink + truncate so a long name gives way to the streak
+                    rather than pushing it off the row. */}
                 <Text style={styles.userName} numberOfLines={1}>
                   {isLoggedIn ? userProfile?.first_name || 'Athlete' : 'Guest'}
                 </Text>
               </View>
             </Press>
 
-            {/* The energy count used to sit here as a second chip. It is a
-                shop balance — you look at it when you are about to spend, and
-                the shop shows it at the top of its own screen. On the dashboard
-                it was a number with nowhere to go.
+            {/* Beside the name, not in the corner.
+                A separate Press rather than nested inside the identity one —
+                nesting two pressables means the inner swallows the outer's
+                taps, and both here go somewhere different.
 
-                Dropping it leaves room for the streak to say what it is. A bare
-                "5" next to a flame is a quantity of nothing in particular; the
-                streak is the figure people actually open the app to check, so
-                it gets the word. */}
+                Just the number. "5 days" reads as a label; the flame already
+                says what is being counted, and the pill's raised surface and
+                chevron say it goes somewhere. */}
+            {isLoggedIn && (
+              <Press
+                scale={0.93}
+                style={[styles.streakPill, streakDays > 0 && styles.streakPillOn]}
+                onPress={() => navigation.navigate('StreakScreen')}
+                accessibilityRole="button"
+                accessibilityLabel={`Streak: ${streakDays} ${streakDays === 1 ? 'day' : 'days'}. Open the calendar.`}
+              >
+                <Flame
+                  color={streakDays > 0 ? colors.streak : colors.textFaint}
+                  size={15}
+                  fill={streakDays > 0 ? colors.streak : 'transparent'}
+                />
+                <Text style={[styles.streakPillText, streakDays > 0 && { color: colors.streak }]}>
+                  {streakDays}
+                </Text>
+                <ChevronRight color={streakDays > 0 ? colors.streak : colors.textFaint} size={13} />
+              </Press>
+            )}
+
+            <View style={{ flex: 1 }} />
+
             <View style={styles.topRight}>
-              {isLoggedIn && (
-                <Press
-                  scale={0.95}
-                  style={[styles.streakChip, streakDays > 0 && styles.streakChipOn]}
-                  onPress={() => navigation.navigate('StreakScreen')}
-                  accessibilityLabel={`Streak: ${streakDays} days. Open calendar.`}
-                >
-                  <Flame
-                    color={streakDays > 0 ? colors.streak : colors.textFaint}
-                    size={16}
-                    fill={streakDays > 0 ? colors.streak : 'transparent'}
-                  />
-                  <Text style={[styles.streakChipText, streakDays > 0 && { color: colors.streak }]}>
-                    {streakDays > 0 ? `${streakDays} day${streakDays === 1 ? '' : 's'}` : 'No streak'}
-                  </Text>
-                </Press>
-              )}
-
               <Press
                 scale={0.92}
                 style={styles.menuBtn}
@@ -862,20 +916,7 @@ const renderProgressShape = () => {
             onDelete={deleteTask}
           />
 
-          <View style={styles.summaryHead}>
-            <Text style={styles.eyebrow}>Daily Summary</Text>
-            {isLoggedIn && (
-              <Press
-                scale={0.95}
-                style={styles.logWaterBtn}
-                onPress={() => setWaterModalVisible(true)}
-                accessibilityLabel="Log water"
-              >
-                <Droplets color={colors.water} size={14} />
-                <Text style={styles.logWaterText}>Log water</Text>
-              </Press>
-            )}
-          </View>
+          <Text style={styles.eyebrow}>Daily Summary</Text>
           {/* Calories leads. It is the figure with a real target, the one
               people check most, and treating all four as equal rows made the
               block read as a settings list. The other three are supporting
@@ -1027,7 +1068,7 @@ const renderProgressShape = () => {
                 icon={<TrendingUp color={colors.textMuted} size={20}/>}
                 label="Progress"
                 value="Stats, history, records"
-                onPress={() => { setMenuVisible(false); navigation.navigate('Progress'); }}
+                onPress={() => { setMenuVisible(false); navigation.navigate('ProgressScreen'); }}
                 disabled={!isLoggedIn}
               />
               <MenuOption
@@ -1079,9 +1120,23 @@ const renderProgressShape = () => {
             </ScrollView>
             <View style={styles.menuFooter}>
               {isLoggedIn ? (
-                <TouchableOpacity activeOpacity={0.7} style={styles.logoutButton} onPress={async () => { await supabase.auth.signOut(); setMenuVisible(false); fetchProfileAndStats(); }}>
-                  <LogIn color={colors.danger} size={20} /><Text style={styles.logoutText}>Sign Out</Text>
-                </TouchableOpacity>
+                <>
+                  <TouchableOpacity activeOpacity={0.7} style={styles.logoutButton} onPress={async () => { await supabase.auth.signOut(); setMenuVisible(false); fetchProfileAndStats(); }}>
+                    <LogIn color={colors.danger} size={20} /><Text style={styles.logoutText}>Sign Out</Text>
+                  </TouchableOpacity>
+
+                  {/* Quiet and last. It has to be findable — Play requires it
+                      reachable from inside the app — without sitting next to
+                      Sign Out looking like the same kind of button. */}
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    style={styles.deleteAccountBtn}
+                    onPress={confirmDeleteAccount}
+                    accessibilityLabel="Delete my account"
+                  >
+                    <Text style={styles.deleteAccountText}>Delete my account</Text>
+                  </TouchableOpacity>
+                </>
               ) : (
                 <TouchableOpacity activeOpacity={0.7} style={styles.loginButtonWrapper} onPress={() => { setMenuVisible(false); navigation.navigate('AuthScreen'); }}>
                   <Text style={styles.loginButtonText}>Log In / Create Account</Text>
@@ -1092,32 +1147,12 @@ const renderProgressShape = () => {
         </View>
       </Modal>
 
-      <Modal transparent visible={isWaterModalVisible} animationType="fade">
-        <View style={styles.modalOverlayFull}>
-          <View style={styles.modalContentWater}>
-            <Droplets size={48} color={colors.water} style={{ marginBottom: 26 }} />
-            <Text style={styles.modalTitle}>Add Water</Text>
-            <View style={styles.selectionGrid}>
-              {WATER_AMOUNTS.map((amount) => (
-                <TouchableOpacity activeOpacity={0.7} key={amount} style={styles.amountButton} onPress={() => addWater(amount)}>
-                  <Text style={styles.amountButtonText}>+{amount}ml</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            {dailyStats.water > 0 && (
-              <TouchableOpacity activeOpacity={0.7}
-                style={styles.undoWaterBtn}
-                onPress={() => addWater(-250)}
-                accessibilityLabel="Remove 250 millilitres"
-              >
-                <Text style={styles.undoWaterText}>−250ml (undo)</Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity activeOpacity={0.7} onPress={() => setWaterModalVisible(false)}><Text style={styles.closeBtnText}>Cancel</Text></TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      <WaterSheet
+        visible={isWaterModalVisible}
+        onClose={() => setWaterModalVisible(false)}
+        currentMl={dailyStats.water}
+        onLogged={onWaterLogged}
+      />
 
       <Modal visible={isProfileModalVisible} animationType="slide">
         <View style={styles.profileContainer}>
@@ -1211,9 +1246,45 @@ const renderProgressShape = () => {
                   )}
                 </View>
 
+                {/* Progress lives here rather than in the tab bar.
+                    It is not somewhere you go several times a day — it is where
+                    you look at what you have accumulated, which is what a
+                    profile is. Tapping your own avatar is already that gesture.
+
+                    A pushed route rather than an inline panel: Progress has
+                    four segments with their own scroll views, and nesting that
+                    inside a modal gives both of them half the height. */}
+                <Press
+                  scale={0.98}
+                  style={styles.progressEntry}
+                  onPress={() => { setProfileModalVisible(false); navigation.navigate('ProgressScreen'); }}
+                  accessibilityLabel="Open your progress"
+                >
+                  <View style={styles.progressEntryIcon}>
+                    <TrendingUp color={colors.accent} size={20} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.progressEntryTitle}>Progress</Text>
+                    <Text style={styles.progressEntrySub}>Analytics, history, records and badges</Text>
+                  </View>
+                  <ChevronRight color={colors.textFaint} size={18} />
+                </Press>
+
                 <View style={styles.sectionWrapper}>
                   <Text style={styles.profileSectionTitle}>Achievements</Text>
                   <AchievementGrid achievements={achievements} />
+                  {/* The strip shows what you have; the screen shows how far
+                      the rest are. Locked badges without a distance are just
+                      grey circles. */}
+                  <Press
+                    scale={0.98}
+                    style={styles.seeAllRow}
+                    onPress={() => { setProfileModalVisible(false); navigation.navigate('AchievementsScreen'); }}
+                    accessibilityLabel="See all achievements"
+                  >
+                    <Text style={styles.seeAllText}>See all achievements</Text>
+                    <ChevronRight color={colors.accent} size={16} />
+                  </Press>
                 </View>
 
               </ScrollView>
@@ -1387,13 +1458,6 @@ const styles = StyleSheet.create({
   sectionTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
   editButtonBorder: { width: 42, height: 42, justifyContent: 'center', alignItems: 'center', borderRadius: 21, backgroundColor: colors.card },
 
-  summaryHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingRight: 20 },
-  logWaterBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: 'rgba(79, 184, 232, 0.14)',
-    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999,
-  },
-  logWaterText: { color: colors.water, fontSize: 12, fontWeight: '700' },
 
 
 
@@ -1422,15 +1486,25 @@ const styles = StyleSheet.create({
   topRight: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   // Chips, not pills: icon plus number only. At this size a word would wrap or
   // truncate, and the icon already says which number it is.
-  streakChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 7,
-    paddingHorizontal: 13, paddingVertical: 9, borderRadius: 999,
-    backgroundColor: colors.surface,
+  streakPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingLeft: 11, paddingRight: 7, paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: colors.surfaceRaised,
+    marginLeft: 10,
   },
-  streakChipOn: { backgroundColor: 'rgba(255, 138, 43, 0.14)' },
-  streakChipText: { color: colors.textMuted, fontSize: 13, fontWeight: '700', letterSpacing: -0.2 },
-  identity: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
-  identityText: { flex: 1 },
+  streakPillOn: {
+    backgroundColor: 'rgba(255, 138, 43, 0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 138, 43, 0.35)',
+  },
+  streakPillText: {
+    color: colors.textMuted, fontSize: 15, fontWeight: '800',
+    letterSpacing: -0.3, fontVariant: ['tabular-nums'],
+  },
+  // shrink rather than flex:1 — the name yields to the streak beside it.
+  identity: { flexDirection: 'row', alignItems: 'center', gap: 12, flexShrink: 1, maxWidth: '62%' },
+  identityText: { flexShrink: 1 },
   greeting: { color: colors.textMuted, fontSize: 13, fontWeight: '500' },
   userName: { color: colors.text, fontSize: 21, fontWeight: '800', letterSpacing: -0.5, marginTop: 1 },
   menuBtn: {
@@ -1499,31 +1573,38 @@ const styles = StyleSheet.create({
   sidebarXpText: { color: colors.textMuted, fontSize: 11, marginTop: 6, fontWeight: '600' },
 
   menuDivider: { height: 1, backgroundColor: colors.surfaceHigh, marginVertical: 20 },
+  progressEntry: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    backgroundColor: colors.card, borderRadius: 20,
+    padding: 16, marginHorizontal: 20, marginBottom: 20,
+  },
+  progressEntryIcon: {
+    width: 42, height: 42, borderRadius: 15,
+    backgroundColor: colors.accentSoft,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  progressEntryTitle: { color: colors.text, fontSize: 16, fontWeight: '700', letterSpacing: -0.3 },
+  progressEntrySub: { color: colors.textMuted, fontSize: 12, marginTop: 3 },
+  seeAllRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 12, marginTop: 4,
+  },
+  seeAllText: { color: colors.accent, fontSize: 14, fontWeight: '600' },
   menuGroupTitle: { color: colors.textFaint, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', marginBottom: 16 },
   menuOption: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 16 },
   menuOptionLeft: { flexDirection: 'row', alignItems: 'center' },
   menuOptionText: { color: colors.text, fontSize: 15, marginLeft: 16 },
   menuOptionValue: { color: colors.textMuted, fontSize: 13, marginRight: 10 },
   menuFooter: { marginTop: 'auto', paddingTop: 20 },
+  deleteAccountBtn: { alignItems: 'center', paddingVertical: 14, marginTop: 4 },
+  deleteAccountText: { color: colors.textFaint, fontSize: 13, fontWeight: '600', textDecorationLine: 'underline' },
   logoutButton: { flexDirection: 'row', alignItems: 'center', paddingVertical: 16 },
   logoutText: { color: colors.danger, fontSize: 15, fontWeight: '600', marginLeft: 16 },
 
   loginButtonWrapper: { backgroundColor: colors.accent, paddingVertical: 16, borderRadius: 18, alignItems: 'center', marginTop: 'auto' },
   loginButtonText: { color: colors.onAccent, fontSize: 15, fontWeight: '600' },
 
-  modalOverlayFull: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' },
-  modalContentWater: { backgroundColor: colors.card, borderRadius: 32, padding: 26, width: '85%', alignItems: 'center' },
   modalTitle: { color: colors.text, fontSize: 26, fontWeight: '800', marginBottom: 26 },
-  selectionGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', width: '100%' },
-  amountButton: { backgroundColor: colors.surfaceRaised, paddingVertical: 20, borderRadius: 20, marginBottom: 16, width: '47%', alignItems: 'center' },
-  amountButtonText: { color: colors.text, fontWeight: '600', fontSize: 15 },
-  undoWaterBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 14,
-    marginBottom: 10,
-  },
-  undoWaterText: { color: colors.textSecondary, fontWeight: '600', fontSize: 15 },
   closeBtnText: { color: colors.textMuted, fontSize: 15, marginTop: 10 },
 
   avatarBase: { justifyContent: 'center', alignItems: 'center', backgroundColor: colors.surface, overflow: 'hidden' },

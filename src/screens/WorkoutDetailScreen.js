@@ -6,7 +6,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { 
   ChevronLeft, Edit3, Plus, X, Play, CheckCircle2, Circle, Clock, 
-  Save, Trash2, Zap, Star, Flame, ChevronUp, ChevronDown, Globe, Lock, Info 
+  Save, Trash2, Zap, Star, Flame, ChevronUp, ChevronDown, Globe, Lock, Info, Weight, Image as ImageIcon 
 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors } from '../theme';
@@ -20,6 +20,8 @@ import PersonalRecordCard from '../components/PersonalRecordCard';
 import { AchievementIcon } from '../lib/achievements';
 import { scheduleRestAlert, cancelRestAlert } from '../lib/restNotification';
 import Button from '../components/Button';
+import PlateSheet from '../components/PlateSheet';
+import { pickAndUploadImage } from '../lib/upload';
 import { deviceTimeZone } from '../lib/date';
 
 
@@ -27,13 +29,18 @@ export default function WorkoutDetailScreen({ route, navigation }) {
   const { user, profile, refreshProfile } = useAuth();
   const workout = route?.params?.workout;
   const onSave = route?.params?.onSave;
+  /** Chosen from the workouts screen's edit mode, so it opens ready to change
+   *  rather than making you press the pencil a second time. */
+  const startInEdit = route?.params?.startInEdit;
 
   const [currentWorkout, setCurrentWorkout] = useState(workout || { name: '', exercises: [] });
-  const [mode, setMode] = useState('idle');
+  const [mode, setMode] = useState(startInEdit ? 'editing' : 'idle');
   const [timer, setTimer] = useState(0);
   const [isExerciseSelectorVisible, setIsExerciseSelectorVisible] = useState(false);
   /** Which exercise has its form cue open in the picker. */
   const [cueFor, setCueFor] = useState(null);
+  const [plateSheetVisible, setPlateSheetVisible] = useState(false);
+  const [uploadingCover, setUploadingCover] = useState(false);
   const [exerciseQuery, setExerciseQuery] = useState('');
   const [muscleFilter, setMuscleFilter] = useState(null);
 
@@ -48,7 +55,22 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     );
   }, [exerciseQuery, muscleFilter]);
 
+  /** Heaviest weight entered anywhere in this workout, as the sheet's default. */
+  const heaviestWeight = useMemo(() => {
+    let max = 0;
+    (currentWorkout.exercises || []).forEach((ex) =>
+      (ex.sets || []).forEach((set) => {
+        const w = parseFloat(set.weight);
+        if (Number.isFinite(w) && w > max) max = w;
+      })
+    );
+    return max || '';
+  }, [currentWorkout]);
+
   const [showSummary, setShowSummary] = useState(false);
+  /** Row id of the session just written, so a note can be attached to it. */
+  const [completionId, setCompletionId] = useState(null);
+  const [note, setNote] = useState('');
   /** Timestamp the current rest period ends, or null when not resting. */
   const [restEndsAt, setRestEndsAt] = useState(null);
   /** Id of the pending local notification, so it can be cancelled. */
@@ -75,6 +97,51 @@ export default function WorkoutDetailScreen({ route, navigation }) {
   }
 
 
+
+  /** Attaches the note to the session. Blank clears it, server-side. */
+  const saveNote = async () => {
+    if (!completionId) return;
+    const { error } = await supabase.rpc('set_workout_note', {
+      p_completion_id: completionId,
+      p_note: note,
+    });
+    if (error) console.warn(`[Sportify] Could not save note: ${error.message}`);
+  };
+
+  /**
+   * Sets the workout's cover photo.
+   *
+   * Stored at <user-id>/<workout-id>.jpg and overwritten in place, so changing
+   * it five times leaves one file rather than five orphans. WorkoutCard already
+   * falls back to a generated cover when there is none, so this only ever
+   * replaces the fallback.
+   */
+  const pickCover = async () => {
+    if (uploadingCover) return;
+    setUploadingCover(true);
+
+    try {
+      const result = await pickAndUploadImage({
+        bucket: 'workout_covers',
+        pathPrefix: `${user.id}/${currentWorkout.id}`,
+      });
+
+      if (result) {
+        const { error } = await supabase
+          .from('user_workouts')
+          .update({ cover_url: result.url })
+          .eq('id', currentWorkout.id);
+
+        if (error) throw error;
+        setCurrentWorkout((w) => ({ ...w, cover_url: result.url }));
+        if (onSave) onSave({ ...currentWorkout, cover_url: result.url });
+      }
+    } catch (e) {
+      Alert.alert('Could not set the cover', e.message);
+    }
+
+    setUploadingCover(false);
+  };
 
   /**
    * Publish or unpublish. A public workout appears in Browse for everyone, so
@@ -336,6 +403,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
         return;
       }
 
+      setCompletionId(result.completion_id ?? null);
       finalXP = result.xp;
       finalEnergy = result.energy;
       finalStreakValue = result.streak;
@@ -448,6 +516,14 @@ export default function WorkoutDetailScreen({ route, navigation }) {
           {mode === 'editing' && (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
               <TouchableOpacity
+                onPress={pickCover}
+                accessibilityLabel="Set cover photo"
+                activeOpacity={0.7}
+                disabled={uploadingCover}
+              >
+                <ImageIcon color={uploadingCover ? colors.textFaint : colors.accent} size={22} />
+              </TouchableOpacity>
+              <TouchableOpacity
                 onPress={togglePublic}
                 accessibilityLabel={currentWorkout.is_public ? 'Make private' : 'Share publicly'}
                 activeOpacity={0.7}
@@ -461,7 +537,15 @@ export default function WorkoutDetailScreen({ route, navigation }) {
               </TouchableOpacity>
             </View>
           )}
-          {mode === 'started' && <View style={{width: 24}} />}
+          {mode === 'started' && (
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => setPlateSheetVisible(true)}
+              accessibilityLabel="Plate calculator"
+            >
+              <Weight color={colors.accent} size={24} />
+            </TouchableOpacity>
+          )}
         </View>
 
         {mode === 'idle' && (
@@ -595,6 +679,24 @@ export default function WorkoutDetailScreen({ route, navigation }) {
                 </View>
               </View>
             </View>
+
+            {completionId && (
+              <View style={styles.duoCard}>
+                <Text style={styles.duoRewardTitle}>How did it go?</Text>
+                {/* Saved on blur rather than behind a button: a note nobody
+                    remembered to save is the same as no note. */}
+                <TextInput
+                  style={styles.noteInput}
+                  value={note}
+                  onChangeText={setNote}
+                  onBlur={saveNote}
+                  placeholder="Bar felt heavy, shoulder fine — optional"
+                  placeholderTextColor={colors.textFaint}
+                  multiline
+                  maxLength={280}
+                />
+              </View>
+            )}
 
             <View style={styles.duoCard}>
               <Text style={styles.duoRewardTitle}>Rewards Earned</Text>
@@ -755,6 +857,11 @@ export default function WorkoutDetailScreen({ route, navigation }) {
             </View>
           </View>
         </Modal>
+        <PlateSheet
+          visible={plateSheetVisible}
+          onClose={() => setPlateSheetVisible(false)}
+          initialWeight={heaviestWeight}
+        />
       </LinearGradient>
     </SafeAreaView>
   );
@@ -839,6 +946,11 @@ const styles = StyleSheet.create({
   duoCard: { backgroundColor: colors.card, width: '100%', borderRadius: 26, padding: 20, marginBottom: 20 },
   duoStatRow: { flexDirection: 'row', justifyContent: 'space-evenly', alignItems: 'center' },
   duoStatBox: { alignItems: 'center', flex: 1 },
+  noteInput: {
+    backgroundColor: colors.surface, color: colors.text,
+    borderRadius: 14, padding: 14, fontSize: 15, minHeight: 76,
+    textAlignVertical: 'top', marginTop: 4,
+  },
   duoDivider: { width: 2, height: 40, backgroundColor: colors.border },
   duoStatLabel: { color: colors.textSecondary, fontSize: 13, fontWeight: '600', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.7 },
   duoStatValue: { color: colors.text, fontSize: 26, fontWeight: '900' },

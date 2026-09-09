@@ -5,11 +5,11 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#08090C"
     },
     "ios": {
       "supportsTablet": true,
@@ -20,12 +20,18 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#08090C",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "package": "com.vick1337.Sportify"
+      "package": "com.vick1337.Sportify",
+      "permissions": [
+        "android.permission.ACTIVITY_RECOGNITION",
+        "android.permission.CAMERA",
+        "android.permission.READ_MEDIA_IMAGES"
+      ],
+      "edgeToEdgeEnabled": true
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -35,6 +41,10 @@
         "projectId": "8cdb528c-17bb-428e-90d2-61ab83c4c0b8"
       }
     },
-    "owner": "vick1337"
+    "owner": "vick1337",
+    "backgroundColor": "#08090C",
+    "plugins": [
+      "expo-notifications"
+    ]
   }
 }

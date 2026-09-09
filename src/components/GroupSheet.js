@@ -43,7 +43,7 @@ export default function GroupSheet({ visible, onClose, group, currentUserId, onC
     }
 
     const { data: profiles } = await supabase
-      .from('profiles')
+      .from('public_profiles')
       .select('id, first_name, xp, equipped_avatar')
       .in('id', ids);
 

@@ -8,6 +8,7 @@ import { colors, gradients } from '../theme';
 import { levelFromXp } from '../lib/level';
 import { useAuth } from '../context/AuthContext';
 import Avatar from '../components/Avatar';
+import NameBadge from '../components/NameBadge';
 import EmptyState from '../components/EmptyState';
 import AmbientGlow from '../components/AmbientGlow';
 
@@ -31,7 +32,7 @@ export default function PublicProfileScreen({ route, navigation }) {
       // Guests can still read a public profile, they just get no action buttons.
       setMyId(null);
       setFriendStatus('none');
-      const { data: guestProfile } = await supabase.from('profiles').select('*').eq('id', userId).single();
+      const { data: guestProfile } = await supabase.from('public_profiles').select('*').eq('id', userId).single();
       setProfile(guestProfile);
       setLoading(false);
       return;
@@ -44,7 +45,11 @@ export default function PublicProfileScreen({ route, navigation }) {
     
     if (blockData) { setIsBlocked(true); setLoading(false); return; }
 
-    const { data: pData } = await supabase.from('profiles').select('*').eq('id', userId).single();
+        // public_profiles, not profiles: the base table is now restricted to your
+    // own row. It carries weight, height, age and sex, and every signed-in user
+    // could read all of it for everyone. The view exposes name, level, streak
+    // and cosmetics — everything drawn here.
+    const { data: pData } = await supabase.from('public_profiles').select('*').eq('id', userId).single();
     setProfile(pData);
     // Through an RPC rather than a direct select. The table was readable by any
     // signed-in user, which leaked everyone's whole training history — and now
@@ -136,6 +141,7 @@ export default function PublicProfileScreen({ route, navigation }) {
           <View style={styles.avatarWrapper}><Avatar profile={profile} size={100} /><View style={styles.levelBadge}><Text style={styles.levelText}>LVL {level}</Text></View></View>
           <Text style={styles.userName}>{profile.first_name}</Text>
           <Text style={styles.userTitle}>{profile.equipped_title || 'Novice Athlete'}</Text>
+          <NameBadge badgeId={profile.equipped_badge} size={13} showLabel />
 
 
           {friendStatus !== 'self' && (

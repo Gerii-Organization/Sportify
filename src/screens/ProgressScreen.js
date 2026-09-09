@@ -8,14 +8,19 @@ import ScreenHeader from '../components/ScreenHeader';
 import StatsScreen from './StatsScreen';
 import HistoryScreen from './HistoryScreen';
 import RecordsScreen from './RecordsScreen';
+import AchievementsScreen from './AchievementsScreen';
 
 /**
- * Everything that accumulates, in one tab.
+ * Everything that accumulates, in one place.
  *
  * Analytics, History and Records were each reachable only through the sidebar
- * menu, which is where features go to be forgotten. They are also the part of
- * the app that pays off logging a workout at all — the reason to fill in the
+ * menu, which is where features go to be forgotten. They are the part of the
+ * app that pays off logging a workout at all — the reason to fill in the
  * weights is being able to look at them later.
+ *
+ * Reached from the profile rather than the tab bar. This is not somewhere you
+ * go several times a day; it is where you look at what you have accumulated,
+ * which is what a profile is for.
  *
  * The three keep their own files and stay routable on their own; they take an
  * `embedded` prop that drops their back button and background so they can be
@@ -25,6 +30,7 @@ const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'history', label: 'History' },
   { id: 'records', label: 'Records' },
+  { id: 'badges', label: 'Badges' },
 ];
 
 export default function ProgressScreen({ navigation }) {
@@ -57,13 +63,14 @@ export default function ProgressScreen({ navigation }) {
           })}
         </View>
 
-        {/* Mounted one at a time rather than all three hidden behind opacity:
-            each one fetches on mount, so keeping them alive would fire three
-            sets of queries every time the tab is opened. */}
+        {/* Mounted one at a time rather than all four hidden behind opacity:
+            each one fetches on mount, so keeping them alive would fire four
+            sets of queries every time this opens. */}
         <View style={{ flex: 1 }}>
           {tab === 'overview' && <StatsScreen navigation={navigation} embedded />}
           {tab === 'history' && <HistoryScreen navigation={navigation} embedded />}
           {tab === 'records' && <RecordsScreen navigation={navigation} embedded />}
+          {tab === 'badges' && <AchievementsScreen navigation={navigation} embedded />}
         </View>
       </LinearGradient>
     </SafeAreaView>
@@ -83,6 +90,7 @@ const styles = StyleSheet.create({
   },
   segment: { flex: 1, paddingVertical: 9, alignItems: 'center', borderRadius: 12 },
   segmentActive: { backgroundColor: colors.surfaceHigh },
-  segmentText: { color: colors.textMuted, fontSize: 13, fontWeight: '600' },
+  // Four segments now, so the label drops a point to keep one line each.
+  segmentText: { color: colors.textMuted, fontSize: 12, fontWeight: '600' },
   segmentTextActive: { color: colors.text },
 });

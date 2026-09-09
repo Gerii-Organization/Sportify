@@ -13,8 +13,6 @@ import { lookupBarcode } from '../lib/foodDatabase';
 
 const { width } = Dimensions.get('window');
 
-const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
-
 /** What the user is meant to do in each mode, shown inside the frame. */
 const MODE_HINTS = {
   scan: 'Frame a meal, then press the shutter',
@@ -144,12 +142,20 @@ export default function ScannerScreen() {
     fetchHistory();
   };
 
+  /**
+   * Sends the photo to the analyse-food Edge Function.
+   *
+   * This used to POST to api.openai.com with EXPO_PUBLIC_OPENAI_API_KEY in the
+   * Authorization header. Anything prefixed EXPO_PUBLIC_ is inlined into the JS
+   * bundle at build time, so the key shipped inside the APK and IPA and could
+   * be pulled out of either — after which someone else spends your credit.
+   *
+   * The key now lives only as a Supabase project secret. The function verifies
+   * the caller's JWT, so it answers signed-in users of this project and nobody
+   * else, and the model can be changed without an app release.
+   */
   const processImage = async (imageUri) => {
     try {
-      if (!OPENAI_API_KEY) {
-        throw new Error("Missing OpenAI API key.");
-      }
-
       const manipulatedImage = await ImageManipulator.manipulateAsync(
         imageUri,
         [{ resize: { width: 600 } }],
@@ -158,45 +164,19 @@ export default function ScannerScreen() {
 
       const cleanBase64 = manipulatedImage.base64.replace(/[\r\n\t\s]+/gm, "");
 
-      const systemContent = mode === 'scan'
-        ? "Return strictly a JSON object with keys: name (string), calories (number), protein (number), carbs (number), fats (number), emoji (string), match (number), ingredients (array of strings)."
-        : "Return strictly a JSON object with a 'meals' array containing exactly 3 objects. Keys for each object: name (string), calories (number), protein (number), carbs (number), fats (number), emoji (string), match (number), ingredients (array of strings).";
-
-      const userContent = mode === 'scan'
+      const prompt = mode === 'scan'
         ? "Identify this food, give nutrition info and list its main ingredients."
         : `Analyze the fridge image and extra ingredients: ${extraIngredients.join(', ')}. Create 3 healthy meals and list their ingredients.`;
 
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${OPENAI_API_KEY}`
-        },
-        body: JSON.stringify({
-          model: "gpt-4o",
-          response_format: { type: "json_object" },
-          messages: [
-            { role: "system", content: systemContent },
-            {
-              role: "user",
-              content: [
-                { type: "text", text: userContent },
-                { type: "image_url", image_url: { url: `data:image/jpeg;base64,${cleanBase64}` } }
-              ]
-            }
-          ],
-          max_tokens: 800
-        })
+      const { data, error } = await supabase.functions.invoke('analyse-food', {
+        body: { base64: cleanBase64, mode: mode === 'scan' ? 'single' : 'multi', prompt },
       });
 
-      const data = await response.json();
+      if (error) throw new Error(error.message);
+      if (data?.error) throw new Error(data.error);
 
-      if (!response.ok) {
-        throw new Error(data.error?.message || "Error from OpenAI server.");
-      }
-
-      const aiMessage = data.choices[0].message.content;
-      const parsedData = JSON.parse(aiMessage);
+      const parsedData = data?.result;
+      if (!parsedData) throw new Error('No analysis came back. Try again.');
 
       if (mode === 'scan') {
         setScannedFood({ id: Date.now(), ...parsedData });
@@ -619,8 +599,8 @@ const styles = StyleSheet.create({
     height: 44,
     borderRadius: 26,
     backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: 'rgba(46, 211, 198, 0.3)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.borderLight,
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: colors.accent,
@@ -633,8 +613,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderRadius: 24,
     overflow: 'hidden',
-    borderColor: 'rgba(46, 211, 198, 0.3)',
-    borderWidth: 1,
+    borderColor: colors.borderLight,
+    borderWidth: StyleSheet.hairlineWidth,
   },
   modeBtn: {
     paddingHorizontal: 16,
@@ -660,11 +640,6 @@ const styles = StyleSheet.create({
     height: 40,
     borderColor: colors.accent,
     borderWidth: 3,
-    shadowColor: colors.accent,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.6,
-    shadowRadius: 8,
-    elevation: 5,
   },
   topLeft: { top: 0, left: 0, borderRightWidth: 0, borderBottomWidth: 0, borderTopLeftRadius: 30 },
   topRight: { top: 0, right: 0, borderLeftWidth: 0, borderBottomWidth: 0, borderTopRightRadius: 30 },
@@ -676,8 +651,8 @@ const styles = StyleSheet.create({
     padding: 20,
     borderRadius: 24,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(46, 211, 198, 0.3)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.borderLight,
   },
   hintPill: {
     paddingHorizontal: 18,
@@ -723,8 +698,8 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 18,
     marginRight: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(46, 211, 198, 0.4)'
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.borderLight
   },
   ingredientText: {
     color: colors.text,
@@ -736,13 +711,13 @@ const styles = StyleSheet.create({
     bottom: 190, // clears the camera controls below
     left: 20,
     right: 20,
-    borderRadius: 28,
+    borderRadius: 26,
     padding: 16,
     flexDirection: 'row',
     alignItems: 'center',
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(46, 211, 198, 0.4)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.borderLight,
   },
   mealsListWrapper: {
     position: 'absolute',
@@ -755,13 +730,13 @@ const styles = StyleSheet.create({
   mealCard: {
     width: width * 0.85,
     marginRight: 16,
-    borderRadius: 28,
+    borderRadius: 26,
     padding: 16,
     flexDirection: 'row',
     alignItems: 'center',
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(46, 211, 198, 0.4)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.borderLight,
   },
   cardContentTouchable: {
     flex: 1,
@@ -771,7 +746,7 @@ const styles = StyleSheet.create({
   foodEmojiContainer: {
     width: 50,
     height: 50,
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(255,255,255,0.12)',
     borderRadius: 25,
     justifyContent: 'center',
     alignItems: 'center',
@@ -788,8 +763,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(46, 211, 198, 0.3)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.borderLight,
   },
   matchText: { color: colors.accent, fontSize: 11, fontWeight: '600' },
   macrosRow: { flexDirection: 'row', justifyContent: 'space-between', paddingRight: 10 },
@@ -858,8 +833,8 @@ const styles = StyleSheet.create({
     width: '100%',
     borderRadius: 24,
     padding: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(46, 211, 198, 0.3)'
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.borderLight
   },
   manualTitle: {
     color: colors.text,
@@ -904,8 +879,8 @@ const styles = StyleSheet.create({
     maxHeight: '80%',
     borderRadius: 28,
     padding: 26,
-    borderWidth: 1,
-    borderColor: 'rgba(46, 211, 198, 0.3)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.borderLight,
     alignItems: 'center'
   },
   closeExpandedBtn: {

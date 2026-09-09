@@ -3,7 +3,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { BlurView } from 'expo-blur';
-import { House, UtensilsCrossed, Dumbbell, Users, TrendingUp, Store } from 'lucide-react-native';
+import { House, UtensilsCrossed, Dumbbell, Users, Store } from 'lucide-react-native';
 
 import { AuthProvider } from './src/context/AuthContext';
 import { colors } from './src/theme';
@@ -16,13 +16,13 @@ import WorkoutDetailScreen from './src/screens/WorkoutDetailScreen';
 import FriendsScreen from './src/screens/FriendsScreen';
 import ShopScreen from './src/screens/ShopScreen';
 import PublicProfileScreen from './src/screens/PublicProfileScreen';
-import LeaderboardScreen from './src/screens/LeaderboardScreen';
 import StatsScreen from './src/screens/StatsScreen';
 import StreakScreen from './src/screens/StreakScreen';
 import MetricScreen from './src/screens/MetricScreen';
 import ProgressScreen from './src/screens/ProgressScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
 import RecordsScreen from './src/screens/RecordsScreen';
+import AchievementsScreen from './src/screens/AchievementsScreen';
 import ChatScreen from './src/screens/ChatScreen';
 import GroupChatScreen from './src/screens/GroupChatScreen';
 
@@ -31,10 +31,12 @@ const Stack = createNativeStackNavigator();
 
 // Feed used to sit here as its own tab. It is now a segment inside Social:
 // both are "other people", and spending two of the bar's slots on one idea left
-// no room for the parts of the app that pay off logging a workout.
+// no room for anything else.
 //
-// Labels are one word each because six tabs leave roughly 55pt of width apiece.
-// "Dashboard" and "Progress" would both truncate.
+// Progress had a slot briefly and gave it back. It is not somewhere you go
+// several times a day — it is where you look at what you have accumulated,
+// which is the same thing a profile is for, so it is reached by tapping your
+// own avatar instead.
 //
 // Icons name the destination rather than the mechanism: a fork over a barcode
 // scanner (the screen is about food, not about scanning), a house over a
@@ -44,7 +46,6 @@ const TABS = [
   { name: 'Food', label: 'Food', component: ScannerScreen, icon: UtensilsCrossed },
   { name: 'Training', label: 'Train', component: TrainingScreen, icon: Dumbbell },
   { name: 'Social', label: 'Social', component: FriendsScreen, icon: Users },
-  { name: 'Progress', label: 'Progress', component: ProgressScreen, icon: TrendingUp },
   { name: 'Shop', label: 'Shop', component: ShopScreen, icon: Store },
 ];
 
@@ -53,12 +54,13 @@ const STACK_SCREENS = [
   { name: 'WorkoutDetailScreen', component: WorkoutDetailScreen, presentation: 'fullScreenModal' },
   { name: 'AuthScreen', component: AuthScreen, presentation: 'modal' },
   { name: 'PublicProfileScreen', component: PublicProfileScreen, presentation: 'card' },
-  { name: 'LeaderboardScreen', component: LeaderboardScreen, presentation: 'card' },
   { name: 'StatsScreen', component: StatsScreen, presentation: 'card' },
   { name: 'StreakScreen', component: StreakScreen, presentation: 'card' },
   { name: 'MetricScreen', component: MetricScreen, presentation: 'card' },
   { name: 'HistoryScreen', component: HistoryScreen, presentation: 'card' },
   { name: 'RecordsScreen', component: RecordsScreen, presentation: 'card' },
+  { name: 'AchievementsScreen', component: AchievementsScreen, presentation: 'card' },
+  { name: 'ProgressScreen', component: ProgressScreen, presentation: 'card' },
   { name: 'ChatScreen', component: ChatScreen, presentation: 'card' },
   { name: 'GroupChatScreen', component: GroupChatScreen, presentation: 'card' },
 ];
@@ -75,8 +77,7 @@ function MainTabs() {
         tabBarBackground: () => <BlurView intensity={40} tint="dark" style={[StyleSheet.absoluteFill, styles.tabBarTint]} />,
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.textFaint,
-        // Six tabs leave about 55pt each; 9pt keeps one word on one line.
-        tabBarLabelStyle: { fontSize: 9, fontWeight: '600', letterSpacing: 0 },
+        tabBarLabelStyle: { fontSize: 10, fontWeight: '600', letterSpacing: 0.2 },
       }}
     >
       {TABS.map(({ name, label, component, icon: Icon }) => (
@@ -114,7 +115,7 @@ const styles = StyleSheet.create({
   tabBar: {
     position: 'absolute',
     height: 62,
-    marginHorizontal: 10,
+    marginHorizontal: 16,
     marginBottom: 16,
     borderRadius: 26,
     paddingTop: 8,

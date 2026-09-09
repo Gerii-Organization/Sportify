@@ -3,7 +3,7 @@ import { View, Text, ScrollView, SafeAreaView, StyleSheet, ActivityIndicator } f
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChevronLeft, ChevronRight, Trophy, TrendingUp, TrendingDown, Minus } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
-import { colors, gradients, spacing, TAB_BAR_CLEARANCE } from '../theme';
+import { colors, gradients, spacing } from '../theme';
 import { formatRelativeDate } from '../lib/date';
 import { useAuth } from '../context/AuthContext';
 import useLoad from '../lib/useLoad';
@@ -28,8 +28,9 @@ import ErrorState from '../components/ErrorState';
  */
 /**
  * `embedded` drops the screen's own chrome — back button, gradient, glow — so it
- * can sit inside a tab that already paints them. A tab has nothing to go back
- * to, and two stacked gradients double the ambient glow.
+ * can render as a panel inside ProgressScreen, which already paints them.
+ * ProgressScreen owns the single back button, and two stacked gradients would
+ * double the ambient glow.
  */
 export default function RecordsScreen({ navigation, embedded = false }) {
   const { user } = useAuth();
@@ -78,7 +79,7 @@ export default function RecordsScreen({ navigation, embedded = false }) {
           <ErrorState message={error} onRetry={reload} />
         ) : (
           <ScrollView
-            contentContainerStyle={embedded ? styles.scrollEmbedded : styles.scroll}
+            contentContainerStyle={styles.scroll}
             showsVerticalScrollIndicator={false}
             refreshControl={refreshControl}
           >
@@ -191,7 +192,7 @@ function ExerciseDetail({ name, record, onBack, embedded = false }) {
         ) : error ? (
           <ErrorState message={error} onRetry={reload} />
         ) : (
-          <ScrollView contentContainerStyle={embedded ? styles.scrollEmbedded : styles.scroll} showsVerticalScrollIndicator={false}>
+          <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
             <FadeIn style={styles.hero}>
               <Trophy color={colors.energy} size={26} />
               <Text style={styles.heroValue}>
@@ -336,9 +337,6 @@ const styles = StyleSheet.create({
   back: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
   navTitle: { color: colors.text, fontSize: 17, fontWeight: '700', letterSpacing: -0.3, flex: 1, textAlign: 'center' },
   scroll: { paddingHorizontal: spacing.lg, paddingBottom: 60 },
-  // Inside the Progress tab the list ends behind the floating bar instead of
-  // above it, so the panel needs the taller clearance.
-  scrollEmbedded: { paddingHorizontal: spacing.lg, paddingBottom: TAB_BAR_CLEARANCE + 30 },
 
   intro: { color: colors.textMuted, fontSize: 13, lineHeight: 19, marginBottom: spacing.md },
 

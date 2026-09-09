@@ -28,16 +28,43 @@ let loadAttempted = false;
 let configured = false;
 let warned = false;
 
-/** Resolves the module once, or gives up permanently. */
+/**
+ * Resolves the module once, or gives up permanently.
+ *
+ * The probe comes first, and it matters. expo-notifications reaches for the
+ * push token manager at import time — `requireNativeModule('ExpoPushTokenManager')`
+ * in its PushTokenManager.native.js — and requireNativeModule THROWS. The throw
+ * is reported by the native side before this catch ever sees it, so a build
+ * without the module printed
+ *
+ *   ERROR  [Error: Cannot find native module 'ExpoPushTokenManager']
+ *
+ * next to our own tidy warning. Nothing was broken by it — the catch did its
+ * job and the app carried on — but an ERROR in the log reads as a crash.
+ *
+ * requireOptionalNativeModule is the same lookup that returns null instead of
+ * throwing. Asking it first means the package is only imported on a build that
+ * can actually support it.
+ */
 export function load() {
   if (loadAttempted) return notifications;
   loadAttempted = true;
+
   try {
+    // eslint-disable-next-line global-require
+    const { requireOptionalNativeModule } = require('expo-modules-core');
+
+    if (!requireOptionalNativeModule('ExpoPushTokenManager')) {
+      notifications = null;
+      return null;
+    }
+
     // eslint-disable-next-line global-require
     notifications = require('expo-notifications');
   } catch {
     notifications = null;
   }
+
   return notifications;
 }
 

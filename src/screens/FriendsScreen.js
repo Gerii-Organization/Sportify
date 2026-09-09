@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import { Users, Trophy, UserPlus, Search, X, Check, Clock, Plus, Bell, MessageSquare, Hash } from 'lucide-react-native';
+import { Users, UserPlus, Search, X, Check, Clock, Plus, Bell, MessageSquare, Hash } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors } from '../theme';
 import { levelFromXp } from '../lib/level';
@@ -14,6 +14,7 @@ import { useAuth } from '../context/AuthContext';
 import Avatar from '../components/Avatar';
 import AmbientGlow from '../components/AmbientGlow';
 import FeedScreen from './FeedScreen';
+import LeaderboardScreen from './LeaderboardScreen';
 import { SkeletonRows } from '../components/Skeleton';
 import useRefresh from '../lib/useRefresh';
 import Press from '../components/Press';
@@ -139,7 +140,7 @@ export default function FriendsScreen() {
     });
 
     if (acceptedIds.length > 0) {
-      const { data: pData } = await supabase.from('profiles').select('*').in('id', acceptedIds);
+      const { data: pData } = await supabase.from('public_profiles').select('*').in('id', acceptedIds);
       
       // Newest first, so the first row seen per partner is the latest message.
       const { data: mData } = await supabase.from('messages')
@@ -182,12 +183,12 @@ export default function FriendsScreen() {
     }
 
     if (pendingIn.length > 0) {
-      const { data: pData } = await supabase.from('profiles').select('*').in('id', pendingIn);
+      const { data: pData } = await supabase.from('public_profiles').select('*').in('id', pendingIn);
       setReceivedRequests((pData || []).map(p => ({ ...p, friendship_id: fMap[p.id] })));
     } else setReceivedRequests([]);
 
     if (pendingOutIds.length > 0) {
-      const { data: pData } = await supabase.from('profiles').select('*').in('id', pendingOutIds);
+      const { data: pData } = await supabase.from('public_profiles').select('*').in('id', pendingOutIds);
       setSentRequests((pData || []).map(p => ({ ...p, friendship_id: fMap[p.id] })));
     } else setSentRequests([]);
   };
@@ -195,7 +196,8 @@ export default function FriendsScreen() {
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
     setIsSearching(true);
-    const { data } = await supabase.from('profiles')
+    // Searching people by name must not also hand over their measurements.
+    const { data } = await supabase.from('public_profiles')
       .select('*')
       .ilike('first_name', `%${searchQuery.trim()}%`)
       .neq('id', myId)
@@ -371,17 +373,12 @@ export default function FriendsScreen() {
               {receivedRequests.length > 0 && <View style={styles.notificationDot} />}
             </TouchableOpacity>
             
-            <TouchableOpacity accessibilityLabel="Leaderboard" activeOpacity={0.7} 
-              style={styles.leaderboardBtn}
-              onPress={() => navigation.navigate('LeaderboardScreen')}
-            >
-              <Trophy color={colors.onAccent} size={16} fill="#000" />
-            </TouchableOpacity>
+
           </View>
         </View>
 
         <View style={styles.sectionTabs}>
-          {[{ id: 'chats', label: 'Chats' }, { id: 'feed', label: 'Feed' }].map((t) => {
+          {[{ id: 'chats', label: 'Chats' }, { id: 'feed', label: 'Feed' }, { id: 'ranking', label: 'Ranking' }].map((t) => {
             const active = section === t.id;
             return (
               <Press
@@ -402,6 +399,8 @@ export default function FriendsScreen() {
 
         {section === 'feed' ? (
           <FeedScreen embedded />
+        ) : section === 'ranking' ? (
+          <LeaderboardScreen embedded />
         ) : loading ? (
           <SkeletonRows count={6} />
         ) : (
@@ -637,7 +636,6 @@ const styles = StyleSheet.create({
   titleBadgeText: { color: colors.onAccent, fontSize: 12, fontWeight: '700' },
   headerIconBtn: { backgroundColor: colors.surface, padding: 10, borderRadius: 18, position: 'relative' },
   notificationDot: { position: 'absolute', top: -2, right: -2, width: 10, height: 10, borderRadius: 5, backgroundColor: colors.danger, borderWidth: 1, borderColor: '#000' },
-  leaderboardBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.accent, padding: 10, borderRadius: 18 },
   
   centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   scrollContent: { padding: 20, paddingBottom: 130 },

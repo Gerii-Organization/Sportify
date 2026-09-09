@@ -11,10 +11,17 @@ import { useAuth } from '../context/AuthContext';
 import Avatar from '../components/Avatar';
 import AmbientGlow from '../components/AmbientGlow';
 import { SkeletonRows } from '../components/Skeleton';
+import NameBadge from '../components/NameBadge';
 import useRefresh from '../lib/useRefresh';
 
 
-export default function LeaderboardScreen() {
+/**
+ * `embedded` drops the screen's own background and nav row so it can render as
+ * a panel inside Social. It is one of three lists about other people — chats,
+ * feed, ranking — and reaching it meant a trophy button in the corner while the
+ * other two were a tap apart.
+ */
+export default function LeaderboardScreen({ embedded = false }) {
   const { refreshControl } = useRefresh(() => fetchData());
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState('friends');
@@ -63,7 +70,7 @@ export default function LeaderboardScreen() {
     }
 
     // Profiles, highest XP first.
-    const { data: pData } = await supabase.from('profiles')
+    const { data: pData } = await supabase.from('public_profiles')
       .select('*')
       .in('id', ids)
       .order('xp', { ascending: false });
@@ -72,7 +79,7 @@ export default function LeaderboardScreen() {
   };
 
   const fetchGlobalLeaderboard = async () => {
-    const { data } = await supabase.from('profiles')
+    const { data } = await supabase.from('public_profiles')
       .select('*')
       .order('xp', { ascending: false })
       .limit(50);
@@ -97,7 +104,14 @@ export default function LeaderboardScreen() {
         <Avatar profile={item} rank={index + 1} />
 
         <View style={styles.userInfo}>
-          <Text style={styles.userName}>{item.first_name || 'Athlete'} {isMe && '(Tu)'}</Text>
+          <View style={styles.nameRow}>
+            <Text style={styles.userName} numberOfLines={1}>
+              {item.first_name || 'Athlete'} {isMe && '(Tu)'}
+            </Text>
+            {/* Icon only here: a labelled pill on every row would compete with
+                the rank number, which is what the list is actually for. */}
+            <NameBadge badgeId={item.equipped_badge} size={14} />
+          </View>
           <Text style={styles.userTitle}>{item.equipped_title || 'Novice'} • Lvl {level}</Text>
         </View>
 
@@ -114,20 +128,8 @@ export default function LeaderboardScreen() {
     );
   };
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <LinearGradient colors={gradients.screen} style={styles.gradientBg}>
-        <AmbientGlow tone="ember" height={280} intensity={0.4} />
-        
-        {/* HEADER DE NAVIGARE */}
-        <View style={styles.navHeader}>
-          <TouchableOpacity accessibilityLabel="Go back" activeOpacity={0.7} onPress={() => navigation.goBack()} style={styles.backBtn}>
-            <ChevronLeft color={colors.text} size={28} />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Leaderboard</Text>
-          <View style={{width: 28}} /> {/* Spacer pentru centrare */}
-        </View>
-
+  const content = (
+    <>
         {/* TOGGLE PENTRU CLASAMENTE */}
         <View style={styles.toggleContainerWrapper}>
           <View style={styles.toggleContainer}>
@@ -160,6 +162,26 @@ export default function LeaderboardScreen() {
           </ScrollView>
         )}
 
+    </>
+  );
+
+  if (embedded) return content;
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <LinearGradient colors={gradients.screen} style={styles.gradientBg}>
+        <AmbientGlow tone="ember" height={280} intensity={0.4} />
+
+        {/* HEADER DE NAVIGARE */}
+        <View style={styles.navHeader}>
+          <TouchableOpacity accessibilityLabel="Go back" activeOpacity={0.7} onPress={() => navigation.goBack()} style={styles.backBtn}>
+            <ChevronLeft color={colors.text} size={28} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Leaderboard</Text>
+          <View style={{width: 28}} /> {/* Spacer pentru centrare */}
+        </View>
+
+        {content}
       </LinearGradient>
     </SafeAreaView>
   );
@@ -180,7 +202,9 @@ const styles = StyleSheet.create({
   toggleTextActive: { color: colors.onAccent },
   
   centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  scrollContent: { paddingHorizontal: 20, paddingBottom: 50 },
+  // Inside the Social tab now, so the list has to clear the floating bar —
+  // the same 130 the feed beside it uses.
+  scrollContent: { paddingHorizontal: 20, paddingBottom: 130 },
 
   userCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, padding: 16, borderRadius: 24, marginBottom: 10 },
   myUserCard: { borderColor: colors.accent + '55', backgroundColor: 'rgba(46, 211, 198, 0.05)' },
@@ -191,6 +215,7 @@ const styles = StyleSheet.create({
   crownRank: { position: 'absolute', top: -14, left: -6, transform: [{rotate: '-15deg'}] },
   
   userInfo: { flex: 1, marginLeft: 16 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   userName: { color: colors.text, fontSize: 15, fontWeight: '600' },
   userTitle: { color: colors.accent, fontSize: 13, marginTop: 2 },
   

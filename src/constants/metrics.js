@@ -1,6 +1,7 @@
 import { supabase } from '../lib/supabase';
 import { colors } from '../theme';
 import { recentDayKeys, todayKey, startOfTodayIso, formatDuration } from '../lib/date';
+import { Platform } from 'react-native';
 import { WATER_GOAL_ML } from './content';
 
 /**
@@ -252,8 +253,15 @@ export const METRICS = {
     unit: '',
     chartLabel: 'Hours per night',
     listLabel: 'Last seven nights',
-    emptyText: 'No sleep data. This is read from Apple Health on iOS.',
-    goalNote: 'Read from Apple Health. The dial runs to 12 hours — it is a scale, not a target.',
+    // react-native-health is iOS-only, so on Android there is no source at
+    // all. Naming Apple Health there described a feature the platform
+    // cannot have.
+    emptyText: Platform.OS === 'ios'
+      ? 'No sleep data yet. Sportify reads it from Apple Health.'
+      : 'Sleep syncing is only available on iOS at the moment.',
+    goalNote: Platform.OS === 'ios'
+      ? 'Read from Apple Health. The dial runs to 12 hours — it is a scale, not a target.'
+      : 'The dial runs to 12 hours — it is a scale, not a target.',
 
     async load(userId) {
       const days = recentDayKeys(7);

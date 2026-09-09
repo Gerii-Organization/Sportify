@@ -1,7 +1,7 @@
-import { useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { View, Text, ScrollView, SafeAreaView, StyleSheet, ActivityIndicator } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ChevronLeft, Flame, Clock, Droplets, Moon } from 'lucide-react-native';
+import { ChevronLeft, Flame, Clock, Droplets, Moon, Plus } from 'lucide-react-native';
 import { colors, gradients, spacing } from '../theme';
 import { useAuth } from '../context/AuthContext';
 import { METRICS } from '../constants/metrics';
@@ -13,6 +13,7 @@ import AmbientGlow from '../components/AmbientGlow';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import ProgressArc from '../components/ProgressArc';
+import WaterSheet from '../components/WaterSheet';
 
 /**
  * Detail for one daily metric.
@@ -31,6 +32,7 @@ export default function MetricScreen({ route, navigation }) {
   const { user, profile } = useAuth();
 
   const calorieTarget = calorieGoal(profile);
+  const [waterSheetVisible, setWaterSheetVisible] = useState(false);
 
   const load = useCallback(async () => {
     if (!user || !config) return null;
@@ -119,7 +121,26 @@ export default function MetricScreen({ route, navigation }) {
               </FadeIn>
             )}
 
-            <FadeIn index={2} style={styles.card}>
+            {/* Water is the one metric here you can add to by hand — steps,
+                calories and sleep all arrive from somewhere else. The action
+                sits under the figures it changes rather than on the dashboard,
+                which is where it used to be and where nobody looking at their
+                water would think to go. */}
+            {metric === 'water' && (
+              <FadeIn index={2}>
+                <Press
+                  scale={0.98}
+                  style={styles.logBtn}
+                  onPress={() => setWaterSheetVisible(true)}
+                  accessibilityLabel="Add water"
+                >
+                  <Plus color={colors.onAccent} size={17} />
+                  <Text style={styles.logBtnText}>Add water</Text>
+                </Press>
+              </FadeIn>
+            )}
+
+            <FadeIn index={3} style={styles.card}>
               <Text style={styles.cardTitle}>{config.chartLabel}</Text>
               <View style={styles.chart}>
                 {(data?.series || []).map((point, i) => {
@@ -150,7 +171,7 @@ export default function MetricScreen({ route, navigation }) {
               </View>
             </FadeIn>
 
-            <FadeIn index={3}>
+            <FadeIn index={4}>
               <Text style={styles.listLabel}>{config.listLabel}</Text>
               {(data?.entries || []).length === 0 ? (
                 <EmptyState message={config.emptyText} />
@@ -174,6 +195,13 @@ export default function MetricScreen({ route, navigation }) {
             </FadeIn>
           </ScrollView>
         )}
+
+        <WaterSheet
+          visible={waterSheetVisible}
+          onClose={() => setWaterSheetVisible(false)}
+          currentMl={(data?.raw || 0) * 1000}
+          onLogged={reload}
+        />
       </LinearGradient>
     </SafeAreaView>
   );
@@ -250,6 +278,12 @@ const styles = StyleSheet.create({
   statValue: { color: colors.text, fontSize: 16, fontWeight: '700', letterSpacing: -0.3, paddingHorizontal: 4 },
   statLabel: { color: colors.textMuted, fontSize: 11, fontWeight: '500', paddingHorizontal: 2 },
 
+  logBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: colors.accent, borderRadius: 18,
+    paddingVertical: 15, marginBottom: spacing.md,
+  },
+  logBtnText: { color: colors.onAccent, fontSize: 15, fontWeight: '700' },
   card: { backgroundColor: colors.card, borderRadius: 24, padding: spacing.md, marginBottom: spacing.md },
   cardTitle: { color: colors.textSecondary, fontSize: 12, fontWeight: '600', letterSpacing: 0.7, textTransform: 'uppercase', marginBottom: spacing.md },
   chart: { flexDirection: 'row', height: 150, gap: 8 },

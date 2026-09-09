@@ -40,7 +40,7 @@ export default function CommentSheet({ event, visible, onClose, currentUserId, o
     let byId = {};
     if (authorIds.length) {
       const { data: profiles } = await supabase
-        .from('profiles')
+        .from('public_profiles')
         .select('id, first_name, equipped_avatar, xp')
         .in('id', authorIds);
       byId = Object.fromEntries((profiles || []).map((p) => [p.id, p]));

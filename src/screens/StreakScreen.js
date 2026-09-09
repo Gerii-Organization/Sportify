@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { View, Text, ScrollView, SafeAreaView, StyleSheet, ActivityIndicator } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ChevronLeft, ChevronRight, Flame, Snowflake, Award } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, Flame, Snowflake, Award, RotateCcw } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors, gradients, spacing } from '../theme';
 import { deviceTimeZone } from '../lib/date';
@@ -57,6 +57,11 @@ export default function StreakScreen({ navigation }) {
 
   const current = data?.current ?? 0;
   const freezes = profile?.streak_freezes ?? 0;
+  // The streak you lost, kept so Streak Restore has something to bring back.
+  // It was stored and read only by that purchase, so the shop offered to
+  // restore something you had no way of knowing existed.
+  const lost = profile?.previous_streak ?? 0;
+  const restorable = lost > current;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -101,13 +106,22 @@ export default function StreakScreen({ navigation }) {
             )}
           </FadeIn>
 
-          <FadeIn index={1} style={styles.statRow}>
+          {restorable && (
+            <FadeIn index={1} style={styles.restoreNote}>
+              <RotateCcw color={colors.streak} size={15} />
+              <Text style={styles.restoreText}>
+                You had a {lost}-day streak. Streak Restore in the shop brings it back.
+              </Text>
+            </FadeIn>
+          )}
+
+          <FadeIn index={restorable ? 2 : 1} style={styles.statRow}>
             <Stat icon={<Award color={colors.energy} size={18} />} value={data?.longest ?? 0} label="Best ever" />
             <View style={styles.statDivider} />
             <Stat icon={<Flame color={colors.accent} size={18} />} value={data?.total ?? 0} label="Days trained" />
           </FadeIn>
 
-          <FadeIn index={2} style={styles.calendarCard}>
+          <FadeIn index={restorable ? 3 : 2} style={styles.calendarCard}>
             <View style={styles.monthBar}>
               <Press scale={0.9} onPress={() => setOffset((o) => o - 1)} style={styles.arrow} accessibilityLabel="Previous month">
                 <ChevronLeft color={colors.textSecondary} size={18} />
@@ -181,7 +195,7 @@ export default function StreakScreen({ navigation }) {
             )}
           </FadeIn>
 
-          <FadeIn index={3}>
+          <FadeIn index={restorable ? 4 : 3}>
             <Text style={styles.footnote}>
               A day counts once you finish any workout. Miss a day and a freeze covers
               it — buy them in the shop before you need one.
@@ -255,6 +269,13 @@ const styles = StyleSheet.create({
   },
   freezeText: { color: colors.water, fontSize: 13, fontWeight: '600' },
 
+  restoreNote: {
+    flexDirection: 'row', alignItems: 'center', gap: 9,
+    backgroundColor: 'rgba(255, 138, 43, 0.11)',
+    borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12,
+    marginBottom: spacing.md,
+  },
+  restoreText: { color: colors.streak, fontSize: 13, fontWeight: '600', flex: 1, lineHeight: 18 },
   statRow: {
     flexDirection: 'row',
     backgroundColor: colors.card,

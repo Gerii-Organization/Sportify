@@ -1,11 +1,11 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { 
   View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
   Modal, SafeAreaView, TextInput, KeyboardAvoidingView, Platform, Alert 
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
-import { Plus, Dumbbell, Play, Zap, Layout, ChevronDown, ChevronUp, RotateCcw, Bookmark } from 'lucide-react-native';
+import { Plus, Dumbbell, Zap, Layout, ChevronDown, ChevronUp, Bookmark, Compass, Pencil } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors } from '../theme';
 import { gradients } from '../theme';
@@ -13,14 +13,19 @@ import ScreenHeader from '../components/ScreenHeader';
 import AmbientGlow from '../components/AmbientGlow';
 import EmptyState from '../components/EmptyState';
 import useRefresh from '../lib/useRefresh';
-import { formatRelativeDate, todayKey, currentWeekKeys, startOfWeekIso } from '../lib/date';
+import { todayKey, currentWeekKeys, startOfWeekIso } from '../lib/date';
 import { exercisesInGroup, MUSCLES } from '../constants/exercises';
+import { trainingAdvice } from '../lib/advice';
 import { useAuth } from '../context/AuthContext';
 import Press from '../components/Press';
 import FadeIn from '../components/FadeIn';
-import WeeklyGoal from '../components/WeeklyGoal';
 import WorkoutCard from '../components/WorkoutCard';
+import TodayCard from '../components/TodayCard';
+import SplitSheet from '../components/SplitSheet';
 
+
+/** The heading beside the toolbar. Mine is the default, so it names itself. */
+const VIEW_TITLES = { mine: 'My workouts', saved: 'Saved', browse: 'Browse' };
 
 export default function TrainingScreen({ navigation }) {
   const { user, profile } = useAuth();
@@ -28,16 +33,23 @@ export default function TrainingScreen({ navigation }) {
   const [myWorkouts, setMyWorkouts] = useState([]);
   const [suggestedWorkouts, setSuggestedWorkouts] = useState([]);
   const [mainMenuVisible, setMainMenuVisible] = useState(false);
-  /** Most recent finished session, offered as a one-tap repeat. */
-  const [lastSession, setLastSession] = useState(null);
   /** Local day keys, this calendar week, on which a workout was finished. */
   const [trainedDays, setTrainedDays] = useState([]);
+  /** This week's sessions with their set snapshots, for the advice card. */
+  const [weekSessions, setWeekSessions] = useState([]);
   /** 'mine' = your own plans, 'saved' = other people's you bookmarked,
    *  'browse' = everything public. */
   const [view, setView] = useState('mine');
   const [publicWorkouts, setPublicWorkouts] = useState([]);
   const [savedWorkouts, setSavedWorkouts] = useState([]);
   const [browseLoading, setBrowseLoading] = useState(false);
+  /** True while picking a workout to edit. Nothing else on the screen is
+   *  reachable, so there is one thing to do and one way out. */
+  const [editMode, setEditMode] = useState(false);
+  const [splitSheetVisible, setSplitSheetVisible] = useState(false);
+  /** Local copy so the card updates the moment the sheet saves, without
+   *  waiting for the profile to be re-fetched. */
+  const [split, setSplit] = useState(profile?.split || null);
   /** Browse filter. null means every muscle group. */
   const [browseMuscle, setBrowseMuscle] = useState(null);
   const [isBuiltInExpanded, setIsBuiltInExpanded] = useState(false);
@@ -66,29 +78,17 @@ export default function TrainingScreen({ navigation }) {
       .order('created_at', { ascending: false });
     if (data) setMyWorkouts(data);
 
-    // The most recent finished session, so the list can offer it back.
-    // Most people repeat the same handful of workouts, and hunting for
-    // yesterday's in an unsorted list is the friction that makes them stop.
-    const { data: last } = await supabase
-      .from('workout_completions')
-      .select('workout_id, workout_name, completed_at, duration_minutes')
-      .eq('user_id', user.id)
-      .order('completed_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    // Only offer it if the workout still exists — it may have been deleted.
-    const stillExists = last && (data || []).some((w) => String(w.id) === String(last.workout_id));
-    setLastSession(stillExists ? last : null);
-
     // Distinct days, not sessions: two workouts on Monday is one day of the
     // weekly target, which is how anyone counts "four times a week".
+    // The snapshots come back too: the advice card needs to know which muscles
+    // the week actually contained, not just that a session happened.
     const { data: thisWeek } = await supabase
       .from('workout_completions')
-      .select('completed_at')
+      .select('completed_at, exercises')
       .eq('user_id', user.id)
       .gte('completed_at', startOfWeekIso());
 
+    setWeekSessions(thisWeek || []);
     setTrainedDays([...new Set((thisWeek || []).map((w) => todayKey(new Date(w.completed_at))))]);
   };
 
@@ -314,8 +314,32 @@ export default function TrainingScreen({ navigation }) {
     setMyWorkouts(prevWorkouts => prevWorkouts.map(w => w.id === updatedWorkout.id ? updatedWorkout : w));
   };
 
-  const openWorkoutDetail = (workout) => {
-    navigation.navigate('WorkoutDetailScreen', { workout: workout, onSave: handleSaveWorkout });
+  const advice = useMemo(
+    () => trainingAdvice({
+      sessions: weekSessions,
+      target: profile?.workouts_per_week,
+      today: todayKey(),
+      trainedDays,
+      split,
+      weekKeys: currentWeekKeys(),
+    }),
+    [weekSessions, profile?.workouts_per_week, trainedDays, split]
+  );
+
+  /** Jumps to Browse already filtered to what the advice suggested. */
+  const actOnAdvice = (muscle) => {
+    setBrowseMuscle(muscle);
+    setView('browse');
+  };
+
+  const openWorkoutDetail = (workout, startInEdit = false) => {
+    navigation.navigate('WorkoutDetailScreen', {
+      workout,
+      onSave: handleSaveWorkout,
+      // Chosen from edit mode, so the detail screen opens with its fields
+      // already editable instead of making you press its pencil as well.
+      startInEdit,
+    });
   };
 
   return (
@@ -324,26 +348,93 @@ export default function TrainingScreen({ navigation }) {
         <AmbientGlow tone="ember" height={300} intensity={0.38} />
         <ScreenHeader title="Workouts" />
 
-        <View style={styles.segments}>
-          {[
-            { id: 'mine', label: 'Mine' },
-            { id: 'saved', label: 'Saved' },
-            { id: 'browse', label: 'Browse' },
-          ].map((tab) => {
-            const active = view === tab.id;
-            return (
+        {/* Above the segments, not inside the list.
+            It answers "what should I do today", which is a question you ask
+            before choosing between Mine, Saved and Browse — under the tabs it
+            read as a property of whichever tab was open. */}
+        {!editMode && (
+        <TodayCard
+          advice={advice}
+          onAct={actOnAdvice}
+          week={{
+            target: profile?.workouts_per_week,
+            doneDays: trainedDays,
+            weekKeys: currentWeekKeys(),
+            splitName: split?.length ? `${split.length}-day split` : null,
+          }}
+          onEditSplit={() => setSplitSheetVisible(true)}
+        />
+        )}
+
+        {/* Icons rather than three word-buttons.
+            Mine is the default and has no icon of its own: Saved and Browse
+            light up when you are in them, and tapping the lit one comes back.
+            The two actions sit after a divider so a toggle and a command do not
+            read as the same kind of control. */}
+        <View style={styles.toolbar}>
+          <Text style={styles.viewTitle}>
+            {editMode ? 'Choose one to edit' : VIEW_TITLES[view]}
+          </Text>
+
+          {editMode ? (
+            <Press
+              scale={0.96}
+              style={styles.doneBtn}
+              onPress={() => setEditMode(false)}
+              accessibilityLabel="Finish editing"
+            >
+              <Text style={styles.doneText}>Done</Text>
+            </Press>
+          ) : (
+            <View style={styles.toolRow}>
               <Press
-                key={tab.id}
-                scale={0.98}
-                style={[styles.segment, active && styles.segmentActive]}
-                onPress={() => setView(tab.id)}
-                accessibilityRole="button"
-                accessibilityState={{ selected: active }}
+                scale={0.9}
+                style={[styles.tool, view === 'saved' && styles.toolOn]}
+                onPress={() => setView(view === 'saved' ? 'mine' : 'saved')}
+                accessibilityLabel="Saved workouts"
+                accessibilityState={{ selected: view === 'saved' }}
               >
-                <Text style={[styles.segmentText, active && styles.segmentTextActive]}>{tab.label}</Text>
+                <Bookmark
+                  color={view === 'saved' ? colors.accent : colors.textSecondary}
+                  fill={view === 'saved' ? colors.accent : 'transparent'}
+                  size={18}
+                />
               </Press>
-            );
-          })}
+
+              <Press
+                scale={0.9}
+                style={[styles.tool, view === 'browse' && styles.toolOn]}
+                onPress={() => setView(view === 'browse' ? 'mine' : 'browse')}
+                accessibilityLabel="Browse public workouts"
+                accessibilityState={{ selected: view === 'browse' }}
+              >
+                <Compass
+                  color={view === 'browse' ? colors.accent : colors.textSecondary}
+                  size={18}
+                />
+              </Press>
+
+              <View style={styles.toolDivider} />
+
+              <Press
+                scale={0.9}
+                style={styles.tool}
+                onPress={() => { setView('mine'); setEditMode(true); }}
+                accessibilityLabel="Edit a workout"
+              >
+                <Pencil color={colors.textSecondary} size={17} />
+              </Press>
+
+              <Press
+                scale={0.9}
+                style={[styles.tool, styles.toolPrimary]}
+                onPress={() => setMainMenuVisible(true)}
+                accessibilityLabel="Create or add a workout"
+              >
+                <Plus color={colors.onAccent} size={19} />
+              </Press>
+            </View>
+          )}
         </View>
 
         <FlatList
@@ -376,52 +467,9 @@ export default function TrainingScreen({ navigation }) {
                 );
               })}
             </ScrollView>
-          ) : view === 'mine' ? (
-            <>
-              <WeeklyGoal
-                target={profile?.workouts_per_week}
-                doneDays={trainedDays}
-                weekKeys={currentWeekKeys()}
-              />
-              {lastSession ? (
-              <TouchableOpacity
-                activeOpacity={0.7}
-                style={styles.repeatCard}
-                onPress={() => {
-                  const workout = myWorkouts.find((w) => String(w.id) === String(lastSession.workout_id));
-                  if (workout) openWorkoutDetail(workout);
-                }}
-                accessibilityLabel={`Repeat ${lastSession.workout_name}`}
-              >
-                <View style={styles.repeatIcon}>
-                  <RotateCcw color={colors.accent} size={20} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.repeatLabel}>Pick up where you left off</Text>
-                  <Text style={styles.repeatName} numberOfLines={1}>{lastSession.workout_name}</Text>
-                  <Text style={styles.repeatMeta}>
-                    {formatRelativeDate(lastSession.completed_at)} · {lastSession.duration_minutes} min
-                  </Text>
-                </View>
-                <Play color={colors.onAccent} size={16} fill={colors.onAccent} style={styles.repeatPlay} />
-              </TouchableOpacity>
-              ) : null}
-            </>
           ) : null
         }
-        ListFooterComponent={
-          view === 'mine' && myWorkouts.length > 0 ? (
-            <Press
-              scale={0.98}
-              style={styles.createRow}
-              onPress={() => setMainMenuVisible(true)}
-              accessibilityLabel="Create or add a workout"
-            >
-              <View style={styles.createGlyph}><Plus color={colors.accent} size={18} /></View>
-              <Text style={styles.createText}>Create or add a workout</Text>
-            </Press>
-          ) : null
-        }
+
         ListEmptyComponent={
           view === 'saved' ? (
             <EmptyState
@@ -458,7 +506,9 @@ export default function TrainingScreen({ navigation }) {
             <WorkoutCard
               workout={item}
               variant={view}
-              onOpen={() => openWorkoutDetail(item)}
+              imageUrl={item.cover_url}
+              editing={editMode}
+              onOpen={() => (editMode ? openWorkoutDetail(item, true) : openWorkoutDetail(item))}
               onDelete={() => confirmDeleteWorkout(item.id)}
               onCopy={() => handleCopy(item.id, item.name)}
               onToggleSave={() => toggleSave(item.id)}
@@ -523,6 +573,12 @@ export default function TrainingScreen({ navigation }) {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+        <SplitSheet
+          visible={splitSheetVisible}
+          onClose={() => setSplitSheetVisible(false)}
+          profile={profile}
+          onSaved={setSplit}
+        />
       </LinearGradient>
     </SafeAreaView>
   );
@@ -534,36 +590,30 @@ const styles = StyleSheet.create({
   header: { padding: 20, paddingTop: 40 },
   dateText: { color: colors.textMuted, marginTop: 16, fontSize: 15 },
   title: { color: colors.text, fontSize: 34, fontWeight: '800', marginTop: 6 },
-  repeatCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.card,
-    borderRadius: 24,
-    padding: 16,
-    marginBottom: 20,
-    gap: 16,
-    // The one card in the list that is a suggestion rather than an item, so it
-    // gets the accent edge to separate it from the workouts below.
-    borderWidth: 1,
-    borderColor: colors.accentBorder,
-  },
-  repeatIcon: {
-    width: 44, height: 44, borderRadius: 22,
-    backgroundColor: colors.accentSoft,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  repeatLabel: { color: colors.accent, fontSize: 11, fontWeight: '600', letterSpacing: 0.7, textTransform: 'uppercase' },
-  repeatName: { color: colors.text, fontSize: 17, fontWeight: '700', marginTop: 4 },
-  repeatMeta: { color: colors.textSecondary, fontSize: 13, marginTop: 2 },
-  repeatPlay: {
-    backgroundColor: colors.accent,
-    width: 34, height: 34, borderRadius: 17,
-    textAlign: 'center', lineHeight: 34,
-    overflow: 'hidden',
-  },
   // --- Segmented control ---------------------------------------------------
   // The two things you can do here, side by side, instead of a floating plus
   // that hid one of them behind a menu.
+  toolbar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, marginBottom: 14,
+  },
+  viewTitle: { color: colors.text, fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
+  toolRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  tool: {
+    width: 36, height: 36, borderRadius: 13,
+    backgroundColor: colors.surface,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  toolOn: { backgroundColor: colors.accentSoft },
+  toolPrimary: { backgroundColor: colors.accent },
+  // A hairline between the pair on the left and the pair on the right: the
+  // first two say where you are, the last two do something.
+  toolDivider: { width: 1, height: 20, backgroundColor: colors.border, marginHorizontal: 3 },
+  doneBtn: {
+    paddingHorizontal: 16, paddingVertical: 8, borderRadius: 999,
+    backgroundColor: colors.accent,
+  },
+  doneText: { color: colors.onAccent, fontSize: 13, fontWeight: '700' },
   muscleFilterRow: { flexDirection: 'row', gap: 8, paddingBottom: 14, paddingRight: 20 },
   muscleChip: {
     paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999,
@@ -572,19 +622,6 @@ const styles = StyleSheet.create({
   muscleChipOn: { backgroundColor: colors.accent },
   muscleChipText: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
   muscleChipTextOn: { color: colors.onAccent },
-  segments: {
-    flexDirection: 'row',
-    marginHorizontal: 20,
-    marginBottom: 20,
-    backgroundColor: colors.surface,
-    borderRadius: 999,
-    padding: 4,
-    gap: 4,
-  },
-  segment: { flex: 1, paddingVertical: 10, borderRadius: 999, alignItems: 'center' },
-  segmentActive: { backgroundColor: colors.accent },
-  segmentText: { color: colors.textSecondary, fontSize: 14, fontWeight: '600' },
-  segmentTextActive: { color: colors.onAccent, fontWeight: '700' },
 
   // --- Browse cards --------------------------------------------------------
   browseCard: { backgroundColor: colors.card, borderRadius: 24, padding: 16, marginBottom: 12, gap: 14 },
@@ -599,15 +636,6 @@ const styles = StyleSheet.create({
   },
   copyBtnText: { color: colors.accent, fontSize: 14, fontWeight: '700' },
 
-  createRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: colors.card, borderRadius: 20, padding: 16, marginTop: 4,
-  },
-  createGlyph: {
-    width: 34, height: 34, borderRadius: 17,
-    backgroundColor: colors.accentSoft, alignItems: 'center', justifyContent: 'center',
-  },
-  createText: { color: colors.text, fontSize: 15, fontWeight: '600' },
 
   listContent: { padding: 20, paddingBottom: 100 },
   glassCard: { backgroundColor: colors.card, borderRadius: 24, padding: 16, marginBottom: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
