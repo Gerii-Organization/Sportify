@@ -11,6 +11,8 @@ import { unwrap } from '../lib/query';
 import Press from '../components/Press';
 import FadeIn from '../components/FadeIn';
 import AmbientGlow from '../components/AmbientGlow';
+import BottomSheet from '../components/BottomSheet';
+import { formatWeight, toDisplayWeight } from '../lib/units';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 
@@ -33,7 +35,7 @@ import ErrorState from '../components/ErrorState';
  * double the ambient glow.
  */
 export default function RecordsScreen({ navigation, embedded = false }) {
-  const { user } = useAuth();
+  const { user, units } = useAuth();
   const [selected, setSelected] = useState(null);
 
   const load = useCallback(async () => {
@@ -120,7 +122,7 @@ export default function RecordsScreen({ navigation, embedded = false }) {
                           {record ? (
                             <>
                               <Text style={styles.rowBest}>{trim(record.weight_kg)}kg × {record.reps}</Text>
-                              <Text style={styles.rowRm}>{trim(record.estimated_1rm)}kg est. 1RM</Text>
+                              <Text style={styles.rowRm}>{formatWeight(record.estimated_1rm, units, { step: 0.5 })} est. 1RM</Text>
                             </>
                           ) : (
                             <Text style={styles.rowRm}>{trim(exercise.best_1rm)}kg est. 1RM</Text>
@@ -160,8 +162,16 @@ export default function RecordsScreen({ navigation, embedded = false }) {
   );
 }
 
-/** One exercise over time: every session it appeared in, best estimated single. */
-function ExerciseDetail({ name, record, onBack, embedded = false }) {
+/**
+ * One exercise over time: every session it appeared in, best estimated single.
+ *
+ * `record` is optional. The list screen already holds it, so it hands it over
+ * rather than making the same figure twice; anywhere else it is derived from
+ * the sessions the RPC returns. Passing nothing used to render "No record set
+ * yet" over a full chart, which is the screen contradicting itself.
+ */
+function ExerciseDetail({ name, record, onBack, embedded = false, showNav = true }) {
+  const { units } = useAuth();
   const load = useCallback(
     () => unwrap(supabase.rpc('get_exercise_history', { p_name: name })),
     [name]
@@ -169,6 +179,8 @@ function ExerciseDetail({ name, record, onBack, embedded = false }) {
 
   const { data, loading, error, reload } = useLoad(load, []);
   const sessions = data || [];
+
+  const best = record || bestOf(sessions);
 
   // The RPC returns newest first because that is what a list wants. A chart
   // reads left to right through time, so it gets the reverse.
@@ -179,13 +191,15 @@ function ExerciseDetail({ name, record, onBack, embedded = false }) {
 
   const body = (
     <>
-        <View style={styles.nav}>
-          <Press scale={0.92} onPress={onBack} style={styles.back} accessibilityLabel="Back to records">
-            <ChevronLeft color={colors.text} size={24} />
-          </Press>
-          <Text style={styles.navTitle} numberOfLines={1}>{name}</Text>
-          <View style={{ width: 40 }} />
-        </View>
+        {showNav && (
+          <View style={styles.nav}>
+            <Press scale={0.92} onPress={onBack} style={styles.back} accessibilityLabel="Back to records">
+              <ChevronLeft color={colors.text} size={24} />
+            </Press>
+            <Text style={styles.navTitle} numberOfLines={1}>{name}</Text>
+            <View style={{ width: 40 }} />
+          </View>
+        )}
 
         {loading ? (
           <ActivityIndicator color={colors.energy} style={{ marginTop: 60 }} />
@@ -196,11 +210,11 @@ function ExerciseDetail({ name, record, onBack, embedded = false }) {
             <FadeIn style={styles.hero}>
               <Trophy color={colors.energy} size={26} />
               <Text style={styles.heroValue}>
-                {record ? `${trim(record.weight_kg)}kg × ${record.reps}` : '—'}
+                {best ? `${toDisplayWeight(best.weight_kg, units)} × ${best.reps}` : '—'}
               </Text>
               <Text style={styles.heroLabel}>
-                {record
-                  ? `Best set · ${formatRelativeDate(record.achieved_at).toLowerCase()}`
+                {best
+                  ? `Best set · ${formatRelativeDate(best.achieved_at).toLowerCase()}`
                   : 'No record set yet'}
               </Text>
 
@@ -258,12 +272,12 @@ function ExerciseDetail({ name, record, onBack, embedded = false }) {
                     <View style={{ flex: 1 }}>
                       <Text style={styles.sessionTitle} numberOfLines={1}>{session.workout_name}</Text>
                       <Text style={styles.sessionMeta}>
-                        {formatRelativeDate(session.completed_at)} · {session.total_reps} reps · {trim(session.volume_kg)}kg
+                        {formatRelativeDate(session.completed_at)} · {session.total_reps} reps · {formatWeight(session.volume_kg, units, { step: 1 })}
                       </Text>
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={styles.sessionTop}>{trim(session.top_weight)}kg × {session.top_reps}</Text>
-                      <Text style={styles.sessionRm}>{trim(session.best_1rm)} est.</Text>
+                      <Text style={styles.sessionTop}>{toDisplayWeight(session.top_weight, units)} × {session.top_reps}</Text>
+                      <Text style={styles.sessionRm}>{toDisplayWeight(session.best_1rm, units)} est.</Text>
                     </View>
                   </View>
                 ))
@@ -287,6 +301,22 @@ function ExerciseDetail({ name, record, onBack, embedded = false }) {
       </LinearGradient>
     </SafeAreaView>
   );
+}
+
+/**
+ * The heaviest estimated single across the sessions given.
+ *
+ * Shaped like the record row the list screen passes down, so the hero does not
+ * have to know which of the two it received.
+ */
+function bestOf(sessions) {
+  let top = null;
+  (sessions || []).forEach((s) => {
+    if (!top || (Number(s.best_1rm) || 0) > (Number(top.best_1rm) || 0)) top = s;
+  });
+  if (!top) return null;
+
+  return { weight_kg: top.top_weight, reps: top.top_reps, achieved_at: top.completed_at };
 }
 
 /**
@@ -383,4 +413,26 @@ const styles = StyleSheet.create({
   sessionMeta: { color: colors.textMuted, fontSize: 12, marginTop: 3 },
   sessionTop: { color: colors.text, fontSize: 14, fontWeight: '700', fontVariant: ['tabular-nums'] },
   sessionRm: { color: colors.textFaint, fontSize: 11, marginTop: 2, fontVariant: ['tabular-nums'] },
+  sheetBody: { maxHeight: 460 },
 });
+
+/**
+ * The same progression, as a sheet.
+ *
+ * Reached by tapping an exercise name while a workout is open. The history
+ * existed and was two screens away from the moment it is worth having — you
+ * decide what to load with the bar in front of you, not later from a menu.
+ */
+export function ExerciseHistorySheet({ name, visible, onClose }) {
+  if (!name) return null;
+
+  return (
+    <BottomSheet visible={visible} onClose={onClose} title={name} avoidKeyboard={false}>
+      <View style={styles.sheetBody}>
+        {/* The sheet's own header already names the exercise and offers a way
+            out, so the screen's nav row would be a second one of each. */}
+        <ExerciseDetail name={name} embedded showNav={false} onBack={onClose} />
+      </View>
+    </BottomSheet>
+  );
+}

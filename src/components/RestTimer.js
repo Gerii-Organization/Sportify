@@ -3,6 +3,9 @@ import { View, Text, TouchableOpacity, StyleSheet, AppState } from 'react-native
 import { Timer, X, Plus, Minus } from 'lucide-react-native';
 import { colors, radius, spacing } from '../theme';
 import { formatStopwatch } from '../lib/date';
+import { REST_SECONDS_BY_GOAL, REST_CHOICES, restSecondsFor, labelForRestChoice } from '../lib/rest';
+
+export { REST_SECONDS_BY_GOAL, REST_CHOICES, restSecondsFor, labelForRestChoice };
 
 /**
  * Countdown between sets. Starts automatically when a set is ticked.
@@ -18,17 +21,6 @@ import { formatStopwatch } from '../lib/date';
  * 2. Rest length follows the training goal. Heavy strength work needs far longer
  *    recovery than a fat-loss circuit.
  */
-
-export const REST_SECONDS_BY_GOAL = {
-  gain_strength: 180,
-  build_muscle: 90,
-  maintain: 60,
-  lose_weight: 45,
-};
-
-export function restSecondsFor(goal) {
-  return REST_SECONDS_BY_GOAL[goal] ?? 90;
-}
 
 export default function RestTimer({ endsAt, onExtend, onDismiss }) {
   const [remaining, setRemaining] = useState(() => secondsUntil(endsAt));

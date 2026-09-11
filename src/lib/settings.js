@@ -14,12 +14,21 @@ const KEYS = {
   restAlerts: 'settings.restAlerts',
   waterReminders: 'settings.waterReminders',
   streakReminders: 'settings.streakReminders',
+  units: 'settings.units',
+  restSeconds: 'settings.restSeconds',
 };
 
 const DEFAULTS = {
   restAlerts: true,
   waterReminders: false,
   streakReminders: true,
+  // Metric is what the database stores, so it is also the safe default: a
+  // fresh install shows exactly the numbers that are written down.
+  units: 'metric',
+  // null means "follow the training goal" — the behaviour before this was
+  // adjustable, and still the right default for someone who has not thought
+  // about it. A number overrides it everywhere.
+  restSeconds: null,
 };
 
 export async function getSetting(name) {

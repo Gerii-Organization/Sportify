@@ -14,6 +14,7 @@ import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import ProgressArc from '../components/ProgressArc';
 import WaterSheet from '../components/WaterSheet';
+import WaterGlass from '../components/WaterGlass';
 
 /**
  * Detail for one daily metric.
@@ -80,22 +81,37 @@ export default function MetricScreen({ route, navigation }) {
             refreshControl={refreshControl}
           >
             <FadeIn style={styles.hero}>
-              <View style={styles.heroArc}>
-                <ProgressArc
-                  progress={pct ?? 0}
-                  color={config.color}
-                  size={148}
-                  strokeWidth={9}
-                  delay={120}
-                />
-                <View style={styles.heroCentre}>
-                  <Icon color={config.color} size={20} />
-                  <Text style={styles.heroValue} numberOfLines={1} adjustsFontSizeToFit>
-                    {data?.value ?? '0'}
-                  </Text>
-                  {config.unit ? <Text style={styles.heroUnit}>{config.unit}</Text> : null}
+              {/* Water gets a glass instead of a ring. A ring reads as a
+                  percentage; for something people already picture as a
+                  container, the container says it without a number. */}
+              {metric === 'water' ? (
+                <View style={styles.heroGlass}>
+                  <WaterGlass ml={(data?.raw ?? 0) * 1000} goalMl={(data?.goal ?? 2.5) * 1000} />
+                  <View style={styles.glassReading}>
+                    <Text style={styles.heroValue} numberOfLines={1} adjustsFontSizeToFit>
+                      {data?.value ?? '0'}
+                    </Text>
+                    <Text style={styles.heroUnit}>{config.unit}</Text>
+                  </View>
                 </View>
-              </View>
+              ) : (
+                <View style={styles.heroArc}>
+                  <ProgressArc
+                    progress={pct ?? 0}
+                    color={config.color}
+                    size={148}
+                    strokeWidth={9}
+                    delay={120}
+                  />
+                  <View style={styles.heroCentre}>
+                    <Icon color={config.color} size={20} />
+                    <Text style={styles.heroValue} numberOfLines={1} adjustsFontSizeToFit>
+                      {data?.value ?? '0'}
+                    </Text>
+                    {config.unit ? <Text style={styles.heroUnit}>{config.unit}</Text> : null}
+                  </View>
+                </View>
+              )}
 
               <Text style={styles.heroCaption}>
                 {shown !== null
@@ -258,6 +274,8 @@ const styles = StyleSheet.create({
 
   hero: { alignItems: 'center', paddingVertical: spacing.lg },
   heroArc: { width: 148, height: 148, alignItems: 'center', justifyContent: 'center' },
+  heroGlass: { flexDirection: 'row', alignItems: 'center', gap: 22 },
+  glassReading: { alignItems: 'flex-start' },
   heroCentre: { position: 'absolute', alignItems: 'center', gap: 2 },
   heroValue: { color: colors.text, fontSize: 38, fontWeight: '800', letterSpacing: -1.2 },
   heroUnit: { color: colors.textMuted, fontSize: 13, fontWeight: '600', marginTop: -4 },

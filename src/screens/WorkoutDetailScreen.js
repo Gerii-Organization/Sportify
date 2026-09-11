@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   View, Text, StyleSheet, TouchableOpacity, 
   Modal, SafeAreaView, TextInput, ScrollView, KeyboardAvoidingView, Platform, FlatList, Alert 
@@ -6,7 +6,8 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { 
   ChevronLeft, Edit3, Plus, X, Play, CheckCircle2, Circle, Clock, 
-  Save, Trash2, Zap, Star, Flame, ChevronUp, ChevronDown, Globe, Lock, Info, Weight, Image as ImageIcon 
+  Save, Trash2, Zap, Star, Flame, ChevronUp, ChevronDown, Info,
+  Link2, Unlink2, CloudOff
 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors } from '../theme';
@@ -19,14 +20,30 @@ import { useAuth } from '../context/AuthContext';
 import PersonalRecordCard from '../components/PersonalRecordCard';
 import { AchievementIcon } from '../lib/achievements';
 import { scheduleRestAlert, cancelRestAlert } from '../lib/restNotification';
+import { getSetting } from '../lib/settings';
+import { groupOf, restsAfter, linkWithNext, unlink } from '../lib/superset';
+import { ExerciseHistorySheet } from './RecordsScreen';
+import { queueCompletion, saveDraft, loadDraft, clearDraft } from '../lib/pendingWorkouts';
+import { nextType, patchForType, markFor, countsAsWork, describeType, tintFor } from '../lib/setTypes';
+import { fromInputWeight, toDisplayWeight, weightLabel, formatWeight } from '../lib/units';
+import { listAllExercises, addCustom } from '../lib/customExercises';
+import { saveWorkoutToHealth } from '../lib/health';
+import { track, EVENTS } from '../lib/analytics';
 import Button from '../components/Button';
-import PlateSheet from '../components/PlateSheet';
-import { pickAndUploadImage } from '../lib/upload';
 import { deviceTimeZone } from '../lib/date';
 
 
+/**
+ * The catalogue entry for an exercise, by name.
+ *
+ * Workouts store the name rather than the id, and three names drifted from the
+ * catalogue at some point, so a miss simply means no cue rather than a crash.
+ */
+const cueOf = (name) =>
+  EXERCISES.find((e) => e.name.toLowerCase() === (name || '').toLowerCase()) || null;
+
 export default function WorkoutDetailScreen({ route, navigation }) {
-  const { user, profile, refreshProfile } = useAuth();
+  const { user, profile, refreshProfile, units } = useAuth();
   const workout = route?.params?.workout;
   const onSave = route?.params?.onSave;
   /** Chosen from the workouts screen's edit mode, so it opens ready to change
@@ -39,38 +56,58 @@ export default function WorkoutDetailScreen({ route, navigation }) {
   const [isExerciseSelectorVisible, setIsExerciseSelectorVisible] = useState(false);
   /** Which exercise has its form cue open in the picker. */
   const [cueFor, setCueFor] = useState(null);
-  const [plateSheetVisible, setPlateSheetVisible] = useState(false);
-  const [uploadingCover, setUploadingCover] = useState(false);
   const [exerciseQuery, setExerciseQuery] = useState('');
   const [muscleFilter, setMuscleFilter] = useState(null);
+  /** Presets plus anything this device has added. */
+  const [catalogue, setCatalogue] = useState(EXERCISES);
+
+  const reloadCatalogue = useCallback(async () => {
+    setCatalogue(await listAllExercises());
+  }, []);
+
+  useEffect(() => { reloadCatalogue(); }, [reloadCatalogue]);
 
   // Recomputed only when the search or filter changes, not on every keystroke
   // elsewhere in the screen.
   const visibleExercises = useMemo(() => {
     const query = exerciseQuery.trim().toLowerCase();
-    return EXERCISES.filter(
+    return catalogue.filter(
       (ex) =>
         (!muscleFilter || ex.muscle === muscleFilter) &&
         (!query || ex.name.toLowerCase().includes(query))
     );
-  }, [exerciseQuery, muscleFilter]);
+  }, [catalogue, exerciseQuery, muscleFilter]);
 
-  /** Heaviest weight entered anywhere in this workout, as the sheet's default. */
-  const heaviestWeight = useMemo(() => {
-    let max = 0;
-    (currentWorkout.exercises || []).forEach((ex) =>
-      (ex.sets || []).forEach((set) => {
-        const w = parseFloat(set.weight);
-        if (Number.isFinite(w) && w > max) max = w;
-      })
-    );
-    return max || '';
-  }, [currentWorkout]);
+  /**
+   * Adds whatever was typed into the search box as a new exercise.
+   *
+   * The search box is the right place to ask: you have already typed the name,
+   * and finding nothing is the moment you learn the app does not know it.
+   */
+  const addTypedExercise = async () => {
+    const muscle = muscleFilter || 'Chest';
+    const { ok: added, error, exercise } = await addCustom({ name: exerciseQuery, muscle });
+
+    if (!added) return Alert.alert('Could not add it', error);
+
+    await reloadCatalogue();
+    setExerciseQuery('');
+    addNewExercise(exercise);
+  };
 
   const [showSummary, setShowSummary] = useState(false);
   /** Row id of the session just written, so a note can be attached to it. */
   const [completionId, setCompletionId] = useState(null);
   const [note, setNote] = useState('');
+  /** The rest length chosen in settings, or null to follow the goal. */
+  const [restOverride, setRestOverride] = useState(null);
+
+  useEffect(() => {
+    getSetting('restSeconds').then(setRestOverride);
+  }, []);
+
+  /** Exercise whose progression sheet is open, by name. */
+  const [historyFor, setHistoryFor] = useState(null);
   /** Timestamp the current rest period ends, or null when not resting. */
   const [restEndsAt, setRestEndsAt] = useState(null);
   /** Id of the pending local notification, so it can be cancelled. */
@@ -85,12 +122,114 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
   useEffect(() => () => cancelRestAlert(restAlertId.current), []);
 
+  /**
+   * Fills each set's `prev` with what you actually lifted last time.
+   *
+   * The field has held the string '-' since the app was written. An empty
+   * weight box tells you nothing; "60 × 8 last time" tells you what to type,
+   * and comparing the two is the reason to keep a log at all.
+   *
+   * Matched by exercise name, case-insensitively — the catalogue has drifted
+   * before, and a name that no longer matches simply shows a dash rather than
+   * the wrong history.
+   */
+  useEffect(() => {
+    if (!user || !workout?.exercises?.length) return undefined;
+    let cancelled = false;
+
+    (async () => {
+      const names = workout.exercises.map((ex) => ex.name).filter(Boolean);
+      if (!names.length) return;
+
+      const { data, error } = await supabase.rpc('get_last_sets', { p_names: names });
+      if (cancelled || error || !data?.length) return;
+
+      const byName = new Map(data.map((row) => [row.exercise_name.toLowerCase(), row]));
+
+      setCurrentWorkout((w) => ({
+        ...w,
+        exercises: (w.exercises || []).map((ex) => {
+          const last = byName.get((ex.name || '').toLowerCase());
+          if (!last) return ex;
+
+          const previous = last.sets || [];
+
+          return {
+            ...ex,
+            // Set n shows set n from last time. Falling back to the top set
+            // when you have added an extra one keeps the hint useful rather
+            // than blanking it.
+            sets: (ex.sets || []).map((set, i) => {
+              const ref = previous[i] || previous[previous.length - 1];
+              if (!ref?.weight || !ref?.reps) return set;
+              return { ...set, prev: `${toDisplayWeight(ref.weight, units)} × ${ref.reps}` };
+            }),
+          };
+        }),
+      }));
+    })();
+
+    return () => { cancelled = true; };
+    // `units` matters: the RPC answers in kilograms and the row shows whatever
+    // the user reads in, so switching has to refill the column.
+  }, [user, workout, units]);
+
   useEffect(() => {
     let interval;
     if (mode === 'started') interval = setInterval(() => setTimer(prev => prev + 1), 1000);
     else clearInterval(interval);
     return () => clearInterval(interval);
   }, [mode]);
+
+  /**
+   * Keeps the session you are in the middle of.
+   *
+   * Written on every tick and every typed digit, because the thing being
+   * protected is a force-quit or a crash — neither of which gives us a chance
+   * to save on the way out. `startedAt` rides along so the clock resumes where
+   * it was rather than restarting at zero.
+   */
+  useEffect(() => {
+    if (mode !== 'started' || !currentWorkout?.id) return;
+    saveDraft({
+      id: String(currentWorkout.id),
+      name: currentWorkout.name || null,
+      exercises: currentWorkout.exercises,
+      startedAt: Date.now() - timer * 1000,
+    });
+    // `timer` is deliberately absent: it changes every second, and the draft
+    // only needs re-writing when the sets do.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, currentWorkout]);
+
+  /**
+   * Picks an interrupted session back up.
+   *
+   * Only for the workout it belongs to, and only once — restoring silently is
+   * right here. A dialog asking whether to resume is asking about something the
+   * user did not choose to interrupt.
+   */
+  const restored = useRef(false);
+
+  useEffect(() => {
+    if (restored.current || !workout?.id || mode !== 'idle') return;
+    restored.current = true;
+
+    let cancelled = false;
+    (async () => {
+      const draft = await loadDraft();
+      if (cancelled || !draft || String(draft.id) !== String(workout.id)) return;
+
+      const done = (draft.exercises || []).some((ex) => (ex.sets || []).some((set) => set.completed));
+      if (!done) return;
+
+      setCurrentWorkout((w) => ({ ...w, exercises: draft.exercises }));
+      setTimer(Math.max(0, Math.round((Date.now() - (draft.startedAt || Date.now())) / 1000)));
+      setMode('started');
+    })();
+
+    return () => { cancelled = true; };
+  }, [workout?.id, mode]);
 
   if (!workout) {
     return <View style={styles.container} />;
@@ -106,71 +245,6 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       p_note: note,
     });
     if (error) console.warn(`[Sportify] Could not save note: ${error.message}`);
-  };
-
-  /**
-   * Sets the workout's cover photo.
-   *
-   * Stored at <user-id>/<workout-id>.jpg and overwritten in place, so changing
-   * it five times leaves one file rather than five orphans. WorkoutCard already
-   * falls back to a generated cover when there is none, so this only ever
-   * replaces the fallback.
-   */
-  const pickCover = async () => {
-    if (uploadingCover) return;
-    setUploadingCover(true);
-
-    try {
-      const result = await pickAndUploadImage({
-        bucket: 'workout_covers',
-        pathPrefix: `${user.id}/${currentWorkout.id}`,
-      });
-
-      if (result) {
-        const { error } = await supabase
-          .from('user_workouts')
-          .update({ cover_url: result.url })
-          .eq('id', currentWorkout.id);
-
-        if (error) throw error;
-        setCurrentWorkout((w) => ({ ...w, cover_url: result.url }));
-        if (onSave) onSave({ ...currentWorkout, cover_url: result.url });
-      }
-    } catch (e) {
-      Alert.alert('Could not set the cover', e.message);
-    }
-
-    setUploadingCover(false);
-  };
-
-  /**
-   * Publish or unpublish. A public workout appears in Browse for everyone, so
-   * the confirmation names what actually becomes visible — the plan, not your
-   * logged weights, which copy_workout strips.
-   */
-  const togglePublic = async () => {
-    const next = !currentWorkout.is_public;
-
-    const apply = async () => {
-      const { error } = await supabase
-        .from('user_workouts')
-        .update({ is_public: next })
-        .eq('id', currentWorkout.id);
-
-      if (error) return Alert.alert('Could not change this', error.message);
-      setCurrentWorkout((w) => ({ ...w, is_public: next }));
-    };
-
-    if (!next) return apply();
-
-    Alert.alert(
-      'Share this workout?',
-      'Anyone can find it in Browse and add it to their own list. They get the exercises and set count — not your weights or reps.',
-      [
-        { text: 'Keep private', style: 'cancel' },
-        { text: 'Share', onPress: apply },
-      ]
-    );
   };
 
   const toggleEditMode = async () => {
@@ -207,6 +281,16 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     newExercises[index + 1] = newExercises[index];
     newExercises[index] = temp;
     setCurrentWorkout({ ...currentWorkout, exercises: newExercises });
+  };
+
+  /** Applies a set kind. Writes `type` and the older `warmup` flag together. */
+  const updateSetType = (exerciseId, setId, type) => {
+    const patch = patchForType(type);
+    const updatedExercises = currentWorkout.exercises.map((ex) => {
+      if (ex.id !== exerciseId) return ex;
+      return { ...ex, sets: ex.sets.map((set) => (set.id === setId ? { ...set, ...patch } : set)) };
+    });
+    setCurrentWorkout({ ...currentWorkout, exercises: updatedExercises });
   };
 
   const updateSetData = (exerciseId, setId, field, value) => {
@@ -284,8 +368,11 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
     setCurrentWorkout({ ...currentWorkout, exercises: updatedExercises });
 
-    if (startedResting) {
-      const seconds = restSecondsFor(profile?.goal);
+    // Inside a superset you go straight to the next movement. Starting the
+    // timer after the A exercise would be the app telling you to do the
+    // opposite of the thing you set up.
+    if (startedResting && restsAfter(updatedExercises, exerciseId)) {
+      const seconds = restSecondsFor(profile?.goal, restOverride);
       setRestEndsAt(Date.now() + seconds * 1000);
 
       // Replace any alert still pending from the previous set.
@@ -351,9 +438,15 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       .map((ex) => ({
         name: ex.name,
         muscle: ex.muscle || null,
+        // Warm-ups are ticked off like any other set, but they are not work:
+        // they do not belong in the volume total and must never be compared
+        // against a personal record.
         sets: ex.sets
-          .filter((set) => set.completed && set.weight && set.reps)
-          .map((set) => ({ weight: Number(set.weight), reps: Number(set.reps) })),
+          .filter((set) => set.completed && countsAsWork(set) && set.weight && set.reps)
+          // The one place a typed weight becomes a stored one. Everything past
+          // here — the volume, the records, the session snapshot, the queue —
+          // is kilograms, whatever the box on screen said.
+          .map((set) => ({ weight: fromInputWeight(set.weight, units) ?? 0, reps: Number(set.reps) })),
       }))
       .filter((ex) => ex.sets.length > 0);
 
@@ -378,9 +471,11 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     let isFirstWorkoutToday = false;
     let finalStreakValue = 0;
     let freezeUsed = false;
+    /** Saved on this phone, not yet on the server. */
+    let queued = false;
 
     if (user) {
-      const { data: result, error } = await supabase.rpc('complete_workout', {
+      const completionPayload = {
         p_workout_id: String(currentWorkout.id),
         p_workout_name: currentWorkout.name || 'Workout',
         p_minutes: elapsedMinutes,
@@ -392,23 +487,33 @@ export default function WorkoutDetailScreen({ route, navigation }) {
         // The server re-adds the volume from these rather than trusting the
         // figure above — that number earns an XP bonus past 1000kg.
         p_exercises: performed,
-      });
+      };
 
-      if (error || !result?.ok) {
+      const { data: result, error } = await supabase.rpc('complete_workout', completionPayload);
+
+      if (error) {
+        // Could not reach the server. Gyms are basements, and this used to end
+        // the session with an alert and nothing else — close the app and an
+        // hour of logging was gone. Keep it and replay it later.
+        await queueCompletion(completionPayload);
+        queued = true;
+      } else if (!result?.ok) {
+        // The server was reached and refused. That is a decision, not a dropped
+        // packet, and replaying it would only be refused again.
         Alert.alert(
           'Could not save this workout',
-          error?.message || 'Your session was not recorded. Check your connection and try again.'
+          'Your session was not recorded. Please try again.'
         );
         setMode('started');
         return;
+      } else {
+        setCompletionId(result.completion_id ?? null);
+        finalXP = result.xp;
+        finalEnergy = result.energy;
+        finalStreakValue = result.streak;
+        isFirstWorkoutToday = result.streak_grew;
+        freezeUsed = result.freeze_used;
       }
-
-      setCompletionId(result.completion_id ?? null);
-      finalXP = result.xp;
-      finalEnergy = result.energy;
-      finalStreakValue = result.streak;
-      isFirstWorkoutToday = result.streak_grew;
-      freezeUsed = result.freeze_used;
     }
 
     // The server keeps only the sets that beat a previous best and tells us
@@ -417,7 +522,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     let newRecords = [];
     let newAchievements = [];
 
-    if (user) {
+    if (user && !queued) {
       const completedSets = performed.flatMap((ex) =>
         ex.sets.map((set) => ({ name: ex.name, weight: set.weight, reps: set.reps }))
       );
@@ -444,13 +549,35 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       freezeUsed,
       records: newRecords,
       achievements: newAchievements,
+      queued,
+    });
+
+    // Recorded or queued, the session is safe somewhere else now.
+    clearDraft();
+
+    // Counts only — how long, how many sets, whether it had to be queued. No
+    // exercise names, no weights.
+    track(queued ? EVENTS.workoutQueuedOffline : EVENTS.workoutFinished, {
+      minutes: elapsedMinutes,
+      sets: performed.reduce((total, ex) => total + ex.sets.length, 0),
+      exercises: performed.length,
+    });
+
+    // Best-effort and deliberately not awaited: the session is already saved,
+    // and a HealthKit prompt or refusal must not hold up the summary screen.
+    // Duration only. An energy figure would have to be invented — the app has
+    // no heart rate — and a guess written into Apple Health is indistinguishable
+    // from a measurement once it is in there.
+    saveWorkoutToHealth({
+      minutes: elapsedMinutes,
+      startedAt: Date.now() - timer * 1000,
     });
 
     const resetExercises = currentWorkout.exercises.map(ex => ({
       ...ex,
       sets: ex.sets.map(set => ({
         ...set,
-        prev: set.weight && set.reps ? `${set.weight}kg x ${set.reps}` : set.prev,
+        prev: set.weight && set.reps ? `${set.weight} × ${set.reps}` : set.prev,
         completed: false
       }))
     }));
@@ -487,10 +614,11 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
   const handleBackPress = () => {
     if (mode === 'started') {
-      Alert.alert('Workout in Progress', 'If you leave now, this workout will be discarded.', [
-        { text: 'Stay', style: 'cancel' },
-        { text: 'Leave', style: 'destructive', onPress: () => navigation.goBack() }
-      ]);
+      // Leaving no longer throws the session away. The draft is written on every
+      // tick, the clock is derived from `startedAt` rather than counted, and the
+      // bar above the tabs carries the way back — so stepping out to answer a
+      // message costs nothing.
+      navigation.goBack();
     } else if (mode === 'editing') {
       Alert.alert('Unsaved Changes', 'You have unsaved edits. Do you still want to leave?', [
         { text: 'Back to editing', style: 'cancel' },
@@ -501,6 +629,12 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       navigation.goBack();
     }
   };
+
+  // One pass, by index, so the card can ask where it sits in its round without
+  // re-scanning the list for every exercise on every render.
+  const rounds = (currentWorkout?.exercises || []).map((_, i) =>
+    groupOf(currentWorkout.exercises, i)
+  );
 
   return (
     <SafeAreaView style={styles.container}>
@@ -513,37 +647,12 @@ export default function WorkoutDetailScreen({ route, navigation }) {
             <Text style={styles.detailTitle}>{currentWorkout?.name}</Text>
           )}
           {mode === 'idle' && <TouchableOpacity activeOpacity={0.7} onPress={toggleEditMode} accessibilityLabel="Edit"><Edit3 color={colors.accent} size={24} /></TouchableOpacity>}
+          {/* Visibility moved to the workouts list: it is a decision about
+              which of your plans other people can see, and that is asked while
+              looking at all of them rather than from inside one. */}
           {mode === 'editing' && (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
-              <TouchableOpacity
-                onPress={pickCover}
-                accessibilityLabel="Set cover photo"
-                activeOpacity={0.7}
-                disabled={uploadingCover}
-              >
-                <ImageIcon color={uploadingCover ? colors.textFaint : colors.accent} size={22} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={togglePublic}
-                accessibilityLabel={currentWorkout.is_public ? 'Make private' : 'Share publicly'}
-                activeOpacity={0.7}
-              >
-                {currentWorkout.is_public
-                  ? <Globe color={colors.accent} size={22} />
-                  : <Lock color={colors.textSecondary} size={22} />}
-              </TouchableOpacity>
-              <TouchableOpacity activeOpacity={0.7} onPress={toggleEditMode} accessibilityLabel="Save">
-                <Save color={colors.accent} size={24} />
-              </TouchableOpacity>
-            </View>
-          )}
-          {mode === 'started' && (
-            <TouchableOpacity
-              activeOpacity={0.7}
-              onPress={() => setPlateSheetVisible(true)}
-              accessibilityLabel="Plate calculator"
-            >
-              <Weight color={colors.accent} size={24} />
+            <TouchableOpacity activeOpacity={0.7} onPress={toggleEditMode} accessibilityLabel="Save">
+              <Save color={colors.accent} size={24} />
             </TouchableOpacity>
           )}
         </View>
@@ -560,10 +669,52 @@ export default function WorkoutDetailScreen({ route, navigation }) {
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 100 }}>
           {currentWorkout?.exercises?.map((exercise, index) => (
-            <View key={exercise.id} style={styles.exerciseCard}>
+            <View
+              key={exercise.id}
+              style={[
+                styles.exerciseCard,
+                rounds[index] && styles.roundCard,
+                // Members other than the last close up against the one below,
+                // so a round reads as one block rather than as two cards that
+                // happen to be near each other.
+                rounds[index] && !rounds[index].isLast && styles.roundCardJoined,
+              ]}
+            >
 
               <View style={styles.exerciseHeaderRow}>
-                <Text style={styles.exerciseName}>{exercise.name}</Text>
+                {rounds[index] && (
+                  <View style={styles.roundBadge}>
+                    <Text style={styles.roundBadgeText}>{rounds[index].letter}</Text>
+                  </View>
+                )}
+                {mode === 'editing' ? (
+                  <Text style={styles.exerciseName}>{exercise.name}</Text>
+                ) : (
+                  <TouchableOpacity
+                    style={{ flex: 1 }}
+                    activeOpacity={0.7}
+                    onPress={() => setHistoryFor(exercise.name)}
+                    accessibilityLabel={`Your history for ${exercise.name}`}
+                  >
+                    <Text style={styles.exerciseName}>{exercise.name}</Text>
+                  </TouchableOpacity>
+                )}
+
+                {/* The form cue, where you are actually doing the movement.
+                    It was written for all 35 exercises and only ever shown in
+                    the picker — that is, before you add it, not while you have
+                    the bar in your hands. */}
+                {mode !== 'editing' && cueOf(exercise.name) && (
+                  <TouchableOpacity
+                    accessibilityLabel={`How to do ${exercise.name}`}
+                    activeOpacity={0.7}
+                    hitSlop={8}
+                    onPress={() => setCueFor(cueFor === exercise.id ? null : exercise.id)}
+                    style={{ paddingHorizontal: 6 }}
+                  >
+                    <Info color={cueFor === exercise.id ? colors.accent : colors.textFaint} size={18} />
+                  </TouchableOpacity>
+                )}
 
                 {mode === 'editing' && (
                   <View style={styles.exerciseActionRow}>
@@ -573,6 +724,26 @@ export default function WorkoutDetailScreen({ route, navigation }) {
                     <TouchableOpacity accessibilityLabel="Expand" activeOpacity={0.7} onPress={() => moveExerciseDown(index)} disabled={index === currentWorkout.exercises.length - 1} style={{ opacity: index === currentWorkout.exercises.length - 1 ? 0.2 : 1, paddingHorizontal: 6, marginRight: 16 }}>
                       <ChevronDown color={colors.accent} size={24} />
                     </TouchableOpacity>
+                    <TouchableOpacity
+                      accessibilityLabel={exercise.superset ? `Take ${exercise.name} out of its superset` : `Superset ${exercise.name} with the next exercise`}
+                      activeOpacity={0.7}
+                      disabled={!exercise.superset && index === currentWorkout.exercises.length - 1}
+                      onPress={() => setCurrentWorkout((w) => ({
+                        ...w,
+                        exercises: exercise.superset
+                          ? unlink(w.exercises, index)
+                          : linkWithNext(w.exercises, index),
+                      }))}
+                      style={{
+                        paddingHorizontal: 6,
+                        marginRight: 10,
+                        opacity: !exercise.superset && index === currentWorkout.exercises.length - 1 ? 0.2 : 1,
+                      }}
+                    >
+                      {exercise.superset
+                        ? <Unlink2 color={colors.textFaint} size={20} />
+                        : <Link2 color={colors.accent} size={20} />}
+                    </TouchableOpacity>
                     <TouchableOpacity accessibilityLabel="Delete" activeOpacity={0.7} onPress={() => confirmDeleteExercise(exercise.id)}>
                       <Trash2 color={colors.danger} size={22} />
                     </TouchableOpacity>
@@ -580,10 +751,21 @@ export default function WorkoutDetailScreen({ route, navigation }) {
                 )}
               </View>
 
+              {cueFor === exercise.id && cueOf(exercise.name) && (
+                <View style={styles.cuePanel}>
+                  <Text style={styles.cuePanelText}>{cueOf(exercise.name).cue}</Text>
+                  {cueOf(exercise.name).watch ? (
+                    <Text style={styles.cuePanelWatch}>
+                      Common mistake: {cueOf(exercise.name).watch}
+                    </Text>
+                  ) : null}
+                </View>
+              )}
+
               <View style={styles.tableHeader}>
                 <Text style={[styles.tableHeaderText, { flex: 0.5 }]}>Set</Text>
                 <Text style={[styles.tableHeaderText, { flex: 1 }]}>Prev</Text>
-                <Text style={[styles.tableHeaderText, { flex: 1 }]}>Kg</Text>
+                <Text style={[styles.tableHeaderText, { flex: 1 }]}>{weightLabel(units)}</Text>
                 <Text style={[styles.tableHeaderText, { flex: 1 }]}>Reps</Text>
                 {mode === 'started' && <Text style={[styles.tableHeaderText, { flex: 0.6 }]}>Done</Text>}
                 {mode === 'editing' && <Text style={[styles.tableHeaderText, { flex: 0.5 }]}></Text>}
@@ -591,14 +773,48 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
               {exercise.sets.map((set, setIndex) => (
                 <View key={set.id} style={[styles.setRow, set.completed && styles.setRowCompleted]}>
-                  <Text style={[styles.setText, { flex: 0.5 }]}>{setIndex + 1}</Text>
-                  <Text style={[styles.setText, { flex: 1, color: colors.textDisabled }]}>{set.prev}</Text>
+                  {/* Tap the number to mark a warm-up.
+                      A ramp-up set of 40kg is not a working set, and counting
+                      it drags the session volume down and can hand you a
+                      "personal record" you did not earn. Warm-ups are excluded
+                      from both when the workout is saved. */}
+                  <TouchableOpacity
+                    activeOpacity={0.6}
+                    style={{ flex: 0.5 }}
+                    onPress={() => updateSetType(exercise.id, set.id, nextType(set))}
+                    disabled={set.completed}
+                    accessibilityLabel={`Set ${setIndex + 1}, ${describeType(set)}. Tap to change.`}
+                  >
+                    {/* Green for a warm-up, red for a drop set, gold for a set
+                        taken to failure. The letter alone was legible but said
+                        nothing at a glance down the column. */}
+                    <Text
+                      style={[
+                        styles.setText,
+                        tintFor(set) && styles.setMark,
+                        tintFor(set) && { color: colors[tintFor(set)] },
+                      ]}
+                    >
+                      {markFor(set) || setIndex + 1}
+                    </Text>
+                  </TouchableOpacity>
+                  <Text
+                    style={[styles.setText, { flex: 1 }, set.prev && set.prev !== '-' ? styles.prevKnown : { color: colors.textDisabled }]}
+                    numberOfLines={1}
+                  >
+                    {set.prev || '-'}
+                  </Text>
 
                   <TextInput style={[styles.setInput, set.completed && {opacity: 0.5}]} keyboardType="numeric" value={set.weight} onChangeText={(v) => updateSetData(exercise.id, set.id, 'weight', v)} placeholder="0" placeholderTextColor={colors.textFaint} editable={!set.completed} />
                   <TextInput style={[styles.setInput, set.completed && {opacity: 0.5}]} keyboardType="numeric" value={set.reps} onChangeText={(v) => updateSetData(exercise.id, set.id, 'reps', v)} placeholder="0" placeholderTextColor={colors.textFaint} editable={!set.completed} />
 
                   {mode === 'started' && (
-                    <TouchableOpacity activeOpacity={0.7} style={styles.checkboxContainer} onPress={() => toggleSetCompletion(exercise.id, set.id)}>
+                    <TouchableOpacity
+                      activeOpacity={0.7}
+                      style={styles.checkboxContainer}
+                      onPress={() => toggleSetCompletion(exercise.id, set.id)}
+                      accessibilityLabel={set.completed ? `Set ${setIndex + 1}, done. Tap to undo.` : `Mark set ${setIndex + 1} done`}
+                    >
                       {set.completed ? <CheckCircle2 color={colors.accent} size={26} /> : <Circle color={colors.textFaint} size={26} />}
                     </TouchableOpacity>
                   )}
@@ -626,6 +842,12 @@ export default function WorkoutDetailScreen({ route, navigation }) {
           )}
         </ScrollView>
         </KeyboardAvoidingView>
+
+        <ExerciseHistorySheet
+          name={historyFor}
+          visible={!!historyFor}
+          onClose={() => setHistoryFor(null)}
+        />
 
         {mode === 'started' && restEndsAt && (
           <View style={styles.restWrapper}>
@@ -675,7 +897,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
                 <View style={styles.duoDivider} />
                 <View style={styles.duoStatBox}>
                   <Text style={styles.duoStatLabel}>Total volume</Text>
-                  <Text style={styles.duoStatValue}>{workoutStats.volume} kg</Text>
+                  <Text style={styles.duoStatValue}>{formatWeight(workoutStats.volume, units, { step: 1 })}</Text>
                 </View>
               </View>
             </View>
@@ -698,19 +920,37 @@ export default function WorkoutDetailScreen({ route, navigation }) {
               </View>
             )}
 
-            <View style={styles.duoCard}>
-              <Text style={styles.duoRewardTitle}>Rewards Earned</Text>
-              <View style={styles.duoStatRow}>
-                <View style={styles.duoRewardBox}>
-                  <Star color={colors.water} size={32} fill={colors.water} />
-                  <Text style={[styles.duoStatValue, { color: colors.water, marginTop: 10 }]}>+{workoutStats.xpGained} XP</Text>
+            {/* Queued, not lost, and not rewarded yet either. The rewards card
+                is hidden rather than showing zeroes: the server decides XP and
+                energy, and it has not seen this session. Claiming +0 XP would
+                be the app reporting a punishment for training offline. */}
+            {workoutStats.queued ? (
+              <View style={styles.duoCard}>
+                <View style={styles.offlineRow}>
+                  <CloudOff color={colors.textMuted} size={20} />
+                  <Text style={styles.offlineTitle}>Saved on this phone</Text>
                 </View>
-                <View style={styles.duoRewardBox}>
-                  <Zap color={colors.energy} size={32} fill={colors.energy} />
-                  <Text style={[styles.duoStatValue, { color: colors.energy, marginTop: 10 }]}>+{workoutStats.energyGained} ⚡</Text>
+                <Text style={styles.offlineBody}>
+                  No connection just now, so this session is waiting on your phone. It
+                  uploads by itself next time the app can reach the server, and your XP,
+                  energy and streak land then.
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.duoCard}>
+                <Text style={styles.duoRewardTitle}>Rewards Earned</Text>
+                <View style={styles.duoStatRow}>
+                  <View style={styles.duoRewardBox}>
+                    <Star color={colors.water} size={32} fill={colors.water} />
+                    <Text style={[styles.duoStatValue, { color: colors.water, marginTop: 10 }]}>+{workoutStats.xpGained} XP</Text>
+                  </View>
+                  <View style={styles.duoRewardBox}>
+                    <Zap color={colors.energy} size={32} fill={colors.energy} />
+                    <Text style={[styles.duoStatValue, { color: colors.energy, marginTop: 10 }]}>+{workoutStats.energyGained} ⚡</Text>
+                  </View>
                 </View>
               </View>
-            </View>
+            )}
 
             <PersonalRecordCard records={workoutStats.records} />
 
@@ -802,7 +1042,33 @@ export default function WorkoutDetailScreen({ route, navigation }) {
                 keyExtractor={item => item.id}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
-                ListEmptyComponent={<Text style={styles.noResults}>No exercises match that search.</Text>}
+                ListEmptyComponent={
+                  exerciseQuery.trim() ? (
+                    <View style={styles.addCustomWrap}>
+                      <Text style={styles.noResults}>
+                        Nothing called "{exerciseQuery.trim()}" yet.
+                      </Text>
+                      <TouchableOpacity
+                        activeOpacity={0.7}
+                        style={styles.addCustomBtn}
+                        onPress={addTypedExercise}
+                        accessibilityLabel={`Add ${exerciseQuery.trim()} as a new exercise`}
+                      >
+                        <Plus color={colors.onAccent} size={18} />
+                        <Text style={styles.addCustomText}>
+                          Add it as {muscleFilter ? muscleFilter.toLowerCase() : 'a chest'} exercise
+                        </Text>
+                      </TouchableOpacity>
+                      <Text style={styles.addCustomNote}>
+                        {muscleFilter
+                          ? 'Kept on this phone. The sets you log with it sync like any other.'
+                          : 'Pick a muscle group above first if it is not a chest exercise.'}
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text style={styles.noResults}>No exercises match that search.</Text>
+                  )
+                }
                 renderItem={({ item }) => {
                   const showing = cueFor === item.id;
 
@@ -857,11 +1123,6 @@ export default function WorkoutDetailScreen({ route, navigation }) {
             </View>
           </View>
         </Modal>
-        <PlateSheet
-          visible={plateSheetVisible}
-          onClose={() => setPlateSheetVisible(false)}
-          initialWeight={heaviestWeight}
-        />
       </LinearGradient>
     </SafeAreaView>
   );
@@ -878,6 +1139,14 @@ const styles = StyleSheet.create({
   startBigBtnText: { color: colors.onAccent, fontWeight: '700', fontSize: 17, marginLeft: 10 },
 
   exerciseCard: { backgroundColor: colors.card, borderRadius: 24, padding: 16, marginBottom: 20 },
+  // Superset is a state, which is the one thing a border is still for here.
+  roundCard: { borderLeftWidth: 2, borderLeftColor: colors.accentStrong },
+  roundCardJoined: { marginBottom: 6, borderBottomLeftRadius: 8, borderBottomRightRadius: 8 },
+  roundBadge: {
+    width: 22, height: 22, borderRadius: 11, marginRight: 9,
+    backgroundColor: colors.accentSoft, alignItems: 'center', justifyContent: 'center',
+  },
+  roundBadgeText: { color: colors.accent, fontSize: 12, fontWeight: '800' },
   exerciseHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
   exerciseName: { color: colors.accent, fontSize: 15, fontWeight: '600', flex: 1 },
   exerciseActionRow: { flexDirection: 'row', alignItems: 'center' },
@@ -910,6 +1179,9 @@ const styles = StyleSheet.create({
   exerciseDbItem: { paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: colors.border },
   exerciseDbRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 14 },
   exerciseInfoBtn: { padding: 2 },
+  cuePanel: { backgroundColor: colors.surface, borderRadius: 14, padding: 14, marginBottom: 16, gap: 8 },
+  cuePanelText: { color: colors.text, fontSize: 14, lineHeight: 20 },
+  cuePanelWatch: { color: colors.textMuted, fontSize: 13, lineHeight: 18 },
   cueBox: { backgroundColor: colors.surface, borderRadius: 14, padding: 14, marginTop: 12, gap: 8 },
   cueText: { color: colors.text, fontSize: 14, lineHeight: 20 },
   cueWatch: { color: colors.textMuted, fontSize: 13, lineHeight: 18 },
@@ -951,9 +1223,25 @@ const styles = StyleSheet.create({
     borderRadius: 14, padding: 14, fontSize: 15, minHeight: 76,
     textAlignVertical: 'top', marginTop: 4,
   },
+  // Last time's numbers are the reason the column exists, so they are readable
+  // rather than the faintest thing on the row.
+  // Colour comes from the set's type; this only carries the weight.
+  setMark: { fontWeight: '800' },
+  addCustomWrap: { alignItems: 'center', paddingTop: 26, paddingHorizontal: 10 },
+  addCustomBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: colors.accent, borderRadius: 16,
+    paddingVertical: 13, paddingHorizontal: 20, marginTop: 16,
+  },
+  addCustomText: { color: colors.onAccent, fontSize: 15, fontWeight: '700' },
+  addCustomNote: { color: colors.textFaint, fontSize: 12, textAlign: 'center', marginTop: 12, lineHeight: 17 },
+  prevKnown: { color: colors.textSecondary, fontVariant: ['tabular-nums'] },
   duoDivider: { width: 2, height: 40, backgroundColor: colors.border },
   duoStatLabel: { color: colors.textSecondary, fontSize: 13, fontWeight: '600', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.7 },
   duoStatValue: { color: colors.text, fontSize: 26, fontWeight: '900' },
+  offlineRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
+  offlineTitle: { color: colors.text, fontSize: 16, fontWeight: '700', letterSpacing: -0.3 },
+  offlineBody: { color: colors.textMuted, fontSize: 13, lineHeight: 19 },
 
   duoRewardTitle: { color: colors.text, fontSize: 15, fontWeight: '600', textAlign: 'center', marginBottom: 20 },
   duoRewardBox: { alignItems: 'center', flex: 1 },

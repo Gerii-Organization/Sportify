@@ -154,6 +154,34 @@ export default function ScannerScreen() {
    * the caller's JWT, so it answers signed-in users of this project and nobody
    * else, and the model can be changed without an app release.
    */
+  /**
+   * The real message behind a failed Edge Function call.
+   *
+   * `functions.invoke` reports any non-2xx as the same sentence — "Edge Function
+   * returned a non-2xx status code" — and hides the body on `error.context`.
+   * Left alone, the daily scan limit and "the scanner is not configured" both
+   * reach the user as that one meaningless line.
+   */
+  const describeFunctionError = async (error) => {
+    const response = error?.context;
+    const status = response?.status;
+
+    let body = null;
+    try {
+      body = await response?.json?.();
+    } catch {
+      // Not JSON, or the body was already read. Fall through to the status.
+    }
+
+    if (body?.error) return body.error;
+
+    if (status === 429) return 'That is all the scans for today. The allowance resets at midnight.';
+    if (status === 503) return 'The scanner is not set up on the server yet.';
+    if (status === 401) return 'You need to be signed in to scan a meal.';
+
+    return error?.message || 'The analysis could not be completed.';
+  };
+
   const processImage = async (imageUri) => {
     try {
       const manipulatedImage = await ImageManipulator.manipulateAsync(
@@ -172,7 +200,7 @@ export default function ScannerScreen() {
         body: { base64: cleanBase64, mode: mode === 'scan' ? 'single' : 'multi', prompt },
       });
 
-      if (error) throw new Error(error.message);
+      if (error) throw new Error(await describeFunctionError(error));
       if (data?.error) throw new Error(data.error);
 
       const parsedData = data?.result;
@@ -189,7 +217,7 @@ export default function ScannerScreen() {
       }
 
     } catch (error) {
-      Alert.alert("Analysis Error", error.message || "There was a problem processing the image.");
+      Alert.alert('Could not analyse that', error.message || 'There was a problem processing the image.');
     } finally {
       setIsScanning(false);
     }

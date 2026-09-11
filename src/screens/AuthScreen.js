@@ -8,12 +8,19 @@ import AmbientGlow from '../components/AmbientGlow';
 import { supabase } from '../lib/supabase';
 import { X, ChevronLeft } from 'lucide-react-native';
 import { colors, gradients } from '../theme';
+import { useAuth } from '../context/AuthContext';
+import { fromInputWeight, fromInputHeight, weightLabel, heightLabel } from '../lib/units';
+import { track, EVENTS } from '../lib/analytics';
+import { uploadPickedImage, pickImage } from '../lib/upload';
+import { Camera } from 'lucide-react-native';
+import { Image } from 'react-native';
 import { GOALS } from '../constants/content';
 import { SIGNUP_STEPS, WEEKLY_OPTIONS } from '../constants/onboarding';
 import SplitPicker from '../components/SplitPicker';
 
 
 export default function AuthScreen({ navigation }) {
+  const { units, setUnits } = useAuth();
   const [isRegistering, setIsRegistering] = useState(false);
   const [loading, setLoading] = useState(false);
   /** Position in the sign-up flow. Login is one screen and ignores this. */
@@ -25,6 +32,9 @@ export default function AuthScreen({ navigation }) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [firstName, setFirstName] = useState('');
+  /** Chosen during sign-up, uploaded after the account exists — there is no
+   *  user id to store it under until signUp returns. */
+  const [avatarUri, setAvatarUri] = useState(null);
   const [sex, setSex] = useState('');
   const [age, setAge] = useState('');
   const [weight, setWeight] = useState('');
@@ -35,7 +45,7 @@ export default function AuthScreen({ navigation }) {
 
   const toggleAuthMode = () => {
     setEmail(''); setPassword(''); setConfirmPassword('');
-    setFirstName(''); setSex(''); setAge(''); setWeight('');
+    setFirstName(''); setSex(''); setAge(''); setWeight(''); setAvatarUri(null);
     setHeight(''); setWorkouts(''); setGoal(''); setSplit([]);
     setStep(0); setStepError(null);
     setIsRegistering(!isRegistering);
@@ -78,8 +88,9 @@ export default function AuthScreen({ navigation }) {
           first_name: firstName.trim(),
           sex: sex.trim().toUpperCase(),
           age: parseInt(age),
-          weight: parseFloat(weight),
-          height: parseFloat(height),
+          // Stored metric whatever the boxes said, like everywhere else.
+          weight: fromInputWeight(weight, units),
+          height: fromInputHeight(height, units),
           workouts_per_week: parseInt(workouts),
           goal: goal,
           // Null rather than an empty array when skipped: the advice code tests
@@ -89,6 +100,28 @@ export default function AuthScreen({ navigation }) {
 
         if (profileError) Alert.alert('Profile Error', profileError.message);
         else {
+          // After the profile row exists, and deliberately not awaited into the
+          // failure path: an account that was created should not look like it
+          // failed because a photo upload did.
+          if (avatarUri) {
+            uploadPickedImage({
+              uri: avatarUri,
+              bucket: 'avatars',
+              pathPrefix: `${user.id}/avatar`,
+              maxWidth: 512,
+            })
+              .then((url) => url && supabase.from('profiles').update({ avatar_url: url }).eq('id', user.id))
+              .catch(() => {});
+          }
+
+          // Whether the sign-up flow is too long is the first thing worth
+          // knowing. Counts only — how many steps, whether a split was picked.
+          track(EVENTS.onboardingFinished, {
+            units,
+            picked_split: split.length > 0,
+            workouts_per_week: parseInt(workouts),
+          });
+
           // signUp already returns an active session when email confirmation is
           // off, so send the user straight in instead of making them retype
           // the credentials they just chose.
@@ -166,6 +199,29 @@ export default function AuthScreen({ navigation }) {
 
                 {step === 2 && (
                   <>
+                    {/* Optional, and said so. A required photo at sign-up is a
+                        reason to close the app. */}
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      style={styles.photoPick}
+                      onPress={async () => {
+                        const uri = await pickImage({ aspect: [1, 1] });
+                        if (uri) setAvatarUri(uri);
+                      }}
+                      accessibilityLabel={avatarUri ? 'Change your photo' : 'Add a photo, optional'}
+                    >
+                      {avatarUri ? (
+                        <Image source={{ uri: avatarUri }} style={styles.photoPreview} />
+                      ) : (
+                        <View style={styles.photoEmpty}>
+                          <Camera color={colors.textMuted} size={22} />
+                        </View>
+                      )}
+                      <Text style={styles.photoLabel}>
+                        {avatarUri ? 'Change photo' : 'Add a photo · optional'}
+                      </Text>
+                    </TouchableOpacity>
+
                     <CustomInput label="First name" value={firstName} onChange={setFirstName} placeholder="Victor" />
                     <CustomInput label="Age" value={age} onChange={setAge} placeholder="25" keyboard="numeric" />
                     <Text style={styles.label}>Sex</Text>
@@ -188,8 +244,41 @@ export default function AuthScreen({ navigation }) {
 
                 {step === 3 && (
                   <>
-                    <CustomInput label="Weight (kg)" value={weight} onChange={setWeight} placeholder="80" keyboard="numeric" />
-                    <CustomInput label="Height (cm)" value={height} onChange={setHeight} placeholder="185" keyboard="numeric" />
+                    {/* Guessed from the device region, and switchable right
+                        here — someone typing 185 into a box labelled kg is a
+                        wrong weight in the database forever. */}
+                    <View style={styles.unitRow}>
+                      {['metric', 'imperial'].map((option) => {
+                        const active = units === option;
+                        return (
+                          <TouchableOpacity
+                            key={option}
+                            activeOpacity={0.8}
+                            style={[styles.unitChip, active && styles.unitChipOn]}
+                            onPress={() => setUnits(option)}
+                            accessibilityRole="button"
+                            accessibilityState={{ selected: active }}
+                          >
+                            <Text style={[styles.unitChipText, active && styles.unitChipTextOn]}>
+                              {option === 'imperial' ? 'lb / ft' : 'kg / cm'}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+
+                    <CustomInput
+                      label={`Weight (${weightLabel(units)})`}
+                      value={weight} onChange={setWeight}
+                      placeholder={units === 'imperial' ? '175' : '80'}
+                      keyboard="numeric"
+                    />
+                    <CustomInput
+                      label={`Height (${heightLabel(units)})`}
+                      value={height} onChange={setHeight}
+                      placeholder={units === 'imperial' ? '73' : '185'}
+                      keyboard="numeric"
+                    />
                   </>
                 )}
 
@@ -265,6 +354,23 @@ function CustomInput({ label, value, onChange, placeholder, secure, autoCap, key
 }
 
 const styles = StyleSheet.create({
+  photoPick: { alignItems: 'center', marginBottom: 22 },
+  photoPreview: { width: 84, height: 84, borderRadius: 42 },
+  photoEmpty: {
+    width: 84, height: 84, borderRadius: 42,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  photoLabel: { color: colors.textMuted, fontSize: 13, fontWeight: '600', marginTop: 10 },
+
+  unitRow: { flexDirection: 'row', gap: 8, marginBottom: 18 },
+  unitChip: {
+    flex: 1, paddingVertical: 11, borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center',
+  },
+  unitChipOn: { backgroundColor: colors.accent },
+  unitChipText: { color: colors.textSecondary, fontSize: 14, fontWeight: '600' },
+  unitChipTextOn: { color: colors.onAccent, fontWeight: '700' },
   container: { flex: 1, backgroundColor: colors.background },
   closeBtn: { alignSelf: 'flex-end', marginBottom: 20, padding: 6 },
   scrollContent: { padding: 20, paddingTop: 60, paddingBottom: 40 },

@@ -10,6 +10,8 @@ import { useAuth } from '../context/AuthContext';
 import Avatar from '../components/Avatar';
 import NameBadge from '../components/NameBadge';
 import EmptyState from '../components/EmptyState';
+import ErrorState from '../components/ErrorState';
+import { unwrap } from '../lib/query';
 import AmbientGlow from '../components/AmbientGlow';
 
 
@@ -23,55 +25,59 @@ export default function PublicProfileScreen({ route, navigation }) {
   const [friendStatus, setFriendStatus] = useState('none'); 
   const [friendshipId, setFriendshipId] = useState(null);
   const [isBlocked, setIsBlocked] = useState(false);
+  const [loadError, setLoadError] = useState(null);
 
   useFocusEffect(useCallback(() => { fetchData(); }, [userId, user?.id]));
 
   const fetchData = async () => {
     setLoading(true);
-    if (!user) {
-      // Guests can still read a public profile, they just get no action buttons.
-      setMyId(null);
-      setFriendStatus('none');
-      const { data: guestProfile } = await supabase.from('public_profiles').select('*').eq('id', userId).single();
-      setProfile(guestProfile);
+    setLoadError(null);
+
+    try {
+      if (!user) {
+        // Guests can still read a public profile, they just get no action buttons.
+        setMyId(null);
+        setFriendStatus('none');
+        setProfile(await unwrap(supabase.from('public_profiles').select('*').eq('id', userId).single()));
+        return;
+      }
+      setMyId(user.id);
+      if (user.id === userId) setFriendStatus('self');
+
+      const blockData = await unwrap(supabase.from('blocks').select('*')
+        .or(`and(blocker_id.eq.${user.id},blocked_id.eq.${userId}),and(blocker_id.eq.${userId},blocked_id.eq.${user.id})`).maybeSingle());
+
+      if (blockData) { setIsBlocked(true); return; }
+
+          // public_profiles, not profiles: the base table is now restricted to your
+      // own row. It carries weight, height, age and sex, and every signed-in user
+      // could read all of it for everyone. The view exposes name, level, streak
+      // and cosmetics — everything drawn here.
+      setProfile(await unwrap(supabase.from('public_profiles').select('*').eq('id', userId).single()));
+      // Through an RPC rather than a direct select. The table was readable by any
+      // signed-in user, which leaked everyone's whole training history — and now
+      // that a session stores the sets it contained, that would have been the
+      // sets too. The function returns these four columns only, and refuses when
+      // either side has blocked the other.
+      setRecentWorkouts(await unwrap(supabase.rpc('get_public_workouts', { p_user_id: userId })) || []);
+
+      if (user.id !== userId) {
+        const fData = await unwrap(supabase.from('friendships').select('*')
+          .or(`and(user_id.eq.${user.id},friend_id.eq.${userId}),and(user_id.eq.${userId},friend_id.eq.${user.id})`).maybeSingle());
+        if (fData) {
+          setFriendshipId(fData.id);
+          if (fData.status === 'accepted') setFriendStatus('friends');
+          else if (fData.status === 'pending') {
+            if (fData.user_id === user.id) setFriendStatus('pending_sent');
+            else setFriendStatus('pending_received');
+          }
+        } else setFriendStatus('none');
+      }
+    } catch (e) {
+      setLoadError(e?.message || 'Something went wrong.');
+    } finally {
       setLoading(false);
-      return;
     }
-    setMyId(user.id);
-    if (user.id === userId) setFriendStatus('self');
-
-    const { data: blockData } = await supabase.from('blocks').select('*')
-      .or(`and(blocker_id.eq.${user.id},blocked_id.eq.${userId}),and(blocker_id.eq.${userId},blocked_id.eq.${user.id})`).maybeSingle();
-    
-    if (blockData) { setIsBlocked(true); setLoading(false); return; }
-
-        // public_profiles, not profiles: the base table is now restricted to your
-    // own row. It carries weight, height, age and sex, and every signed-in user
-    // could read all of it for everyone. The view exposes name, level, streak
-    // and cosmetics — everything drawn here.
-    const { data: pData } = await supabase.from('public_profiles').select('*').eq('id', userId).single();
-    setProfile(pData);
-    // Through an RPC rather than a direct select. The table was readable by any
-    // signed-in user, which leaked everyone's whole training history — and now
-    // that a session stores the sets it contained, that would have been the
-    // sets too. The function returns these four columns only, and refuses when
-    // either side has blocked the other.
-    const { data: wData } = await supabase.rpc('get_public_workouts', { p_user_id: userId });
-    setRecentWorkouts(wData || []);
-
-    if (user.id !== userId) {
-      const { data: fData } = await supabase.from('friendships').select('*')
-        .or(`and(user_id.eq.${user.id},friend_id.eq.${userId}),and(user_id.eq.${userId},friend_id.eq.${user.id})`).maybeSingle();
-      if (fData) {
-        setFriendshipId(fData.id);
-        if (fData.status === 'accepted') setFriendStatus('friends');
-        else if (fData.status === 'pending') {
-          if (fData.user_id === user.id) setFriendStatus('pending_sent');
-          else setFriendStatus('pending_received');
-        }
-      } else setFriendStatus('none');
-    }
-    setLoading(false);
   };
 
   const handleAction = async () => {
@@ -118,6 +124,27 @@ export default function PublicProfileScreen({ route, navigation }) {
           <Ban color={colors.textMuted} size={60} style={{marginBottom: 20}} />
           <Text style={{color: colors.text, fontSize: 20, fontWeight: '700'}}>User unavailable</Text>
         </View>
+      </SafeAreaView>
+    );
+  }
+
+  // Below this line every read assumes a profile. `levelFromXp(profile.xp)`
+  // threw "Cannot read property 'xp' of null" on any failed fetch — a white
+  // screen with a back button you could not see.
+  if (loadError || !profile) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <LinearGradient colors={gradients.screen} style={StyleSheet.absoluteFill} />
+        <View style={styles.navHeader}><TouchableOpacity accessibilityLabel="Go back" activeOpacity={0.7} onPress={() => navigation.goBack()} style={styles.backBtn}><ChevronLeft color={colors.text} size={28} /></TouchableOpacity></View>
+        {loadError ? (
+          <ErrorState message={loadError} onRetry={fetchData} />
+        ) : (
+          <EmptyState
+            icon={<Ban color={colors.textFaint} size={44} />}
+            title="Profile not found"
+            message="This account may have been deleted."
+          />
+        )}
       </SafeAreaView>
     );
   }

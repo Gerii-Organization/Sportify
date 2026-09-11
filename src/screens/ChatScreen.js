@@ -6,6 +6,8 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChevronLeft, Send, Check, CheckCheck, X, Search, ImageIcon } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
+import { unwrap } from '../lib/query';
+import ErrorState from '../components/ErrorState';
 import * as ImagePicker from 'expo-image-picker';
 
 
@@ -16,6 +18,9 @@ export default function ChatScreen({ route, navigation }) {
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
+  /** A conversation that would not load. Blank here reads as "no messages",
+   *  which is a claim about a chat the user knows they have. */
+  const [loadError, setLoadError] = useState(null);
   
   /** Conversation search. The messages are already in memory, so this filters
    *  what is rendered rather than going back to the server. */
@@ -33,19 +38,25 @@ export default function ChatScreen({ route, navigation }) {
       if (!user) return;
       setMyId(user.id);
 
-      // Load the friend's profile so we can show their avatar in the header.
-      const { data: fProfile } = await supabase.from('public_profiles').select('*').eq('id', friendId).single();
-      setFriendProfile(fProfile);
+      try {
+        setLoadError(null);
 
-      const { data: initialMessages } = await supabase.from('messages').select('*')
-        .or(`and(sender_id.eq.${user.id},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${user.id})`)
-        .order('created_at', { ascending: true });
+        // Load the friend's profile so we can show their avatar in the header.
+        setFriendProfile(await unwrap(supabase.from('public_profiles').select('*').eq('id', friendId).single()));
 
-      if (initialMessages) {
-        setMessages(initialMessages);
-        markUnreadAsSeen(initialMessages, user.id);
+        const initialMessages = await unwrap(supabase.from('messages').select('*')
+          .or(`and(sender_id.eq.${user.id},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${user.id})`)
+          .order('created_at', { ascending: true }));
+
+        if (initialMessages) {
+          setMessages(initialMessages);
+          markUnreadAsSeen(initialMessages, user.id);
+        }
+      } catch (e) {
+        setLoadError(e?.message || 'Something went wrong.');
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
 
       // Scoped to this conversation. The previous version subscribed to every
       // row in `messages` and filtered client-side, so every user's traffic
@@ -256,7 +267,9 @@ export default function ChatScreen({ route, navigation }) {
           </View>
         )}
 
-        {loading ? (
+        {loadError ? (
+          <ErrorState message={loadError} />
+        ) : loading ? (
           <View style={styles.centerContainer}><ActivityIndicator color={colors.accent} /></View>
         ) : (
           <FlatList

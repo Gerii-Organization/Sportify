@@ -10,7 +10,10 @@ import { gradients } from '../theme';
 import { useAuth } from '../context/AuthContext';
 import Avatar from '../components/Avatar';
 import AmbientGlow from '../components/AmbientGlow';
+import { unwrap } from '../lib/query';
 import { SkeletonRows } from '../components/Skeleton';
+import EmptyState from '../components/EmptyState';
+import ErrorState from '../components/ErrorState';
 import NameBadge from '../components/NameBadge';
 import useRefresh from '../lib/useRefresh';
 
@@ -28,6 +31,7 @@ export default function LeaderboardScreen({ embedded = false }) {
   const [loading, setLoading] = useState(true);
   const [myId, setMyId] = useState(null);
   const [leaderboardData, setLeaderboardData] = useState([]);
+  const [error, setError] = useState(null);
   const navigation = useNavigation();
 
   useFocusEffect(
@@ -38,29 +42,39 @@ export default function LeaderboardScreen({ embedded = false }) {
 
   const fetchData = async () => {
     setLoading(true);
-    if (!user) {
-      // The global board is public, so guests still get to see it.
-      setMyId(null);
-      await fetchGlobalLeaderboard();
-      setLoading(false);
-      return;
-    }
-    setMyId(user.id);
+    setError(null);
 
-    if (activeTab === 'friends') {
-      await fetchFriendsLeaderboard(user.id);
-    } else {
-      await fetchGlobalLeaderboard();
+    try {
+      if (!user) {
+        // The global board is public, so guests still get to see it.
+        setMyId(null);
+        await fetchGlobalLeaderboard();
+        return;
+      }
+      setMyId(user.id);
+
+      if (activeTab === 'friends') {
+        await fetchFriendsLeaderboard(user.id);
+      } else {
+        await fetchGlobalLeaderboard();
+      }
+    } catch (e) {
+      // An empty board and an unreachable one used to render the same blank
+      // scroll view. On the friends tab that blank reads as "you have no
+      // friends", which is a rough thing to be told by a failed request.
+      setError(e?.message || 'Something went wrong.');
+      setLeaderboardData([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const fetchFriendsLeaderboard = async (userId) => {
     // Accepted friendships only.
-    const { data: fData } = await supabase.from('friendships')
+    const fData = await unwrap(supabase.from('friendships')
       .select('*')
       .eq('status', 'accepted')
-      .or(`user_id.eq.${userId},friend_id.eq.${userId}`);
+      .or(`user_id.eq.${userId},friend_id.eq.${userId}`));
 
     let ids = [userId]; // The current user ranks alongside their friends.
     if (fData) {
@@ -70,19 +84,19 @@ export default function LeaderboardScreen({ embedded = false }) {
     }
 
     // Profiles, highest XP first.
-    const { data: pData } = await supabase.from('public_profiles')
+    const pData = await unwrap(supabase.from('public_profiles')
       .select('*')
       .in('id', ids)
-      .order('xp', { ascending: false });
-    
+      .order('xp', { ascending: false }));
+
     setLeaderboardData(pData || []);
   };
 
   const fetchGlobalLeaderboard = async () => {
-    const { data } = await supabase.from('public_profiles')
+    const data = await unwrap(supabase.from('public_profiles')
       .select('*')
       .order('xp', { ascending: false })
-      .limit(50);
+      .limit(50));
     setLeaderboardData(data || []);
   };
 
@@ -151,14 +165,26 @@ export default function LeaderboardScreen({ embedded = false }) {
           </View>
         </View>
 
-        {loading ? (
+        {error ? (
+          <ErrorState message={error} onRetry={fetchData} />
+        ) : loading ? (
           <View style={styles.centerContainer}>
             <SkeletonRows count={7} />
           </View>
         ) : (
           <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}
           refreshControl={refreshControl}>
-            {leaderboardData.map((user, index) => renderUserItem(user, index))}
+            {leaderboardData.length === 0 ? (
+              <EmptyState
+                icon={<Users color={colors.textFaint} size={44} />}
+                title={activeTab === 'friends' ? 'No one to rank yet' : 'Nobody on the board'}
+                message={activeTab === 'friends'
+                  ? 'Add a few friends and this becomes a race.'
+                  : 'The global board fills up as people train.'}
+              />
+            ) : (
+              leaderboardData.map((user, index) => renderUserItem(user, index))
+            )}
           </ScrollView>
         )}
 

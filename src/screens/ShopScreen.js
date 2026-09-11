@@ -1,25 +1,26 @@
-import { useState, useCallback, useEffect } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, SafeAreaView, Modal, Alert, Dimensions } from 'react-native';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import Animated, { useSharedValue, useAnimatedStyle, withSequence, withTiming, Easing } from 'react-native-reanimated';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, SafeAreaView, Alert } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { useFocusEffect } from '@react-navigation/native';
-import { ShoppingBag, ChevronLeft, Zap, Circle, User, Shield, Check, Flame, Crown, Swords, Ghost, Hexagon, Triangle, BatteryCharging, Trophy, Clock, Tag, Snowflake } from 'lucide-react-native';
+import { ChevronLeft, Zap, Check, Clock, Lock } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors } from '../theme';
 import { RINGS, AVATARS, BADGES, TITLES, POWERUPS } from '../constants/cosmetics';
 import { gradients } from '../theme';
 import { useAuth } from '../context/AuthContext';
 import ScreenHeader from '../components/ScreenHeader';
-import DailyRewardCard from '../components/DailyRewardCard';
-import Avatar from '../components/Avatar';
+import FreeCard from '../components/FreeCard';
+import EnergyBurst from '../components/EnergyBurst';
+import BuySheet from '../components/BuySheet';
+import ItemPreview from '../components/ItemPreview';
 import AmbientGlow from '../components/AmbientGlow';
 import { SkeletonShelf } from '../components/Skeleton';
 import useRefresh from '../lib/useRefresh';
 import Press from '../components/Press';
 import FadeIn from '../components/FadeIn';
 import { todayKey } from '../lib/date';
-
-const { width } = Dimensions.get('window');
 
 const PURCHASE_ERRORS = {
   insufficient_funds: "You do not have enough energy for this.",
@@ -56,14 +57,21 @@ export default function ShopScreen({ navigation }) {
 
   const [purchaseModalVisible, setPurchaseModalVisible] = useState(false);
   const [selectedItem, setSelectedItem] = useState(null);
+  const [purchasing, setPurchasing] = useState(false);
 
   const [boostExpiresAt, setBoostExpiresAt] = useState(null);
   /** Resets at midnight; the card says so rather than failing on tap. */
   const rewardClaimedToday = profileData?.last_reward_date === todayKey();
   const [claiming, setClaiming] = useState(false);
-  /** Which shelf is showing. Five stacked rows meant the expensive items at the
-   *  end of each never got seen; a filter puts one category on screen whole. */
-  const [category, setCategory] = useState('powerup');
+  /** Where the claimed energy flies from and to, measured on layout. */
+  const [burst, setBurst] = useState(null);
+  const freeCardRef = useRef(null);
+  const balanceRef = useRef(null);
+  const shake = useSharedValue(0);
+  const [burstRunning, setBurstRunning] = useState(false);
+  /** Today's rotation. Empty until 20260913_daily_shop.sql is applied, in
+   *  which case the section is just the free slot. */
+  const [dailyDeals, setDailyDeals] = useState([]);
   const [timeLeftStr, setTimeLeftStr] = useState(null);
 
   useEffect(() => {
@@ -157,6 +165,11 @@ export default function ShopScreen({ navigation }) {
         equipped: profile.equipped_badge === item.id
       })));
 
+      // Missing until the migration runs. A shop that fails to open because a
+      // rotation could not be fetched is worse than one without a rotation.
+      const { data: deals } = await supabase.rpc('get_daily_shop');
+      setDailyDeals(deals || []);
+
       setTitles(TITLES.map(item => ({
         ...item,
         owned: ownedTitleIds.has(item.id),
@@ -186,10 +199,42 @@ export default function ShopScreen({ navigation }) {
    * client cannot claim day 7 on a Monday. It also refuses a second claim on
    * the same date, which is what makes the date check meaningful.
    */
-  // Counted across every shelf so the bar means "the shop", not one category.
-  const allItems = [...rings, ...avatars, ...badges, ...titles];
-  const ownedCount = allItems.filter((i) => i.owned).length;
-  const totalCount = allItems.length;
+  /**
+   * Where the energy flies from and to.
+   *
+   * Measured rather than guessed: both ends move with the header's safe area
+   * and with how many shelves are above the free slot, and a hardcoded
+   * coordinate would be right on exactly one device.
+   */
+  const measureFreeCard = () => {
+    freeCardRef.current?.measureInWindow?.((x, y, width, height) => {
+      setBurst((prev) => ({ ...prev, from: { x: x + width / 2, y: y + height / 2 } }));
+    });
+  };
+
+  const measureBalance = () => {
+    balanceRef.current?.measureInWindow?.((x, y, width, height) => {
+      setBurst((prev) => ({ ...prev, to: { x: x + width / 2, y: y + height / 2 } }));
+    });
+  };
+
+  /** A short, sharp wobble. Anything longer reads as an error state. */
+  const shakeBalance = () => {
+    shake.value = withSequence(
+      withTiming(-1, { duration: 55, easing: Easing.out(Easing.quad) }),
+      withTiming(1, { duration: 70 }),
+      withTiming(-0.6, { duration: 60 }),
+      withTiming(0, { duration: 70 })
+    );
+  };
+
+  const balanceStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: shake.value * 5 },
+      { rotate: `${shake.value * 3}deg` },
+      { scale: 1 + Math.abs(shake.value) * 0.08 },
+    ],
+  }));
 
   const handleClaimReward = async () => {
     if (claiming || rewardClaimedToday) return;
@@ -209,16 +254,26 @@ export default function ShopScreen({ navigation }) {
       return;
     }
 
-    const won = [
-      data.energy ? `${data.energy} energy` : null,
-      data.xp ? `${data.xp} XP` : null,
-      data.freezes ? 'a streak freeze' : null,
-    ].filter(Boolean).join(' + ');
+    // No alert. An alert to say a reward arrived is a dialog that stands
+    // between you and the thing you just earned; the energy flying into the
+    // balance says it, and the balance changing proves it.
+    measureFreeCard();
+    measureBalance();
+    setBurstRunning(true);
 
-    Alert.alert(`Day ${data.day}`, `You collected ${won}.`);
+    // Refreshed now rather than on arrival: the number should already be
+    // correct behind the bolts, so the shake lands on the new figure.
     fetchShopData();
     refreshProfile();
   };
+
+  /** Header for a shelf. The note says why you would want anything on it. */
+  const SectionHead = ({ title, note }) => (
+    <View style={styles.sectionHead}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      {note ? <Text style={styles.sectionNote}>{note}</Text> : null}
+    </View>
+  );
 
   const handleAction = async (item, categoryType) => {
     if (categoryType !== 'powerup' && item.equipped) return;
@@ -250,16 +305,11 @@ export default function ShopScreen({ navigation }) {
       const { error } = await supabase.from('profiles').update({ [updateField]: item.id }).eq('id', user.id);
       if (!error) fetchShopData();
     } else {
-      if (balance >= item.price) {
-        setSelectedItem({ item, categoryType });
-        setPurchaseModalVisible(true);
-      } else {
-        const short = item.price - balance;
-        Alert.alert(
-          'Not enough energy',
-          `You need ${short} more ⚡ for ${item.name || item.id}. Finish a workout to earn more — you get 5 ⚡ per minute trained.`
-        );
-      }
+      // Both cases go to the same place. The sheet shows what you would be left
+      // with when you can afford it, and how far off you are when you cannot —
+      // which used to be an Alert, i.e. discoverable only by trying to buy.
+      setSelectedItem({ item, categoryType });
+      setPurchaseModalVisible(true);
     }
   };
 
@@ -269,15 +319,18 @@ export default function ShopScreen({ navigation }) {
    * profile row, so double-tapping cannot spend the same energy twice.
    */
   const confirmPurchase = async () => {
-    if (!selectedItem) return;
+    if (!selectedItem || purchasing) return;
     const { item, categoryType } = selectedItem;
-    setPurchaseModalVisible(false);
+    setPurchasing(true);
 
     const { data, error } = await supabase.rpc('purchase_item', {
       p_item_id: item.id,
       p_item_type: categoryType,
       p_price: item.price,
     });
+
+    setPurchasing(false);
+    setPurchaseModalVisible(false);
 
     if (error) {
       Alert.alert('Purchase failed', error.message);
@@ -298,139 +351,59 @@ export default function ShopScreen({ navigation }) {
     refreshProfile();
   };
 
-  const renderVisualPreview = (item, categoryType) => {
-    if (categoryType === 'ring') {
-      if (item.type === 'inferno') {
-        return (
-          <View style={styles.previewContainer}>
-            <Circle color={item.color} size={40} strokeWidth={3} />
-            <Flame color={colors.streak} size={20} style={styles.absoluteTop} />
-            <Flame color={colors.streak} size={20} style={styles.absoluteBottom} />
-          </View>
-        );
-      }
-      if (item.type === 'cyber') {
-        return (
-          <View style={styles.previewContainer}>
-            <Hexagon color={item.color} size={44} strokeWidth={2} />
-            <Hexagon color="#FF00FF" size={34} strokeWidth={1} style={styles.absoluteCenter} />
-          </View>
-        );
-      }
-      if (item.type === 'toxic') {
-        return (
-          <View style={styles.previewContainer}>
-            <Triangle color={item.color} size={46} strokeWidth={3} />
-            <Circle color={colors.onAccent} size={10} style={styles.absoluteCenter} fill={item.color} />
-          </View>
-        );
-      }
-      if (item.type === 'pulse') {
-        return (
-          <View style={styles.previewContainer}>
-            <Circle color={item.color} size={40} strokeWidth={2} />
-            <Circle color={item.color} size={28} strokeWidth={2} opacity={0.5} style={styles.absoluteCenter} />
-          </View>
-        );
-      }
-      if (item.type === 'diamond') {
-        return (
-          <View style={[styles.previewContainer, { transform: [{rotate: '45deg'}] }]}>
-            <View style={{ width: 32, height: 32, borderWidth: 3, borderColor: item.color }} />
-          </View>
-        );
-      }
-      if (item.type === 'quantum') {
-        return (
-          <View style={styles.previewContainer}>
-            <Hexagon color={item.color} size={46} strokeWidth={2} style={{ transform: [{rotate: '30deg'}] }} />
-            <Hexagon color={item.color} size={46} strokeWidth={2} style={{ position: 'absolute', transform: [{rotate: '60deg'}] }} />
-          </View>
-        );
-      }
-      return <Circle color={item.color} size={36} strokeWidth={4} />;
-    }
+  /**
+   * One of today's discounted items.
+   *
+   * The old price is struck through beside the new one rather than replaced by
+   * it: one number says what it costs, two say what you save, and the second is
+   * the reason the section exists.
+   */
+  const renderDealCard = (deal) => {
+    const catalogue = [...powerups, ...titles, ...rings, ...avatars, ...badges];
+    const item = catalogue.find((x) => x.id === deal.id);
+    if (!item) return null;
 
-    if (categoryType === 'avatar') {
-      if (item.type === 'royal') {
-        return (
-          <View style={[styles.avatarFrame, { borderColor: item.color, borderWidth: 3 }]}>
-            <User color={colors.text} size={24} />
-            <Crown color={item.color} size={22} style={styles.absoluteTopOffset} fill="rgba(255, 215, 0, 0.3)" />
-          </View>
-        );
-      }
-      if (item.type === 'demon' || item.type === 'inferno_avatar') {
-        return (
-          <View style={[styles.avatarFrame, { borderColor: item.color, borderWidth: 2, borderStyle: item.type === 'demon' ? 'dashed' : 'solid', shadowColor: item.color, shadowOpacity: 0.8, shadowRadius: 8 }]}>
-            <User color={colors.text} size={24} />
-            <Flame color={item.color} size={30} style={styles.absoluteBackground} />
-          </View>
-        );
-      }
-      if (item.type === 'glitch') {
-        return (
-          <View style={[styles.avatarFrame, { borderColor: item.color, borderWidth: 2, borderRadius: 12 }]}>
-            <User color="#00EAFF" size={26} style={{ marginLeft: -2 }} />
-            <User color="#FF00FF" size={26} style={styles.absoluteCenterOffset} />
-          </View>
-        );
-      }
-      if (item.type === 'holo') {
-        return (
-          <View style={[styles.avatarFrame, { borderColor: item.color, borderWidth: 2, shadowColor: item.color, shadowOpacity: 1, shadowRadius: 15 }]}>
-            <User color={item.color} size={24} />
-          </View>
-        );
-      }
-      if (item.type === 'void') {
-        return (
-          <View style={[styles.avatarFrame, { borderColor: item.color, borderWidth: 4, shadowColor: '#fff', shadowOpacity: 0.2, shadowRadius: 5 }]}>
-            <User color={colors.textDisabled} size={24} />
-          </View>
-        );
-      }
-      return (
-        <View style={[styles.avatarFrame, { borderColor: '#444' }]}>
-          <User color={colors.text} size={24} />
+    const short = balance < deal.final_price;
+
+    return (
+      <Press
+        key={`deal-${deal.id}`}
+        scale={0.955}
+        style={[styles.itemCard, styles.dealCard, short && styles.itemCardShort]}
+        onPress={() => handleAction({ ...item, price: deal.final_price, owned: deal.owned }, deal.type)}
+        accessibilityLabel={`${deal.name}, ${deal.discount} percent off, ${deal.final_price} energy`}
+      >
+        <View style={styles.dealFlag}>
+          <Text style={styles.dealFlagText}>-{deal.discount}%</Text>
         </View>
-      );
-    }
 
-    if (categoryType === 'badge') {
-      let IconObj = Shield;
-      if (item.icon === 'Swords') IconObj = Swords;
-      if (item.icon === 'Ghost') IconObj = Ghost;
-      if (item.icon === 'Crown') IconObj = Crown;
-
-      return (
-        <View style={[styles.previewContainer, { backgroundColor: `${item.color}22`, borderRadius: 28 }]}>
-          <IconObj color={item.color} size={32} />
+        <View style={[styles.itemPreviewBox, short && styles.itemPreviewShort]}>
+          <ItemPreview item={item} type={deal.type} />
         </View>
-      );
-    }
 
-    if (categoryType === 'title') {
-      return (
-        <View style={[styles.previewContainer, { backgroundColor: `rgba(46, 211, 198, 0.1)`, borderRadius: 18 }]}>
-          <Tag color={colors.accent} size={32} />
+        <View style={styles.itemInfo}>
+          <Text style={[styles.itemName, short && styles.itemNameShort]}>{deal.name}</Text>
+
+          {deal.owned ? (
+            <View style={styles.statusBadgeOwned}>
+              <Text style={styles.statusTextOwned}>Owned</Text>
+            </View>
+          ) : (
+            <View style={styles.dealPrices}>
+              <Text style={styles.dealWas}>{Number(deal.price).toLocaleString()}</Text>
+              <View style={short ? styles.priceShort : styles.priceContainer}>
+                {short
+                  ? <Lock color={colors.textFaint} size={12} />
+                  : <Zap color={colors.energy} size={14} />}
+                <Text style={short ? styles.priceShortText : styles.priceText}>
+                  {Number(deal.final_price).toLocaleString()}
+                </Text>
+              </View>
+            </View>
+          )}
         </View>
-      );
-    }
-
-    if (categoryType === 'powerup') {
-      let IconObj = BatteryCharging;
-      if (item.icon === 'Zap') IconObj = Zap;
-      if (item.icon === 'Trophy') IconObj = Trophy;
-      if (item.icon === 'Flame') IconObj = Flame;
-      if (item.icon === 'Snowflake') IconObj = Snowflake;
-
-      return (
-        <View style={[styles.previewContainer, { backgroundColor: `${item.color}15`, borderRadius: 18, padding: 10 }]}>
-          <IconObj color={item.color} size={38} />
-        </View>
-      );
-    }
+      </Press>
+    );
   };
 
   const renderItemCard = (item, categoryType) => {
@@ -441,12 +414,19 @@ export default function ShopScreen({ navigation }) {
     // XP boost still running, or a coin boost waiting for the next workout.
     const isBoostActive = (item.id === 'p1' && timeLeftStr) || (item.id === 'p3' && profileData?.coin_boost_active);
 
+    // Anything that would cost energy you do not have. Drawn as a state on the
+    // card — a shelf where everything looks equally available is a shelf you
+    // have to tap your way through to find out what you can afford.
+    const forSale = isPowerup || isLocked;
+    const short = forSale && !isBoostActive && balance < item.price;
+
     return (
       <Press
         key={item.id}
         scale={0.955}
         style={[
           styles.itemCard,
+          short && styles.itemCardShort,
           isEquipped && styles.itemCardEquipped,
           isBoostActive && { borderColor: colors.energy, backgroundColor: 'rgba(255, 215, 0, 0.05)' }
         ]}
@@ -456,11 +436,11 @@ export default function ShopScreen({ navigation }) {
         }}
         disabled={isBoostActive}
       >
-        <View style={styles.itemPreviewBox}>
-          {renderVisualPreview(item, categoryType)}
+        <View style={[styles.itemPreviewBox, short && styles.itemPreviewShort]}>
+          <ItemPreview item={item} type={categoryType} />
         </View>
         <View style={styles.itemInfo}>
-          <Text style={styles.itemName}>{item.name || item.id}</Text>
+          <Text style={[styles.itemName, short && styles.itemNameShort]}>{item.name || item.id}</Text>
           {item.desc && <Text style={styles.itemDesc}>{item.desc}</Text>}
 
           {isEquipped ? (
@@ -473,7 +453,12 @@ export default function ShopScreen({ navigation }) {
               <Clock color={colors.energy} size={14} />
               <Text style={[styles.statusTextEquipped, { color: colors.energy }]}>{item.id === 'p3' ? 'Ready for Workout' : timeLeftStr}</Text>
             </View>
-          ) : isLocked || isPowerup ? (
+          ) : short ? (
+            <View style={styles.priceShort}>
+              <Lock color={colors.textFaint} size={12} />
+              <Text style={styles.priceShortText}>{(item.price - balance).toLocaleString()} more</Text>
+            </View>
+          ) : forSale ? (
             <View style={styles.priceContainer}>
               <Zap color={colors.energy} size={14} />
               <Text style={styles.priceText}>{item.price}</Text>
@@ -524,103 +509,84 @@ export default function ShopScreen({ navigation }) {
           title="Shop"
           subtitle="Spend what you have earned"
           right={
-            <BlurView intensity={30} tint="dark" style={styles.balanceContainer}>
-              <Zap color={colors.energy} size={20} fill={colors.energy} />
-              <Text style={styles.balanceText}>{balance}</Text>
-            </BlurView>
+            <Animated.View
+              ref={balanceRef}
+              collapsable={false}
+              onLayout={measureBalance}
+              style={balanceStyle}
+            >
+              <BlurView intensity={30} tint="dark" style={styles.balanceContainer}>
+                <Zap color={colors.energy} size={20} fill={colors.energy} />
+                <Text style={styles.balanceText}>{balance.toLocaleString()}</Text>
+              </BlurView>
+            </Animated.View>
           }
         />
 
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}
           refreshControl={refreshControl}>
 
-          {/* Free and expiring daily, so it leads. Everything below it costs
-              energy and shares one restrained treatment, so the eye is not
-              asked to weigh several equally loud shelves. */}
-          {/* What you are wearing right now.
-              A shop that opens straight onto shelves is a catalogue; the reason
-              any of it matters is how you appear to other people, and that was
-              only visible by leaving for your profile. Showing the current
-              loadout first makes the shelves an answer to something. */}
-          <FadeIn style={styles.loadout}>
-            <Avatar profile={profileData} size={62} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.loadoutName} numberOfLines={1}>
-                {profileData?.equipped_title || 'No title equipped'}
-              </Text>
-              <Text style={styles.loadoutNote}>
-                {ownedCount} of {totalCount} items unlocked
-              </Text>
-              <View style={styles.loadoutBar}>
-                <View style={[styles.loadoutFill, { width: `${totalCount ? (ownedCount / totalCount) * 100 : 0}%` }]} />
+          {/* Every shelf at once, in order, with the free slot at the top.
+              The filter chips are gone: a shop you have to choose a department
+              in before seeing anything is a catalogue, and the point of opening
+              it is to see what there is. */}
+          <FadeIn>
+            <SectionHead title="Daily shop" note="Resets every day" />
+            <View style={styles.grid}>
+              <View
+                ref={freeCardRef}
+                collapsable={false}
+                style={styles.freeSlot}
+                onLayout={() => measureFreeCard()}
+              >
+                <FreeCard
+                  day={profileData?.reward_day || 0}
+                  claimedToday={rewardClaimedToday}
+                  claiming={claiming}
+                  onClaim={handleClaimReward}
+                />
               </View>
+
+              {dailyDeals.map((deal) => renderDealCard(deal))}
             </View>
           </FadeIn>
 
-          <DailyRewardCard
-            day={profileData?.reward_day || 0}
-            claimedToday={rewardClaimedToday}
-            claiming={claiming}
-            onClaim={handleClaimReward}
-          />
-
-          {/* Chips, then one category as a grid.
-              Five horizontally-scrolling shelves meant you never saw a whole
-              category at once, and the priciest item — the one worth saving
-              for — sat off the right edge of every row. */}
-          <FadeIn style={styles.chipRow}>
-            {SHELVES.map((shelf) => {
-              const active = category === shelf.key;
-              return (
-                <Press
-                  key={shelf.key}
-                  scale={0.96}
-                  style={[styles.chip, active && styles.chipOn]}
-                  onPress={() => setCategory(shelf.key)}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: active }}
-                >
-                  <Text style={[styles.chipText, active && styles.chipTextOn]}>{shelf.title}</Text>
-                </Press>
-              );
-            })}
-          </FadeIn>
-
-          {(() => {
-            const shelf = SHELVES.find((x) => x.key === category);
-            const items = shelf?.pick({ powerups, titles, rings, avatars, badges }) || [];
+          {SHELVES.map((shelf, index) => {
+            const items = shelf.pick({ powerups, titles, rings, avatars, badges }) || [];
+            if (items.length === 0) return null;
 
             return (
-              <FadeIn index={1}>
-                <Text style={styles.shelfNote}>{shelf?.note}</Text>
+              <FadeIn key={shelf.key} index={Math.min(index + 1, 6)}>
+                <SectionHead title={shelf.title} note={shelf.note} />
                 <View style={styles.grid}>
                   {items.map((item) => renderItemCard(item, shelf.type))}
                 </View>
               </FadeIn>
             );
-          })()}
+          })}
 
         </ScrollView>
 
-        <Modal transparent visible={purchaseModalVisible} animationType="fade">
-        <View style={styles.modalOverlayFull}>
-          <View style={styles.modalContent}>
-            <ShoppingBag size={48} color={colors.accent} style={{ marginBottom: 20 }} />
-            <Text style={styles.modalTitle}>Confirm Purchase</Text>
-            <Text style={styles.modalText}>
-              Do you want to buy {selectedItem?.item.name || selectedItem?.item.id} for <Text style={{color: colors.energy, fontWeight: '600'}}>{selectedItem?.item.price} ⚡</Text>?
-            </Text>
-            <View style={styles.modalActions}>
-              <TouchableOpacity activeOpacity={0.7} style={styles.modalCancelBtn} onPress={() => setPurchaseModalVisible(false)}>
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity activeOpacity={0.7} style={styles.modalBuyBtn} onPress={confirmPurchase}>
-                <Text style={styles.modalBuyText}>Buy</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-        </Modal>
+        {/* Above everything, touches passed through. Mounted only while it
+            runs, so nine animated views do not sit over the shop at rest. */}
+        {burstRunning && (
+          <EnergyBurst
+            from={burst?.from}
+            to={burst?.to}
+            onArrive={shakeBalance}
+            onDone={() => setBurstRunning(false)}
+          />
+        )}
+
+        <BuySheet
+          visible={purchaseModalVisible}
+          onClose={() => setPurchaseModalVisible(false)}
+          item={selectedItem?.item}
+          type={selectedItem?.categoryType}
+          balance={balance}
+          busy={purchasing}
+          onConfirm={confirmPurchase}
+        />
       </LinearGradient>
     </SafeAreaView>
   );
@@ -630,63 +596,56 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   gradientBg: { flex: 1 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  header: { padding: 20, paddingTop: 40 },
-  screenTitle: { color: colors.textMuted, marginTop: 16, fontSize: 15, marginLeft: 20 },
   navRow: { paddingHorizontal: 16, paddingTop: 10, marginBottom: -14 },
   backBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface },
   balanceContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255, 215, 0, 0.2)' },
   balanceText: { color: colors.energy, fontSize: 17, fontWeight: '700', marginLeft: 10 },
-  loadout: {
-    flexDirection: 'row', alignItems: 'center', gap: 14,
-    backgroundColor: colors.card, borderRadius: 24,
-    padding: 16, marginHorizontal: 20, marginBottom: 16,
-  },
-  loadoutName: { color: colors.text, fontSize: 16, fontWeight: '700', letterSpacing: -0.3 },
-  loadoutNote: { color: colors.textMuted, fontSize: 12, marginTop: 3, marginBottom: 9 },
-  loadoutBar: { height: 6, borderRadius: 3, backgroundColor: colors.surfaceHigh, overflow: 'hidden' },
-  loadoutFill: { height: '100%', borderRadius: 3, backgroundColor: colors.accent },
   scrollContent: { paddingBottom: 120 },
-  sectionTitle: { color: colors.text, fontSize: 20, fontWeight: '700', marginLeft: 20, marginTop: 20, marginBottom: 16 },
-  horizontalScroll: { paddingHorizontal: 16, paddingRight: 26 },
 
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 20, marginBottom: 14 },
-  chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: colors.surface },
-  chipOn: { backgroundColor: colors.accent },
-  chipText: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
-  chipTextOn: { color: colors.onAccent },
+  sectionHead: { paddingHorizontal: 20, marginTop: 22, marginBottom: 12 },
+  sectionTitle: { color: colors.text, fontSize: 18, fontWeight: '800', letterSpacing: -0.4 },
+  sectionNote: { color: colors.textMuted, fontSize: 12, marginTop: 3 },
+  // The free slot is one tile wide, like everything it sits beside.
+  freeSlot: { width: '48%', flexGrow: 1 },
+  dealCard: { borderWidth: 1, borderColor: 'rgba(255, 216, 74, 0.30)', overflow: 'hidden' },
+  dealFlag: {
+    position: 'absolute', top: 0, right: 0,
+    backgroundColor: colors.energy,
+    paddingHorizontal: 9, paddingVertical: 3,
+    borderBottomLeftRadius: 12,
+  },
+  dealFlagText: { color: '#2A1F00', fontSize: 11, fontWeight: '900', letterSpacing: 0.4 },
+  dealPrices: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  // Struck through and muted: there to be compared against, not read.
+  dealWas: {
+    color: colors.textFaint, fontSize: 12, fontWeight: '600',
+    textDecorationLine: 'line-through',
+  },
+
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingHorizontal: 20 },
-  shelfBlock: { marginBottom: 30 },
-  shelfHead: { paddingHorizontal: 20, marginBottom: 14 },
-  shelfTitle: { color: colors.text, fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
-  shelfNote: { color: colors.textMuted, fontSize: 13, marginTop: 3 },
-  shelfRow: { paddingHorizontal: 20, gap: 12 },
 
   itemCard: { backgroundColor: colors.card, width: '48%', flexGrow: 1, borderRadius: 26, padding: 16, alignItems: 'center' },
   itemCardEquipped: { borderColor: colors.accent + 'AA', backgroundColor: 'rgba(46, 211, 198, 0.05)', shadowColor: colors.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.3, shadowRadius: 10, elevation: 5 },
   itemPreviewBox: { width: 70, height: 70, borderRadius: 35, backgroundColor: 'rgba(255,255,255,0.02)', justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
-  previewContainer: { width: 50, height: 50, justifyContent: 'center', alignItems: 'center' },
-  absoluteTop: { position: 'absolute', top: -10 },
-  absoluteBottom: { position: 'absolute', bottom: -10, transform: [{ rotate: '180deg' }] },
-  absoluteCenter: { position: 'absolute' },
-  avatarFrame: { width: 48, height: 48, borderRadius: 24, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.surface, borderWidth: 2 },
-  absoluteTopOffset: { position: 'absolute', top: -18 },
-  absoluteBackground: { position: 'absolute', opacity: 0.4, zIndex: -1 },
-  absoluteCenterOffset: { position: 'absolute', opacity: 0.7, marginLeft: 2 },
   itemInfo: { alignItems: 'center', width: '100%' },
   itemName: { color: colors.text, fontSize: 15, fontWeight: '600', marginBottom: 10, textAlign: 'center' },
   itemDesc: { color: colors.textSecondary, fontSize: 11, marginBottom: 10, textAlign: 'center' },
+  // Out of reach: the card recedes rather than shouting. Still tappable — the
+  // sheet is where the shortfall gets spelled out.
+  itemCardShort: { backgroundColor: '#191C22' },
+  itemPreviewShort: { opacity: 0.55 },
+  itemNameShort: { color: colors.textSecondary },
+  priceShort: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12,
+  },
+  priceShortText: { color: colors.textFaint, fontWeight: '600', fontSize: 13 },
+
   priceContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255, 215, 0, 0.1)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 },
   priceText: { color: colors.energy, fontWeight: '600', marginLeft: 6, fontSize: 13 },
   statusBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(46, 211, 198, 0.15)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 },
   statusTextEquipped: { color: colors.accent, fontWeight: '600', fontSize: 13, marginLeft: 6 },
   statusBadgeOwned: { backgroundColor: 'rgba(255, 255, 255, 0.08)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 },
   statusTextOwned: { color: colors.text, fontWeight: '600', fontSize: 13 },
-  modalOverlayFull: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' },
-  modalContent: { backgroundColor: colors.card, borderRadius: 32, padding: 26, width: '85%', alignItems: 'center' },
-  modalTitle: { color: colors.text, fontSize: 20, fontWeight: '700', marginBottom: 10 },
-  modalText: { color: colors.textSecondary, fontSize: 15, textAlign: 'center', marginBottom: 26 },
-  modalActions: { flexDirection: 'row', justifyContent: 'space-between', width: '100%' },
-  modalCancelBtn: { flex: 1, padding: 16, backgroundColor: colors.surface, borderRadius: 18, marginRight: 10, alignItems: 'center' },
-  modalCancelText: { color: colors.text, fontWeight: '600' },
-  modalBuyBtn: { flex: 1, padding: 16, backgroundColor: colors.accent, borderRadius: 18, marginLeft: 10, alignItems: 'center' }
 });

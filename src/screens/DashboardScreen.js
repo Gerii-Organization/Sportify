@@ -4,7 +4,7 @@ import {
   Dimensions, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Alert, Animated
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { Flame, Trophy, Menu, User, LogIn, X, Bell, HelpCircle, Scale, Ruler, ChevronRight, Edit3, Footprints, Droplets, Clock, Moon, TrendingUp, Activity, Crown, Plus, ChevronDown, ChevronUp, Edit2, Check, Star, Info } from 'lucide-react-native';
+import { Flame, Trophy, Menu, User, X, ChevronRight, Edit3, Droplets, Clock, Moon, TrendingUp, Crown, Plus, ChevronDown, ChevronUp, Edit2, Check, Star, CloudOff } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Circle, G, Polygon, Defs, Filter, FeGaussianBlur } from 'react-native-svg';
 import Reanimated, { useSharedValue, useAnimatedProps, withTiming, withDelay, Easing } from 'react-native-reanimated';
@@ -13,7 +13,7 @@ const AnimatedCircle = Reanimated.createAnimatedComponent(Circle);
 const AnimatedPolygon = Reanimated.createAnimatedComponent(Polygon);
 import { supabase } from '../lib/supabase';
 import { Pedometer } from 'expo-sensors';
-import { colors, levelTiers } from '../theme';
+import { colors, levelTiers, radius, spacing } from '../theme';
 import { getAvatar, getRing } from '../constants/cosmetics';
 import { levelInfo } from '../lib/level';
 import { todayKey, formatDuration, formatRelativeDate } from '../lib/date';
@@ -27,12 +27,18 @@ import AchievementGrid from '../components/AchievementGrid';
 import { mergeAchievements } from '../lib/achievements';
 import WeightSheet from '../components/WeightSheet';
 import { getSetting, setSetting } from '../lib/settings';
+import { REST_CHOICES } from '../lib/rest';
 import { syncReminders } from '../lib/reminders';
 import { readSleepMinutes } from '../lib/health';
 import { deleteAccount } from '../lib/deleteAccount';
 import WaterSheet from '../components/WaterSheet';
 import AmbientGlow from '../components/AmbientGlow';
 import useRefresh from '../lib/useRefresh';
+import { unwrap } from '../lib/query';
+import SettingsDrawer from '../components/dashboard/SettingsDrawer';
+import ProfileHero from '../components/dashboard/ProfileHero';
+import { getSocialCounts } from '../lib/social';
+import { pickAndUploadImage } from '../lib/upload';
 import Press from '../components/Press';
 import ProgressArc from '../components/ProgressArc';
 import DailyQuests from '../components/DailyQuests';
@@ -56,20 +62,27 @@ function greetingFor(date) {
 
 export default function DashboardScreen({ navigation, route }) {
   const { refreshControl } = useRefresh(() => fetchProfileAndStats());
-  const { user, refreshProfile } = useAuth();
+  const { user, refreshProfile, pendingWorkouts, syncPending, units, setUnits } = useAuth();
   const scrollViewRef = useRef(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isMenuVisible, setMenuVisible] = useState(false);
   const [isProfileModalVisible, setProfileModalVisible] = useState(false);
   const [isEditProfileVisible, setEditProfileVisible] = useState(false);
+  /** Followers, following and friends. Zeroed and flagged unavailable until
+   *  the follows migration is applied. */
+  const [socialCounts, setSocialCounts] = useState(null);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [isWeightSheetVisible, setWeightSheetVisible] = useState(false);
   /** Device preferences. The rest timer and the daily reminders read these. */
   const [restAlerts, setRestAlerts] = useState(true);
+  /** null = follow the training goal. */
+  const [restSeconds, setRestSeconds] = useState(null);
   const [streakReminders, setStreakReminders] = useState(true);
   const [waterReminders, setWaterReminders] = useState(false);
 
   useEffect(() => {
     getSetting('restAlerts').then(setRestAlerts);
+    getSetting('restSeconds').then(setRestSeconds);
     getSetting('streakReminders').then(setStreakReminders);
     getSetting('waterReminders').then(setWaterReminders);
   }, []);
@@ -78,6 +91,14 @@ export default function DashboardScreen({ navigation, route }) {
     const next = !restAlerts;
     setRestAlerts(next);
     await setSetting('restAlerts', next);
+  };
+
+  /** Steps through the offered lengths and wraps back to Automatic. */
+  const cycleRestLength = async () => {
+    const index = REST_CHOICES.findIndex((c) => c === restSeconds);
+    const next = REST_CHOICES[(index + 1) % REST_CHOICES.length];
+    setRestSeconds(next);
+    await setSetting('restSeconds', next);
   };
 
   /**
@@ -103,6 +124,10 @@ export default function DashboardScreen({ navigation, route }) {
 
   const [userProfile, setUserProfile] = useState(null);
   const [stepsGoal, setStepsGoal] = useState(10000);
+  /** A failed refresh. Shown as a strip rather than an error screen: the
+   *  dashboard still holds the last figures it managed to read, and blanking
+   *  a whole screen of them to report a timeout is the worse trade. */
+  const [statsError, setStatsError] = useState(null);
   const [dailyStats, setDailyStats] = useState({
     steps: 0,
     calories: 0,
@@ -416,67 +441,126 @@ export default function DashboardScreen({ navigation, route }) {
 
   const toggleHistoryExpand = () => setIsHistoryExpanded(prev => !prev);
 
+  /**
+   * Sets or replaces the profile photo.
+   *
+   * Stored at <user-id>/avatar.jpg and overwritten in place, so changing it
+   * five times leaves one file rather than five orphans. Cropped square by the
+   * picker because it is always drawn in a circle.
+   */
+  const changeAvatar = async () => {
+    if (uploadingAvatar || !user) return;
+    setUploadingAvatar(true);
+
+    try {
+      const url = await pickAndUploadImage({
+        bucket: 'avatars',
+        pathPrefix: `${user.id}/avatar`,
+        aspect: [1, 1],
+        maxWidth: 512,
+      });
+
+      if (url) {
+        const { error } = await supabase
+          .from('profiles')
+          .update({ avatar_url: url })
+          .eq('id', user.id);
+
+        if (error) throw error;
+        setUserProfile((prev) => ({ ...prev, avatar_url: url }));
+        refreshProfile();
+      }
+    } catch (e) {
+      // The bucket and the column arrive with 20260912_profile_photo.sql. Until
+      // that runs, say so rather than showing a Postgres error.
+      const missing = /column|bucket|not found/i.test(e?.message || '');
+      Alert.alert(
+        'Could not set your photo',
+        missing ? 'Profile photos are not set up on the server yet.' : e.message
+      );
+    }
+
+    setUploadingAvatar(false);
+  };
+
+  /** Followers, following and friends, for the profile sheet. */
+  useEffect(() => {
+    if (!isProfileModalVisible || !user) return;
+    getSocialCounts(user.id).then(setSocialCounts);
+  }, [isProfileModalVisible, user]);
+
 
 
   const fetchProfileAndStats = async () => {
     if (user) {
       setIsLoggedIn(true);
-      const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
-      if (profile) {
-        setUserProfile(profile);
-        setStepsGoal(profile.step_goal || 10000);
+      setStatsError(null);
+
+      try {
+        const profile = await unwrap(supabase.from('profiles').select('*').eq('id', user.id).maybeSingle());
+        if (profile) {
+          setUserProfile(profile);
+          setStepsGoal(profile.step_goal || 10000);
+        }
+
+        const now = new Date();
+        const todayStr = todayKey();
+        const isoMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+
+        const foodLogs = await unwrap(supabase
+          .from('scanned_foods')
+          .select('calories, protein, carbs, fats')
+          .eq('user_id', user.id)
+          .gte('scanned_at', isoMidnight));
+
+        const macroTotals = (foodLogs || []).reduce(
+          (sum, log) => ({
+            calories: sum.calories + (Number(log.calories) || 0),
+            protein: sum.protein + (Number(log.protein) || 0),
+            carbs: sum.carbs + (Number(log.carbs) || 0),
+            fats: sum.fats + (Number(log.fats) || 0),
+          }),
+          { calories: 0, protein: 0, carbs: 0, fats: 0 }
+        );
+
+        // Unwrapped for a reason that is not cosmetic: on a failed read this came
+        // back null, which made totalActivityMinutes 0, which the upsert below
+        // then WROTE over the real figure. A failed read must not cause a write.
+        const workoutsToday = await unwrap(supabase.from('workout_completions').select('duration_minutes').eq('user_id', user.id).gte('completed_at', isoMidnight));
+        const totalActivityMinutes = workoutsToday ? workoutsToday.reduce((sum, w) => sum + (Number(w.duration_minutes) || 0), 0) : 0;
+
+        const statLog = await unwrap(supabase.from('daily_stats').select('activity_minutes, water_ml, sleep_minutes').eq('user_id', user.id).eq('date', todayStr).maybeSingle());
+        const totalWaterMl = statLog?.water_ml ?? 0;
+        const totalSleepMinutes = statLog?.sleep_minutes ?? 0;
+
+        // Only activity is written here, because only activity is computed here.
+        //
+        // This used to send water and sleep back too, straight from the read a
+        // few lines above — a read-modify-write on values this function does not
+        // own. Sleep syncs from Apple Health on its own timer: if that landed
+        // between the read and this write, the fresh figure was overwritten with
+        // the stale zero. Same for water if you tapped +250 in the gap. It is the
+        // shape that wiped people's XP on the daily spin.
+        await supabase.from('daily_stats').upsert(
+          { user_id: user.id, date: todayStr, activity_minutes: totalActivityMinutes },
+          { onConflict: 'user_id,date' }
+        );
+
+        setDailyStats(prev => ({
+          ...prev,
+          ...macroTotals,
+          activity: totalActivityMinutes,
+          water: totalWaterMl,
+          sleep: formatDuration(totalSleepMinutes),
+        }));
+
+        const tasksData = await unwrap(supabase.from('tasks').select('*').eq('user_id', user.id).order('created_at', { ascending: true }));
+        if (tasksData) setTasks(tasksData);
+      } catch (e) {
+        // Nothing is zeroed and nothing is written. Whatever was last read stays
+        // on screen, with a strip saying it may be stale.
+        setStatsError(e?.message || 'Could not refresh.');
       }
-
-      const now = new Date();
-      const todayStr = todayKey();
-      const isoMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-
-      const { data: foodLogs } = await supabase
-        .from('scanned_foods')
-        .select('calories, protein, carbs, fats')
-        .eq('user_id', user.id)
-        .gte('scanned_at', isoMidnight);
-
-      const macroTotals = (foodLogs || []).reduce(
-        (sum, log) => ({
-          calories: sum.calories + (Number(log.calories) || 0),
-          protein: sum.protein + (Number(log.protein) || 0),
-          carbs: sum.carbs + (Number(log.carbs) || 0),
-          fats: sum.fats + (Number(log.fats) || 0),
-        }),
-        { calories: 0, protein: 0, carbs: 0, fats: 0 }
-      );
-
-      const { data: workoutsToday } = await supabase.from('workout_completions').select('duration_minutes').eq('user_id', user.id).gte('completed_at', isoMidnight);
-      const totalActivityMinutes = workoutsToday ? workoutsToday.reduce((sum, w) => sum + (Number(w.duration_minutes) || 0), 0) : 0;
-
-      const { data: statLog } = await supabase.from('daily_stats').select('activity_minutes, water_ml, sleep_minutes').eq('user_id', user.id).eq('date', todayStr).maybeSingle();
-      const totalWaterMl = statLog?.water_ml ?? 0;
-      const totalSleepMinutes = statLog?.sleep_minutes ?? 0;
-
-      // Only activity is written here, because only activity is computed here.
-      //
-      // This used to send water and sleep back too, straight from the read a
-      // few lines above — a read-modify-write on values this function does not
-      // own. Sleep syncs from Apple Health on its own timer: if that landed
-      // between the read and this write, the fresh figure was overwritten with
-      // the stale zero. Same for water if you tapped +250 in the gap. It is the
-      // shape that wiped people's XP on the daily spin.
-      await supabase.from('daily_stats').upsert(
-        { user_id: user.id, date: todayStr, activity_minutes: totalActivityMinutes },
-        { onConflict: 'user_id,date' }
-      );
-
-      setDailyStats(prev => ({
-        ...prev,
-        ...macroTotals,
-        activity: totalActivityMinutes,
-        water: totalWaterMl,
-        sleep: formatDuration(totalSleepMinutes),
-      }));
-
-      const { data: tasksData } = await supabase.from('tasks').select('*').eq('user_id', user.id).order('created_at', { ascending: true });
-      if (tasksData) setTasks(tasksData);
     } else {
       setIsLoggedIn(false); setUserProfile(null);
       setDailyStats(prev => ({ ...prev, calories: 0, activity: 0, sleep: "0 m", water: 0 })); setTasks([]);
@@ -711,18 +795,14 @@ const renderProgressShape = () => {
           )}
         </View>
         
+        {/* No emblem and no info button. The ring is already a picture of
+            steps, so a footprint above the number said it twice; and where the
+            figure comes from is a fact, not an action — it belongs in a line of
+            text rather than behind a button that opens an alert to say it. */}
         <View style={styles.stepsInfoContainer}>
-          <View style={{flexDirection: 'row', alignItems: 'center'}}>
-             <Footprints size={24} color={theme.color} />
-             <TouchableOpacity accessibilityLabel="More information" activeOpacity={0.7}
-               onPress={() => Alert.alert('Step syncing', 'Your steps are read automatically and in real time from the motion sensor on your phone.')}
-               style={{marginLeft: 6, padding: 6}}
-             >
-               <Info size={16} color={colors.textMuted} />
-             </TouchableOpacity>
-          </View>
           <Text style={styles.stepCount}>{dailyStats.steps}</Text>
           <Text style={styles.stepGoal}>of {stepsGoal} steps</Text>
+          <Text style={styles.stepSource}>from your phone's motion sensor</Text>
         </View>
       </View>
     );
@@ -820,6 +900,41 @@ const renderProgressShape = () => {
         <ScrollView ref={scrollViewRef} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}
           refreshControl={refreshControl}>
 
+          {/* Stale, not empty. The figures below are the last ones that loaded,
+              so the strip says which is which instead of letting zeros pass for
+              a day in which you ate and drank nothing. */}
+          {/* Sessions finished in a basement gym. Saying so beats an XP total
+              that silently disagrees with what the user knows they did. */}
+          {pendingWorkouts > 0 ? (
+            <Press
+              scale={0.99}
+              style={styles.pendingStrip}
+              onPress={syncPending}
+              accessibilityLabel="Upload workouts waiting on this phone"
+            >
+              <CloudOff color={colors.energy} size={15} />
+              <Text style={styles.pendingText} numberOfLines={1}>
+                {pendingWorkouts} workout{pendingWorkouts === 1 ? '' : 's'} waiting to upload
+              </Text>
+              <Text style={styles.pendingAction}>Upload</Text>
+            </Press>
+          ) : null}
+
+          {statsError ? (
+            <Press
+              scale={0.99}
+              style={styles.staleStrip}
+              onPress={fetchProfileAndStats}
+              accessibilityLabel="Retry loading today's figures"
+            >
+              <CloudOff color={colors.textFaint} size={15} />
+              <Text style={styles.staleText} numberOfLines={1}>
+                Showing the last figures that loaded
+              </Text>
+              <Text style={styles.staleAction}>Retry</Text>
+            </Press>
+          ) : null}
+
           {/* Avatar on the left, beside the name it belongs to — that is where a
               profile photo reads as "you" rather than as a control. The menu
               moves right as a hamburger, which says "settings" far more plainly
@@ -860,21 +975,21 @@ const renderProgressShape = () => {
                 chevron say it goes somewhere. */}
             {isLoggedIn && (
               <Press
-                scale={0.93}
-                style={[styles.streakPill, streakDays > 0 && styles.streakPillOn]}
+                scale={0.9}
+                style={styles.streakPill}
                 onPress={() => navigation.navigate('StreakScreen')}
                 accessibilityRole="button"
                 accessibilityLabel={`Streak: ${streakDays} ${streakDays === 1 ? 'day' : 'days'}. Open the calendar.`}
+                hitSlop={10}
               >
                 <Flame
                   color={streakDays > 0 ? colors.streak : colors.textFaint}
-                  size={15}
+                  size={19}
                   fill={streakDays > 0 ? colors.streak : 'transparent'}
                 />
                 <Text style={[styles.streakPillText, streakDays > 0 && { color: colors.streak }]}>
                   {streakDays}
                 </Text>
-                <ChevronRight color={streakDays > 0 ? colors.streak : colors.textFaint} size={13} />
               </Press>
             )}
 
@@ -902,7 +1017,12 @@ const renderProgressShape = () => {
                   <Plus color={colors.accent} size={24} />
                 </TouchableOpacity>
               )}
-              <TouchableOpacity activeOpacity={0.7} onPress={() => setIsEditMode(!isEditMode)} style={styles.editButtonBorder}>
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={() => setIsEditMode(!isEditMode)}
+                style={styles.editButtonBorder}
+                accessibilityLabel={isEditMode ? 'Done editing tasks' : 'Edit tasks'}
+              >
                 {isEditMode ? <Check color={colors.accent} size={24} /> : <Edit2 color={colors.accent} size={22} />}
               </TouchableOpacity>
             </View>
@@ -1020,132 +1140,33 @@ const renderProgressShape = () => {
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={isMenuVisible} transparent animationType="fade">
-        <View style={styles.menuOverlaySide}>
-          <TouchableOpacity activeOpacity={0.7} style={styles.menuCloseArea} onPress={() => setMenuVisible(false)} />
-          <View style={styles.sideMenuContent}>
-
-            {/* The whole profile block is tappable, not just the avatar. */}
-            <TouchableOpacity activeOpacity={0.7}
-              style={styles.sidebarProfileSection}
-              onPress={() => {
-                if (isLoggedIn) {
-                  setMenuVisible(false);
-                  setProfileModalVisible(true);
-                }
-              }}
-            >
-              {renderAvatar(56, 30)}
-              <View style={{ marginLeft: 16, flex: 1 }}>
-                <Text style={styles.sidebarName}>{isLoggedIn ? (userProfile?.first_name || 'User') : 'Guest'}</Text>
-
-                {isLoggedIn && userProfile?.equipped_title && (
-                   <Text style={{color: colors.accent, fontSize: 13, fontWeight: '600', marginBottom: 6}}>{userProfile.equipped_title}</Text>
-                )}
-
-                {isLoggedIn ? (
-                  <View>
-                    <View style={styles.sidebarXpBarBg}>
-                      <View style={[styles.sidebarXpBarFill, { width: xpPercentage }]} />
-                    </View>
-                    <Text style={styles.sidebarXpText}>Lvl {currentLevel} • {currentLevelXp}/100 XP</Text>
-                  </View>
-                ) : (
-                  <Text style={[styles.viewProfileSidebar, { color: colors.textSecondary }]}>Not logged in</Text>
-                )}
-              </View>
-              {isLoggedIn && <ChevronRight color={colors.textFaint} size={24} />}
-            </TouchableOpacity>
-
-            <View style={styles.menuDivider} />
-            <ScrollView style={{ flex: 1 }}>
-              <Text style={styles.menuGroupTitle}>Your data</Text>
-              {/* Analytics, history and records now live behind the Progress
-                  tab. Keeping the three menu rows as well would give each of
-                  them two entry points with different presentations — a pushed
-                  card from here, an inline panel from the tab bar. */}
-              <MenuOption
-                icon={<TrendingUp color={colors.textMuted} size={20}/>}
-                label="Progress"
-                value="Stats, history, records"
-                onPress={() => { setMenuVisible(false); navigation.navigate('ProgressScreen'); }}
-                disabled={!isLoggedIn}
-              />
-              <MenuOption
-                icon={<Scale color={colors.textMuted} size={20}/>}
-                label="Body weight"
-                onPress={() => { setMenuVisible(false); setWeightSheetVisible(true); }}
-                disabled={!isLoggedIn}
-              />
-
-              <Text style={styles.menuGroupTitle}>Settings</Text>
-              <MenuOption
-                icon={<Bell color={colors.textMuted} size={20}/>}
-                label="Rest timer alerts"
-                value={restAlerts ? 'On' : 'Off'}
-                onPress={toggleRestAlerts}
-              />
-              <MenuOption
-                icon={<Flame color={colors.textMuted} size={20}/>}
-                label="Streak reminder"
-                value={streakReminders ? '19:00' : 'Off'}
-                onPress={toggleStreakReminders}
-                disabled={!isLoggedIn}
-              />
-              <MenuOption
-                icon={<Droplets color={colors.textMuted} size={20}/>}
-                label="Water reminders"
-                value={waterReminders ? '3 a day' : 'Off'}
-                onPress={toggleWaterReminders}
-                disabled={!isLoggedIn}
-              />
-              <MenuOption
-                icon={<Ruler color={colors.textMuted} size={20}/>}
-                label="Units"
-                value="Metric (kg, cm)"
-                onPress={() => Alert.alert('Units', 'Imperial units are not supported yet. Everything is shown in kg and cm.')}
-              />
-              <MenuOption
-                icon={<HelpCircle color={colors.textMuted} size={20}/>}
-                label="How scoring works"
-                onPress={() =>
-                  Alert.alert(
-                    'How scoring works',
-                    'XP: 50 per workout, +20 when you lift over 1000 kg, 30 for hitting your water goal.\n\n' +
-                    'Energy: 5 per minute trained, up to 500 a session. Spend it in the Shop.\n\n' +
-                    'Streak: one workout on consecutive calendar days. Miss a day and it resets, but the old streak can be bought back.'
-                  )
-                }
-              />
-            </ScrollView>
-            <View style={styles.menuFooter}>
-              {isLoggedIn ? (
-                <>
-                  <TouchableOpacity activeOpacity={0.7} style={styles.logoutButton} onPress={async () => { await supabase.auth.signOut(); setMenuVisible(false); fetchProfileAndStats(); }}>
-                    <LogIn color={colors.danger} size={20} /><Text style={styles.logoutText}>Sign Out</Text>
-                  </TouchableOpacity>
-
-                  {/* Quiet and last. It has to be findable — Play requires it
-                      reachable from inside the app — without sitting next to
-                      Sign Out looking like the same kind of button. */}
-                  <TouchableOpacity
-                    activeOpacity={0.7}
-                    style={styles.deleteAccountBtn}
-                    onPress={confirmDeleteAccount}
-                    accessibilityLabel="Delete my account"
-                  >
-                    <Text style={styles.deleteAccountText}>Delete my account</Text>
-                  </TouchableOpacity>
-                </>
-              ) : (
-                <TouchableOpacity activeOpacity={0.7} style={styles.loginButtonWrapper} onPress={() => { setMenuVisible(false); navigation.navigate('AuthScreen'); }}>
-                  <Text style={styles.loginButtonText}>Log In / Create Account</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <SettingsDrawer
+        visible={isMenuVisible}
+        onClose={() => setMenuVisible(false)}
+        isLoggedIn={isLoggedIn}
+        userProfile={userProfile}
+        level={currentLevel}
+        levelXp={currentLevelXp}
+        xpPercentage={xpPercentage}
+        renderAvatar={renderAvatar}
+        units={units}
+        setUnits={setUnits}
+        restAlerts={restAlerts}
+        streakReminders={streakReminders}
+        waterReminders={waterReminders}
+        onToggleRestAlerts={toggleRestAlerts}
+        restSeconds={restSeconds}
+        onCycleRestLength={cycleRestLength}
+        onToggleStreakReminders={toggleStreakReminders}
+        onToggleWaterReminders={toggleWaterReminders}
+        onOpenProfile={() => setProfileModalVisible(true)}
+        onOpenWeight={() => setWeightSheetVisible(true)}
+        onOpenWater={() => setWaterModalVisible(true)}
+        onOpenProgress={() => navigation.navigate('ProgressScreen')}
+        onDeleteAccount={confirmDeleteAccount}
+        onSignOut={async () => { await supabase.auth.signOut(); setMenuVisible(false); fetchProfileAndStats(); }}
+        onSignIn={() => navigation.navigate('AuthScreen')}
+      />
 
       <WaterSheet
         visible={isWaterModalVisible}
@@ -1167,7 +1188,7 @@ const renderProgressShape = () => {
                 <TouchableOpacity activeOpacity={0.7}
                   style={styles.editBtn}
                   onPress={() => setEditProfileVisible(true)}
-                  accessibilityLabel="Edit profile"
+                  accessibilityLabel="Edit your profile"
                 >
                   <Edit3 color={colors.onAccent} size={18} />
                 </TouchableOpacity>
@@ -1175,56 +1196,32 @@ const renderProgressShape = () => {
 
               <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
 
-                <View style={styles.mainInfoSection}>
-                  <View style={styles.bigAvatarContainer}>
-                    {renderAvatar(110, 60)}
-                    <View style={styles.levelBadge}>
-                      <Text style={styles.levelText}>LVL {currentLevel}</Text>
-                    </View>
+                {isEditProfileVisible ? (
+                  <View style={{ paddingHorizontal: spacing.lg }}>
+                    <EditProfileSheet
+                      inline
+                      visible
+                      onClose={() => setEditProfileVisible(false)}
+                      profile={userProfile}
+                      onSaved={(updates) => {
+                        setUserProfile((prev) => ({ ...prev, ...updates }));
+                        setStepsGoal(updates.step_goal);
+                        refreshProfile();
+                        setEditProfileVisible(false);
+                      }}
+                    />
                   </View>
-                  <Text style={styles.userNameBig}>{userProfile?.first_name || 'Athlete'}</Text>
-
-                  {userProfile?.equipped_title && (
-                    <Text style={{color: colors.accent, fontSize: 15, fontWeight: '600', marginTop: 6}}>{userProfile.equipped_title}</Text>
-                  )}
-
-                  <View style={styles.xpBarContainer}>
-                    <View style={styles.xpBarHeader}>
-                      <Text style={styles.xpBarText}>{totalXp} Total XP</Text>
-                      <Text style={styles.xpBarText}>{currentLevelXp} / 100 XP</Text>
-                    </View>
-                    <View style={styles.xpBarBackground}>
-                      <View style={[styles.xpBarFill, { width: xpPercentage }]} />
-                    </View>
-                  </View>
-
-                  <Text style={[styles.userBio, { marginTop: 16 }]}>"Dedication has no off-season."</Text>
-                </View>
-
-                <View style={styles.streakCard}>
-                  <LinearGradient
-                    colors={['rgba(46, 211, 198, 0.15)', 'rgba(0,0,0,0)']}
-                    start={{x: 0, y: 0}} end={{x: 1, y: 1}}
-                    style={styles.streakGradient}
-                  >
-                    <View style={styles.streakIconContainer}>
-                      <Flame size={40} color={colors.accent} fill={colors.accent} />
-                    </View>
-                    <View>
-                      <Text style={styles.streakValue}>{userProfile?.current_streak || 0} days</Text>
-                      <Text style={styles.streakLabel}>Current Streak</Text>
-                    </View>
-                    <View style={styles.streakChartPlaceholder}>
-                      <Activity size={24} color={colors.accent} opacity={0.5} />
-                    </View>
-                  </LinearGradient>
-                </View>
-
-                <View style={styles.statsRow}>
-                  <ProfileStatItem label="Weight" value={`${userProfile?.weight || 0}kg`} onPress={() => setWeightSheetVisible(true)} />
-                  <ProfileStatItem label="Height" value={`${userProfile?.height || 0}cm`} />
-                  <ProfileStatItem label="Workouts" value={`${userProfile?.workouts_per_week || 0}/wk`} />
-                </View>
+                ) : (
+                  <>
+                  <ProfileHero
+                    profile={userProfile}
+                    level={currentLevel}
+                    levelXp={currentLevelXp}
+                    xpPercentage={xpPercentage}
+                    counts={socialCounts}
+                    uploading={uploadingAvatar}
+                    onChangePhoto={changeAvatar}
+                  />
 
                 <View style={styles.sectionWrapper}>
                   <View style={styles.sectionHeaderRow}>
@@ -1286,6 +1283,8 @@ const renderProgressShape = () => {
                     <ChevronRight color={colors.accent} size={16} />
                   </Press>
                 </View>
+                  </>
+                )}
 
               </ScrollView>
             </SafeAreaView>
@@ -1303,39 +1302,11 @@ const renderProgressShape = () => {
         }}
       />
 
-      <EditProfileSheet
-        visible={isEditProfileVisible}
-        onClose={() => setEditProfileVisible(false)}
-        profile={userProfile}
-        onSaved={(updates) => {
-          // Update the copy this screen renders, and the shared one, so the
-          // new calorie target shows immediately rather than after a refetch.
-          setUserProfile((prev) => ({ ...prev, ...updates }));
-          setStepsGoal(updates.step_goal);
-          refreshProfile();
-        }}
-      />
 
     </SafeAreaView>
   );
 }
 
-function MenuOption({ icon, label, value, onPress, disabled }) {
-  return (
-    <TouchableOpacity activeOpacity={0.7}
-      style={[styles.menuOption, disabled && { opacity: 0.4 }]}
-      onPress={onPress}
-      disabled={disabled || !onPress}
-      accessibilityRole="button"
-    >
-      <View style={styles.menuOptionLeft}>{icon}<Text style={styles.menuOptionText}>{label}</Text></View>
-      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        {value ? <Text style={styles.menuOptionValue}>{value}</Text> : null}
-        <ChevronRight color={colors.borderLight} size={18} />
-      </View>
-    </TouchableOpacity>
-  );
-}
 
 const ARC_ICONS = { flame: Flame, clock: Clock, drop: Droplets, moon: Moon };
 
@@ -1431,15 +1402,28 @@ function RecentWorkoutItem({ title, date, duration, intensity }) {
 }
 
 const styles = StyleSheet.create({
+  staleStrip: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: colors.surface, borderRadius: radius.md,
+    paddingVertical: 10, paddingHorizontal: 14,
+    marginHorizontal: spacing.lg, marginBottom: spacing.sm,
+  },
+  staleText: { flex: 1, color: colors.textMuted, fontSize: 12 },
+  staleAction: { color: colors.accent, fontSize: 12, fontWeight: '700' },
+  pendingStrip: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: 'rgba(255, 216, 74, 0.10)', borderRadius: radius.md,
+    paddingVertical: 10, paddingHorizontal: 14,
+    marginHorizontal: spacing.lg, marginBottom: spacing.sm,
+  },
+  pendingText: { flex: 1, color: colors.text, fontSize: 12, fontWeight: '600' },
+  pendingAction: { color: colors.energy, fontSize: 12, fontWeight: '700' },
   container: { flex: 1, backgroundColor: colors.background },
   gradientBg: { flex: 1 },
   scrollContent: { paddingBottom: 100 },
-  header: { padding: 20 },
   // Pills, not cards: small, self-contained, and clearly separate from the
   // avatar beside them. The value carries the colour so the number is the
   // thing you read, not the container.
-  dateText: { color: colors.textMuted, marginTop: 16, fontSize: 15 },
-  welcomeText: { color: colors.text, fontSize: 34, fontWeight: '800' },
 
   xpToastContainer: { position: 'absolute', top: 0, left: 20, right: 20, zIndex: 9999, alignItems: 'center' },
   xpToastContent: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, padding: 16, borderRadius: 24, borderWidth: 1, borderColor: colors.water, shadowColor: colors.water, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10, elevation: 8, width: '100%' },
@@ -1453,6 +1437,7 @@ const styles = StyleSheet.create({
   stepsInfoContainer: { position: 'absolute', alignItems: 'center' },
   stepCount: { color: colors.text, fontSize: 40, fontWeight: '800' },
   stepGoal: { color: colors.textMuted, fontSize: 15 },
+  stepSource: { color: colors.textFaint, fontSize: 10, marginTop: 5, letterSpacing: 0.2 },
 
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 16, alignItems: 'center' },
   sectionTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
@@ -1486,17 +1471,12 @@ const styles = StyleSheet.create({
   topRight: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   // Chips, not pills: icon plus number only. At this size a word would wrap or
   // truncate, and the icon already says which number it is.
+  // The flame and the number, nothing behind them. A chip needs a surface when
+  // it sits among other chips; this one sits alone beside a name, and the
+  // surface was doing nothing but taking up room.
   streakPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingLeft: 11, paddingRight: 7, paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: colors.surfaceRaised,
-    marginLeft: 10,
-  },
-  streakPillOn: {
-    backgroundColor: 'rgba(255, 138, 43, 0.14)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 138, 43, 0.35)',
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    marginLeft: 12,
   },
   streakPillText: {
     color: colors.textMuted, fontSize: 15, fontWeight: '800',
@@ -1548,31 +1528,13 @@ const styles = StyleSheet.create({
   modalContentTasks: { backgroundColor: colors.sheet, borderTopLeftRadius: 35, borderTopRightRadius: 35, padding: 26, width: '100%', maxHeight: '85%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 26 },
   closeBtnContainer: { padding: 6, backgroundColor: colors.surfaceHigh, borderRadius: 14 },
-  expandableSection: { width: '100%', paddingVertical: 10 },
-  sectionMainRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  sectionLabelMain: { color: colors.text, fontSize: 17, fontWeight: '700' },
   expandedContent: { marginTop: 20 },
   modalInput: { backgroundColor: colors.surfaceHigh, borderRadius: 18, padding: 20, color: colors.text, fontSize: 15, marginBottom: 16 },
   saveBtn: { backgroundColor: colors.accent, padding: 20, borderRadius: 18, alignItems: 'center' },
   saveBtnText: { color: colors.onAccent, fontWeight: '600' },
-  divider: { height: 1, backgroundColor: colors.surfaceHigh, marginVertical: 16 },
-  suggestedGridTasks: { flexDirection: 'row', justifyContent: 'space-between' },
-  suggestedItem: { alignItems: 'center', paddingVertical: 26, borderRadius: 28, backgroundColor: colors.surfaceRaised, width: '48%', borderWidth: 1, borderColor: 'transparent' },
-  selectedItem: { backgroundColor: colors.surfaceRaised, borderColor: colors.borderLight },
-  suggestedText: { color: colors.textMuted, marginTop: 10, fontWeight: '600' },
 
-  menuOverlaySide: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', flexDirection: 'row' },
-  menuCloseArea: { flex: 1 },
-  sideMenuContent: { width: width * 0.75, backgroundColor: colors.card, padding: 26, paddingTop: 60 },
-  sidebarProfileSection: { flexDirection: 'row', alignItems: 'center', marginBottom: 20, paddingVertical: 10 },
-  sidebarName: { color: colors.text, fontSize: 17, fontWeight: '700' },
-  viewProfileSidebar: { color: colors.textSecondary, fontSize: 13, fontWeight: '600', marginTop: 2 },
 
-  sidebarXpBarBg: { height: 4, backgroundColor: colors.surfaceHigh, borderRadius: 2, marginTop: 10, width: 100, overflow: 'hidden' },
-  sidebarXpBarFill: { height: '100%', backgroundColor: colors.accent },
-  sidebarXpText: { color: colors.textMuted, fontSize: 11, marginTop: 6, fontWeight: '600' },
 
-  menuDivider: { height: 1, backgroundColor: colors.surfaceHigh, marginVertical: 20 },
   progressEntry: {
     flexDirection: 'row', alignItems: 'center', gap: 14,
     backgroundColor: colors.card, borderRadius: 20,
@@ -1590,22 +1552,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12, marginTop: 4,
   },
   seeAllText: { color: colors.accent, fontSize: 14, fontWeight: '600' },
-  menuGroupTitle: { color: colors.textFaint, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', marginBottom: 16 },
-  menuOption: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 16 },
-  menuOptionLeft: { flexDirection: 'row', alignItems: 'center' },
-  menuOptionText: { color: colors.text, fontSize: 15, marginLeft: 16 },
-  menuOptionValue: { color: colors.textMuted, fontSize: 13, marginRight: 10 },
-  menuFooter: { marginTop: 'auto', paddingTop: 20 },
-  deleteAccountBtn: { alignItems: 'center', paddingVertical: 14, marginTop: 4 },
-  deleteAccountText: { color: colors.textFaint, fontSize: 13, fontWeight: '600', textDecorationLine: 'underline' },
-  logoutButton: { flexDirection: 'row', alignItems: 'center', paddingVertical: 16 },
-  logoutText: { color: colors.danger, fontSize: 15, fontWeight: '600', marginLeft: 16 },
 
-  loginButtonWrapper: { backgroundColor: colors.accent, paddingVertical: 16, borderRadius: 18, alignItems: 'center', marginTop: 'auto' },
-  loginButtonText: { color: colors.onAccent, fontSize: 15, fontWeight: '600' },
 
   modalTitle: { color: colors.text, fontSize: 26, fontWeight: '800', marginBottom: 26 },
-  closeBtnText: { color: colors.textMuted, fontSize: 15, marginTop: 10 },
 
   avatarBase: { justifyContent: 'center', alignItems: 'center', backgroundColor: colors.surface, overflow: 'hidden' },
   avatarCrown: { position: 'absolute', top: -12 },
@@ -1617,28 +1566,10 @@ const styles = StyleSheet.create({
   headerTitle: { color: colors.text, fontSize: 17, fontWeight: '700' },
   backBtn: { padding: 6 },
   editBtn: { backgroundColor: colors.accent, width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
-  mainInfoSection: { alignItems: 'center', marginTop: 10, marginBottom: 26 },
-  bigAvatarContainer: { position: 'relative' },
-  levelBadge: { position: 'absolute', bottom: -5, right: -5, backgroundColor: colors.accent, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 },
-  levelText: { color: colors.onAccent, fontSize: 11, fontWeight: '600' },
-  userNameBig: { color: colors.text, fontSize: 34, fontWeight: '800', marginTop: 16 },
 
-  xpBarContainer: { width: '80%', marginTop: 16 },
-  xpBarHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
-  xpBarText: { color: colors.accent, fontSize: 13, fontWeight: '600' },
-  xpBarBackground: { height: 10, backgroundColor: colors.surface, borderRadius: 5, overflow: 'hidden' },
-  xpBarFill: { height: '100%', backgroundColor: colors.accent },
 
-  userBio: { color: colors.textMuted, fontSize: 15, fontStyle: 'italic', marginTop: 6 },
 
-  streakCard: { marginHorizontal: 20, marginBottom: 26, borderRadius: 28, overflow: 'hidden', backgroundColor: colors.card, borderWidth: 1, borderColor: 'rgba(46, 211, 198, 0.3)' },
-  streakGradient: { flexDirection: 'row', alignItems: 'center', padding: 20 },
-  streakIconContainer: { marginRight: 20, shadowColor: colors.accent, shadowRadius: 15, shadowOpacity: 0.6 },
-  streakValue: { color: colors.text, fontSize: 26, fontWeight: '800' },
-  streakLabel: { color: colors.accent, fontSize: 13, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
-  streakChartPlaceholder: { marginLeft: 'auto' },
 
-  statsRow: { flexDirection: 'row', justifyContent: 'space-between', marginHorizontal: 20, marginBottom: 26 },
   statBox: { backgroundColor: colors.card, width: '30%', padding: 16, borderRadius: 24, alignItems: 'center' },
   statBoxValue: { color: colors.text, fontSize: 17, fontWeight: '700' },
   statBoxLabel: { color: colors.textMuted, fontSize: 11, marginTop: 6 },

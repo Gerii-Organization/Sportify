@@ -6,6 +6,8 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChevronLeft, Send, Hash, Users } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
+import { unwrap } from '../lib/query';
+import ErrorState from '../components/ErrorState';
 import { colors } from '../theme';
 import { formatClockTime } from '../lib/date';
 import { gradients } from '../theme';
@@ -19,6 +21,7 @@ export default function GroupChatScreen({ route, navigation }) {
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   
   // Member names, keyed by user id, so each bubble can show its author.
   const [memberNames, setMemberNames] = useState({});
@@ -35,30 +38,38 @@ export default function GroupChatScreen({ route, navigation }) {
       if (!user) return;
       setMyId(user.id);
 
-      // The group row carries created_by, which decides who may rename or
-      // delete it. Without it the sheet cannot show the right controls.
-      const { data: groupRow } = await supabase.from('groups').select('*').eq('id', groupId).maybeSingle();
-      setGroup(groupRow);
+      try {
+        setLoadError(null);
 
-      // 1. Members first — we need their names before rendering messages.
-      const { data: members } = await supabase.from('group_members').select('user_id').eq('group_id', groupId);
-      if (members && members.length > 0) {
-        const memberIds = members.map(m => m.user_id);
-        const { data: profiles } = await supabase.from('public_profiles').select('id, first_name').in('id', memberIds);
-        const namesMap = {};
-        profiles.forEach(p => namesMap[p.id] = p.first_name);
-        setMemberNames(namesMap);
+        // The group row carries created_by, which decides who may rename or
+        // delete it. Without it the sheet cannot show the right controls.
+        setGroup(await unwrap(supabase.from('groups').select('*').eq('id', groupId).maybeSingle()));
+
+        // 1. Members first — we need their names before rendering messages.
+        const members = await unwrap(supabase.from('group_members').select('user_id').eq('group_id', groupId));
+        if (members && members.length > 0) {
+          const memberIds = members.map(m => m.user_id);
+          // Unwrapped for more than tidiness: on a failed read this was null and
+          // the `.forEach` below threw, taking the screen down with it.
+          const profiles = await unwrap(supabase.from('public_profiles').select('id, first_name').in('id', memberIds));
+          const namesMap = {};
+          (profiles || []).forEach(p => namesMap[p.id] = p.first_name);
+          setMemberNames(namesMap);
+        }
+
+        // 2. Existing messages, oldest first so the list reads top to bottom.
+        const initialMessages = await unwrap(supabase
+          .from('group_messages')
+          .select('*')
+          .eq('group_id', groupId)
+          .order('created_at', { ascending: true }));
+
+        setMessages(initialMessages || []);
+      } catch (e) {
+        setLoadError(e?.message || 'Something went wrong.');
+      } finally {
+        setLoading(false);
       }
-
-      // 2. Existing messages, oldest first so the list reads top to bottom.
-      const { data: initialMessages } = await supabase
-        .from('group_messages')
-        .select('*')
-        .eq('group_id', groupId)
-        .order('created_at', { ascending: true });
-
-      setMessages(initialMessages || []);
-      setLoading(false);
 
       // 3. Subscribe to new messages for this group only.
       subscription = supabase
@@ -143,7 +154,9 @@ export default function GroupChatScreen({ route, navigation }) {
           </TouchableOpacity>
         </View>
 
-        {loading ? (
+        {loadError ? (
+          <ErrorState message={loadError} />
+        ) : loading ? (
           <View style={styles.centerContainer}><ActivityIndicator color={colors.accent} /></View>
         ) : (
           <FlatList

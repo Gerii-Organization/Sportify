@@ -1,4 +1,7 @@
 import { Platform } from 'react-native';
+import { asleepMinutes, lastNightWindow } from './sleep';
+
+export { asleepMinutes, lastNightWindow };
 
 /**
  * Last night's sleep, read from Apple Health.
@@ -26,9 +29,6 @@ import { Platform } from 'react-native';
  *    no signal — indistinguishable from someone who simply did not sleep.
  */
 
-/** States that count as sleep. INBED is presence, not sleep; AWAKE is neither. */
-const ASLEEP_STATES = new Set(['ASLEEP', 'CORE', 'DEEP', 'REM']);
-
 let warned = false;
 
 function warnOnce(detail) {
@@ -48,46 +48,6 @@ function warnOnce(detail) {
  *
  * Exported for its own sake: it is pure, and it is the part that was wrong.
  */
-export function asleepMinutes(samples) {
-  const ranges = (samples || [])
-    .filter((s) => ASLEEP_STATES.has(String(s?.value || '').toUpperCase()))
-    .map((s) => [new Date(s.startDate).getTime(), new Date(s.endDate).getTime()])
-    .filter(([start, end]) => Number.isFinite(start) && Number.isFinite(end) && end > start)
-    .sort((a, b) => a[0] - b[0]);
-
-  if (!ranges.length) return 0;
-
-  let total = 0;
-  let [openStart, openEnd] = ranges[0];
-
-  for (let i = 1; i < ranges.length; i += 1) {
-    const [start, end] = ranges[i];
-    if (start <= openEnd) {
-      // Overlaps or touches the block being built — extend it.
-      openEnd = Math.max(openEnd, end);
-    } else {
-      total += openEnd - openStart;
-      [openStart, openEnd] = [start, end];
-    }
-  }
-  total += openEnd - openStart;
-
-  return Math.round(total / 60000);
-}
-
-/**
- * The window a night could fall in: 18:00 yesterday through now.
- *
- * Wide enough for an early bedtime, and it still ends at the present so a nap
- * this afternoon is included in today's figure.
- */
-export function lastNightWindow(now = new Date()) {
-  const start = new Date(now);
-  start.setDate(start.getDate() - 1);
-  start.setHours(18, 0, 0, 0);
-  return { startDate: start.toISOString(), endDate: now.toISOString() };
-}
-
 /**
  * Reads last night's sleep. Resolves to minutes, or null when unavailable —
  * wrong platform, module not linked, permission refused, no samples.
@@ -137,6 +97,86 @@ export async function readSleepMinutes() {
     } catch (e) {
       warnOnce(e?.message || 'unknown error');
       resolve(null);
+    }
+  });
+}
+
+/**
+ * Writes a finished session back to Apple Health.
+ *
+ * The integration read sleep and steps and wrote nothing, so a workout logged
+ * in Sportify did not exist in the Fitness app — the rings did not close, and
+ * anyone checking found a training app that takes and gives nothing back.
+ *
+ * Best-effort by design. It resolves false rather than throwing on every
+ * failure path — wrong platform, module not linked, permission refused, write
+ * rejected — because the session is already saved on the server by the time
+ * this runs. A HealthKit refusal must never look like a lost workout.
+ */
+export async function saveWorkoutToHealth({ minutes, startedAt }) {
+  if (Platform.OS !== 'ios') return false;
+
+  const duration = Number(minutes);
+  if (!Number.isFinite(duration) || duration <= 0) return false;
+
+  let AppleHealthKit;
+  try {
+    // eslint-disable-next-line global-require
+    const mod = require('react-native-health');
+    AppleHealthKit = mod?.default ?? mod;
+  } catch {
+    warnOnce('module could not be loaded');
+    return false;
+  }
+
+  if (!AppleHealthKit?.initHealthKit || !AppleHealthKit?.saveWorkout || !AppleHealthKit?.Constants) {
+    warnOnce('native module is missing');
+    return false;
+  }
+
+  const { Permissions, Activities } = AppleHealthKit.Constants;
+
+  const permissions = {
+    permissions: {
+      read: [Permissions.SleepAnalysis],
+      write: [Permissions.Workout],
+    },
+  };
+
+  const end = startedAt ? new Date(new Date(startedAt).getTime() + duration * 60_000) : new Date();
+  const start = new Date(end.getTime() - duration * 60_000);
+
+  return new Promise((resolve) => {
+    try {
+      AppleHealthKit.initHealthKit(permissions, (initError) => {
+        if (initError) {
+          warnOnce(`write permission not granted (${initError})`);
+          return resolve(false);
+        }
+
+        AppleHealthKit.saveWorkout(
+          {
+            // Traditional strength training is what this app records. Apple has
+            // no "gym session" type, and picking something vaguer would put the
+            // minutes in the wrong place in the Fitness app.
+            type: Activities?.TraditionalStrengthTraining || 'TraditionalStrengthTraining',
+            startDate: start.toISOString(),
+            endDate: end.toISOString(),
+            // No energy figure. The app has no heart rate, so any number would
+            // be a guess — and once it is in Health it reads as a measurement.
+          },
+          (saveError) => {
+            if (saveError) {
+              warnOnce(`workout not written (${saveError})`);
+              return resolve(false);
+            }
+            resolve(true);
+          }
+        );
+      });
+    } catch (e) {
+      warnOnce(e?.message || 'unknown error');
+      resolve(false);
     }
   });
 }

@@ -5,13 +5,15 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
-import { Plus, Dumbbell, Zap, Layout, ChevronDown, ChevronUp, Bookmark, Compass, Pencil } from 'lucide-react-native';
+import { Plus, Dumbbell, Zap, Layout, ChevronDown, ChevronUp, Bookmark, Compass, Pencil, Search, X } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
-import { colors } from '../theme';
+import { colors, radius, spacing } from '../theme';
 import { gradients } from '../theme';
 import ScreenHeader from '../components/ScreenHeader';
 import AmbientGlow from '../components/AmbientGlow';
+import { unwrap } from '../lib/query';
 import EmptyState from '../components/EmptyState';
+import ErrorState from '../components/ErrorState';
 import useRefresh from '../lib/useRefresh';
 import { todayKey, currentWeekKeys, startOfWeekIso } from '../lib/date';
 import { exercisesInGroup, MUSCLES } from '../constants/exercises';
@@ -52,9 +54,19 @@ export default function TrainingScreen({ navigation }) {
   const [split, setSplit] = useState(profile?.split || null);
   /** Browse filter. null means every muscle group. */
   const [browseMuscle, setBrowseMuscle] = useState(null);
+  /** One box for both the workout's name and the person who wrote it. */
+  const [browseQuery, setBrowseQuery] = useState('');
+  /** 'recent' or 'saves'. */
+  const [browseSort, setBrowseSort] = useState('recent');
   const [isBuiltInExpanded, setIsBuiltInExpanded] = useState(false);
   const [isNamingModalVisible, setIsNamingModalVisible] = useState(false);
+  /** Set by whichever list fetch is feeding the current view. Shown only
+   *  where the empty state would otherwise go, so a failed refresh with rows
+   *  already on screen leaves those rows alone. */
+  const [listError, setListError] = useState(null);
   const [newWorkoutName, setNewWorkoutName] = useState('');
+  /** Set while the naming modal is renaming rather than creating. */
+  const [renaming, setRenaming] = useState(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -71,25 +83,33 @@ export default function TrainingScreen({ navigation }) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    const { data } = await supabase
-      .from('user_workouts')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false });
-    if (data) setMyWorkouts(data);
+    setListError(null);
 
-    // Distinct days, not sessions: two workouts on Monday is one day of the
-    // weekly target, which is how anyone counts "four times a week".
-    // The snapshots come back too: the advice card needs to know which muscles
-    // the week actually contained, not just that a session happened.
-    const { data: thisWeek } = await supabase
-      .from('workout_completions')
-      .select('completed_at, exercises')
-      .eq('user_id', user.id)
-      .gte('completed_at', startOfWeekIso());
+    try {
+      const data = await unwrap(supabase
+        .from('user_workouts')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false }));
+      if (data) setMyWorkouts(data);
 
-    setWeekSessions(thisWeek || []);
-    setTrainedDays([...new Set((thisWeek || []).map((w) => todayKey(new Date(w.completed_at))))]);
+      // Distinct days, not sessions: two workouts on Monday is one day of the
+      // weekly target, which is how anyone counts "four times a week".
+      // The snapshots come back too: the advice card needs to know which
+      // muscles the week actually contained, not just that a session happened.
+      const thisWeek = await unwrap(supabase
+        .from('workout_completions')
+        .select('completed_at, exercises')
+        .eq('user_id', user.id)
+        .gte('completed_at', startOfWeekIso()));
+
+      setWeekSessions(thisWeek || []);
+      setTrainedDays([...new Set((thisWeek || []).map((w) => todayKey(new Date(w.completed_at))))]);
+    } catch (e) {
+      // "No workouts yet" is a claim about your list. A dead network is a claim
+      // about the connection. They rendered identically before this.
+      setListError(e?.message || 'Something went wrong.');
+    }
   };
 
   const fetchPublicWorkouts = useCallback(async () => {
@@ -97,23 +117,36 @@ export default function TrainingScreen({ navigation }) {
     // The muscle filter runs on the server. Filtering here would apply to the
     // 30 rows that already came back, so "Legs only" would quietly miss plans
     // that fell outside the first page.
-    const { data } = await supabase.rpc('browse_workouts', {
-      p_limit: 30,
-      p_search: null,
-      p_muscle: browseMuscle,
-    });
-    setPublicWorkouts(data || []);
-    setBrowseLoading(false);
-  }, [browseMuscle]);
+    setListError(null);
+
+    try {
+      const data = await unwrap(supabase.rpc('browse_workouts', {
+        p_limit: 30,
+        p_search: browseQuery.trim() || null,
+        p_muscle: browseMuscle,
+        p_sort: browseSort,
+      }));
+      setPublicWorkouts(data || []);
+    } catch (e) {
+      setListError(e?.message || 'Something went wrong.');
+    } finally {
+      setBrowseLoading(false);
+    }
+  }, [browseMuscle, browseQuery, browseSort]);
 
   const fetchSavedWorkouts = useCallback(async () => {
-    const { data } = await supabase.rpc('get_saved_workouts');
-    setSavedWorkouts(data || []);
+    setListError(null);
+
+    try {
+      setSavedWorkouts(await unwrap(supabase.rpc('get_saved_workouts')) || []);
+    } catch (e) {
+      setListError(e?.message || 'Something went wrong.');
+    }
   }, []);
 
   useEffect(() => {
     if (view === 'browse') fetchPublicWorkouts();
-  }, [view, browseMuscle, fetchPublicWorkouts]);
+  }, [view, browseMuscle, browseQuery, browseSort, fetchPublicWorkouts]);
 
   useEffect(() => {
     if (view === 'saved') fetchSavedWorkouts();
@@ -149,6 +182,44 @@ export default function TrainingScreen({ navigation }) {
     Alert.alert('Added', `"${name}" is in your workouts, with the sets cleared.`);
     fetchMyWorkouts();
     setView('mine');
+  };
+
+  /**
+   * Opening something you saved rather than wrote.
+   *
+   * A saved workout is a bookmark on someone else's row. Editing it in place
+   * would change their plan for everyone who saved it, so changing it means
+   * taking a copy first — and that is a decision worth naming rather than
+   * doing silently behind an edit button.
+   *
+   * Starting it is different, and needs no copy: you can run anyone's plan.
+   */
+  const openSavedWorkout = (workout) => {
+    if (!editMode) return openWorkoutDetail(workout);
+
+    Alert.alert(
+      'Make your own copy?',
+      `"${workout.name}" belongs to ${workout.author_name || 'someone else'}. Changing it means taking a copy into your workouts — theirs stays as it is.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Copy and edit', onPress: () => forkAndEdit(workout) },
+      ]
+    );
+  };
+
+  const forkAndEdit = async (workout) => {
+    const { data, error } = await supabase.rpc('copy_workout', { p_workout_id: workout.id });
+
+    if (error || !data?.ok) {
+      return Alert.alert('Nothing copied', 'That workout is no longer available.');
+    }
+
+    await fetchMyWorkouts();
+    setView('mine');
+
+    // copy_workout returns the new row's id; open that, not the original.
+    const copy = { ...workout, id: data.workout_id ?? data.id, is_public: false, is_saved: false };
+    openWorkoutDetail(copy, true);
   };
 
   const generateSmartWorkouts = async () => {
@@ -256,6 +327,66 @@ export default function TrainingScreen({ navigation }) {
     }
 
     setSuggestedWorkouts(workouts.slice(0, Math.max(1, Math.min(days, 5))));
+  };
+
+  /**
+   * Publish or unpublish, from the list.
+   *
+   * The confirmation names what actually becomes visible — the plan, not the
+   * weights you logged against it, which `copy_workout` strips before anyone
+   * else sees them. People decline to share because they assume otherwise.
+   */
+  const toggleVisibility = (workout) => {
+    const next = !workout.is_public;
+
+    const apply = async () => {
+      const { error } = await supabase
+        .from('user_workouts')
+        .update({ is_public: next })
+        .eq('id', workout.id);
+
+      if (error) return Alert.alert('Could not change that', error.message);
+      setMyWorkouts((list) => list.map((w) => (w.id === workout.id ? { ...w, is_public: next } : w)));
+    };
+
+    if (!next) return apply();
+
+    Alert.alert(
+      'Share this workout?',
+      'Anyone can find it in Browse and copy it. They see the exercises and set counts — never the weights you lifted.',
+      [{ text: 'Cancel', style: 'cancel' }, { text: 'Share', onPress: apply }]
+    );
+  };
+
+  /**
+   * Renaming, from the list. Nothing else about the plan changes.
+   *
+   * Uses the naming modal that already exists for creating one, rather than
+   * `Alert.prompt` — that is iOS-only and silently does nothing on Android.
+   */
+  const promptRename = (workout) => {
+    setRenaming(workout);
+    setNewWorkoutName(workout.name || '');
+    setIsNamingModalVisible(true);
+  };
+
+  const commitRename = async () => {
+    const name = newWorkoutName.trim();
+    const target = renaming;
+
+    setIsNamingModalVisible(false);
+    setRenaming(null);
+    setNewWorkoutName('');
+
+    if (!target || !name || name === target.name) return;
+
+    const { error } = await supabase
+      .from('user_workouts')
+      .update({ name })
+      .eq('id', target.id);
+
+    if (error) return Alert.alert('Could not rename it', error.message);
+    setMyWorkouts((list) => list.map((w) => (w.id === target.id ? { ...w, name } : w)));
   };
 
   const confirmDeleteWorkout = (id) => {
@@ -444,6 +575,46 @@ export default function TrainingScreen({ navigation }) {
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
           view === 'browse' ? (
+            <>
+            <View style={styles.browseSearchRow}>
+              <Search color={colors.textFaint} size={17} />
+              <TextInput
+                style={styles.browseSearchInput}
+                value={browseQuery}
+                onChangeText={setBrowseQuery}
+                placeholder="Workout or person"
+                placeholderTextColor={colors.textFaint}
+                autoCorrect={false}
+                returnKeyType="search"
+                accessibilityLabel="Search workouts by name or author"
+              />
+              {browseQuery.length > 0 && (
+                <Press scale={0.9} onPress={() => setBrowseQuery('')} hitSlop={8} accessibilityLabel="Clear search">
+                  <X color={colors.textFaint} size={16} />
+                </Press>
+              )}
+            </View>
+
+            {/* Two orders, because they answer different questions: what is new,
+                and what other people kept. */}
+            <View style={styles.browseSortRow}>
+              {[['recent', 'Newest'], ['saves', 'Most saved']].map(([key, label]) => {
+                const active = browseSort === key;
+                return (
+                  <Press
+                    key={key}
+                    scale={0.96}
+                    style={[styles.sortChip, active && styles.sortChipOn]}
+                    onPress={() => setBrowseSort(key)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                  >
+                    <Text style={[styles.sortChipText, active && styles.sortChipTextOn]}>{label}</Text>
+                  </Press>
+                );
+              })}
+            </View>
+
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -467,11 +638,21 @@ export default function TrainingScreen({ navigation }) {
                 );
               })}
             </ScrollView>
+            </>
           ) : null
         }
 
         ListEmptyComponent={
-          view === 'saved' ? (
+          listError ? (
+            <ErrorState
+              message={listError}
+              onRetry={() => {
+                if (view === 'browse') fetchPublicWorkouts();
+                else if (view === 'saved') fetchSavedWorkouts();
+                else fetchMyWorkouts();
+              }}
+            />
+          ) : view === 'saved' ? (
             <EmptyState
               icon={<Bookmark color={colors.textFaint} size={44} />}
               title="Nothing saved"
@@ -508,8 +689,14 @@ export default function TrainingScreen({ navigation }) {
               variant={view}
               imageUrl={item.cover_url}
               editing={editMode}
-              onOpen={() => (editMode ? openWorkoutDetail(item, true) : openWorkoutDetail(item))}
+              onOpen={() =>
+                view === 'saved'
+                  ? openSavedWorkout(item)
+                  : openWorkoutDetail(item, editMode)
+              }
               onDelete={() => confirmDeleteWorkout(item.id)}
+              onRename={() => promptRename(item)}
+              onToggleVisibility={() => toggleVisibility(item)}
               onCopy={() => handleCopy(item.id, item.name)}
               onToggleSave={() => toggleSave(item.id)}
             />
@@ -559,15 +746,19 @@ export default function TrainingScreen({ navigation }) {
       <Modal visible={isNamingModalVisible} transparent animationType="fade">
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
           <View style={styles.glassMenu}>
-            <Text style={styles.menuTitle}>Pick a workout name:</Text>
+            <Text style={styles.menuTitle}>{renaming ? 'Rename workout:' : 'Pick a workout name:'}</Text>
             <TextInput 
               style={styles.nameInput} placeholder="Ex: Leg Day" placeholderTextColor={colors.textMuted}
               value={newWorkoutName} onChangeText={setNewWorkoutName} autoFocus
             />
-            <TouchableOpacity activeOpacity={0.7} style={styles.saveNameBtn} onPress={handleCreateNamedWorkout}>
-              <Text style={styles.saveNameBtnText}>Create</Text>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              style={styles.saveNameBtn}
+              onPress={renaming ? commitRename : handleCreateNamedWorkout}
+            >
+              <Text style={styles.saveNameBtnText}>{renaming ? 'Rename' : 'Create'}</Text>
             </TouchableOpacity>
-            <TouchableOpacity activeOpacity={0.7} onPress={() => setIsNamingModalVisible(false)} style={{ marginTop: 20 }}>
+            <TouchableOpacity activeOpacity={0.7} onPress={() => { setIsNamingModalVisible(false); setRenaming(null); }} style={{ marginTop: 20 }}>
               <Text style={styles.closeText}>Cancel</Text>
             </TouchableOpacity>
           </View>
@@ -614,6 +805,22 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent,
   },
   doneText: { color: colors.onAccent, fontSize: 13, fontWeight: '700' },
+  browseSearchRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: colors.surface, borderRadius: radius.md,
+    paddingHorizontal: 14, height: 44,
+    marginHorizontal: spacing.lg, marginBottom: 10,
+  },
+  browseSearchInput: { flex: 1, color: colors.text, fontSize: 15, padding: 0 },
+  browseSortRow: { flexDirection: 'row', gap: 8, paddingHorizontal: spacing.lg, marginBottom: 12 },
+  sortChip: {
+    paddingHorizontal: 13, paddingVertical: 7, borderRadius: radius.pill,
+    backgroundColor: colors.surface,
+  },
+  sortChipOn: { backgroundColor: colors.accent },
+  sortChipText: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
+  sortChipTextOn: { color: colors.onAccent, fontWeight: '700' },
+
   muscleFilterRow: { flexDirection: 'row', gap: 8, paddingBottom: 14, paddingRight: 20 },
   muscleChip: {
     paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999,

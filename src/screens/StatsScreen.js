@@ -11,6 +11,7 @@ import { todayKey, recentDayKeys, currentWeekKeys, startOfWeekIso } from '../lib
 import { useAuth } from '../context/AuthContext';
 import useLoad from '../lib/useLoad';
 import { unwrap } from '../lib/query';
+import { formatVolume, formatDelta } from '../lib/units';
 import Press from '../components/Press';
 import FadeIn from '../components/FadeIn';
 import AmbientGlow from '../components/AmbientGlow';
@@ -42,7 +43,7 @@ const EMPTY = { sessions: [], steps: [], streak: 0, weights: [], trainedDays: []
  * double the ambient glow.
  */
 export default function StatsScreen({ navigation, embedded = false }) {
-  const { user, profile } = useAuth();
+  const { user, profile, units } = useAuth();
   const [timeframe, setTimeframe] = useState('week');
 
   const load = useCallback(async () => {
@@ -171,7 +172,7 @@ export default function StatsScreen({ navigation, embedded = false }) {
               />
               <Tile
                 icon={<Weight color={colors.energy} size={20} />}
-                value={formatVolume(summary.volume)}
+                value={formatVolume(summary.volume, units)}
                 label="Weight lifted"
               />
               <Tile
@@ -238,7 +239,7 @@ export default function StatsScreen({ navigation, embedded = false }) {
                   <Text style={styles.cardAside}>
                     {trim(data.weights[data.weights.length - 1].weight_kg)}kg
                     {' · '}
-                    {formatChange(data.weights)}
+                    {formatChange(data.weights, units)}
                   </Text>
                 </View>
                 <WeightTrend readings={data.weights} />
@@ -467,8 +468,8 @@ function muscleSplit(sessions) {
     .slice(0, 5);
 }
 
-/** "+1.2kg since Mar 3" — the first reading against the last. */
-function formatChange(readings) {
+/** "+1.2 kg since Mar 3" — the first reading against the last. */
+function formatChange(readings, units) {
   const first = Number(readings[0].weight_kg);
   const last = Number(readings[readings.length - 1].weight_kg);
   const delta = last - first;
@@ -478,16 +479,11 @@ function formatChange(readings) {
   const [y, m, d] = readings[0].logged_on.split('-').map(Number);
   const since = new Date(y, m - 1, d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 
-  return `${delta > 0 ? '+' : ''}${delta.toFixed(1)}kg since ${since}`;
+  return `${formatDelta(delta, units)} since ${since}`;
 }
 
 const formatHours = (minutes) => (minutes >= 60 ? `${Math.floor(minutes / 60)}h` : `${minutes}m`);
 
-function formatVolume(kg) {
-  const value = Number(kg) || 0;
-  if (value >= 1000) return `${(value / 1000).toFixed(1)}t`;
-  return `${Math.round(value)}kg`;
-}
 
 const trim = (value) => {
   const n = Number(value) || 0;

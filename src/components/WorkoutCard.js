@@ -1,5 +1,5 @@
 import { View, Text, Image, StyleSheet } from 'react-native';
-import { Play, Trash2, Bookmark, Copy, ChevronRight, Pencil } from 'lucide-react-native';
+import { Play, Trash2, Bookmark, Copy, ChevronRight, Pencil, Globe, Lock, Type } from 'lucide-react-native';
 import { colors } from '../theme';
 import Press from './Press';
 
@@ -51,6 +51,8 @@ export default function WorkoutCard({
   editing = false,
   onOpen,
   onDelete,
+  onRename,
+  onToggleVisibility,
   onCopy,
   onToggleSave,
 }) {
@@ -82,6 +84,29 @@ export default function WorkoutCard({
         {variant === 'mine' ? (
           editing ? (
             <>
+              {/* Visibility belongs with the list, not inside the workout: it is
+                  a decision about which of your plans other people can see, and
+                  that is a question you ask while looking at all of them. */}
+              <Press
+                scale={0.9}
+                style={styles.iconBtn}
+                onPress={onToggleVisibility}
+                accessibilityLabel={workout.is_public ? `Make ${workout.name} private` : `Share ${workout.name} publicly`}
+                hitSlop={6}
+              >
+                {workout.is_public
+                  ? <Globe color={colors.accent} size={17} />
+                  : <Lock color={colors.textFaint} size={17} />}
+              </Press>
+              <Press
+                scale={0.9}
+                style={styles.iconBtn}
+                onPress={onRename}
+                accessibilityLabel={`Rename ${workout.name}`}
+                hitSlop={6}
+              >
+                <Type color={colors.textSecondary} size={17} />
+              </Press>
               <Press
                 scale={0.9}
                 style={styles.iconBtn}
@@ -164,10 +189,15 @@ function metaFor(workout, variant, muscles) {
     return [groups, exercises, workout.duration].filter(Boolean).join('  —  ');
   }
 
+  // Who wrote it leads: in Browse the author is the thing that makes one plan
+  // worth opening over another, and the muscle groups repeat across all of them.
+  const saves = Number(workout.save_count) || 0;
+
   return [
-    groups,
     workout.is_mine ? 'Yours' : `by ${workout.author_name}`,
-    workout.copy_count > 0 ? `${workout.copy_count} copied` : null,
+    groups,
+    exercises,
+    saves > 0 ? `${saves} saved` : null,
   ].filter(Boolean).join('  —  ');
 }
 

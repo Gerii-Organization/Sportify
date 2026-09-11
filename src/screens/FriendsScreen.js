@@ -20,6 +20,8 @@ import useRefresh from '../lib/useRefresh';
 import Press from '../components/Press';
 import FadeIn from '../components/FadeIn';
 import EmptyState from '../components/EmptyState';
+import ErrorState from '../components/ErrorState';
+import { unwrap } from '../lib/query';
 import { shortTime } from '../lib/date';
 
 
@@ -35,6 +37,10 @@ export default function FriendsScreen() {
   const [section, setSection] = useState('chats');
 
   const [loading, setLoading] = useState(true);
+  /** A failed load of the friends/chats/groups set. Kept apart from the
+   *  empty state: no friends and no connection are different facts, and on
+   *  this screen the blank one reads as a verdict on your social life. */
+  const [loadError, setLoadError] = useState(null);
   const [myId, setMyId] = useState(null);
   const navigation = useNavigation();
 
@@ -83,11 +89,16 @@ export default function FriendsScreen() {
       return;
     }
     setMyId(user.id);
+    setLoadError(null);
 
-    await fetchFriendsAndChats(user.id);
-    await fetchGroups(user.id);
-
-    setLoading(false);
+    try {
+      await fetchFriendsAndChats(user.id);
+      await fetchGroups(user.id);
+    } catch (e) {
+      setLoadError(e?.message || 'Something went wrong.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   /**
@@ -97,10 +108,10 @@ export default function FriendsScreen() {
    * supabase/policies.sql — but the client must not ask for them either.
    */
   const fetchGroups = async (userId) => {
-    const { data: memberships } = await supabase
+    const memberships = await unwrap(supabase
       .from('group_members')
       .select('group_id')
-      .eq('user_id', userId);
+      .eq('user_id', userId));
 
     const groupIds = (memberships || []).map((m) => m.group_id);
     if (groupIds.length === 0) {
@@ -108,21 +119,21 @@ export default function FriendsScreen() {
       return;
     }
 
-    const { data } = await supabase
+    setGroups(await unwrap(supabase
       .from('groups')
       .select('*')
       .in('id', groupIds)
-      .order('created_at', { ascending: false });
-    setGroups(data || []);
+      .order('created_at', { ascending: false })) || []);
   };
 
  const fetchFriendsAndChats = async (userId) => {
     // 1. Load every friendship this user is part of.
-    const { data: fData, error } = await supabase.from('friendships')
+    // This used to be `if (error || !fData) return;` — a silent bail that left
+    // every list empty and the screen reporting no friends, no chats and no
+    // requests. Throwing hands the failure to fetchData, which can say so.
+    const fData = await unwrap(supabase.from('friendships')
       .select('*')
-      .or(`user_id.eq.${userId},friend_id.eq.${userId}`);
-
-    if (error || !fData) return;
+      .or(`user_id.eq.${userId},friend_id.eq.${userId}`));
 
     const acceptedIds = [];
     const pendingIn = [];
@@ -140,13 +151,13 @@ export default function FriendsScreen() {
     });
 
     if (acceptedIds.length > 0) {
-      const { data: pData } = await supabase.from('public_profiles').select('*').in('id', acceptedIds);
-      
+      const pData = await unwrap(supabase.from('public_profiles').select('*').in('id', acceptedIds));
+
       // Newest first, so the first row seen per partner is the latest message.
-      const { data: mData } = await supabase.from('messages')
+      const mData = await unwrap(supabase.from('messages')
         .select('*')
         .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false }));
 
       // Messages arrive newest-first, so the first one seen for a partner is
       // the latest. The same pass counts what is still unread, which saves a
@@ -183,12 +194,12 @@ export default function FriendsScreen() {
     }
 
     if (pendingIn.length > 0) {
-      const { data: pData } = await supabase.from('public_profiles').select('*').in('id', pendingIn);
+      const pData = await unwrap(supabase.from('public_profiles').select('*').in('id', pendingIn));
       setReceivedRequests((pData || []).map(p => ({ ...p, friendship_id: fMap[p.id] })));
     } else setReceivedRequests([]);
 
     if (pendingOutIds.length > 0) {
-      const { data: pData } = await supabase.from('public_profiles').select('*').in('id', pendingOutIds);
+      const pData = await unwrap(supabase.from('public_profiles').select('*').in('id', pendingOutIds));
       setSentRequests((pData || []).map(p => ({ ...p, friendship_id: fMap[p.id] })));
     } else setSentRequests([]);
   };
@@ -401,6 +412,8 @@ export default function FriendsScreen() {
           <FeedScreen embedded />
         ) : section === 'ranking' ? (
           <LeaderboardScreen embedded />
+        ) : loadError ? (
+          <ErrorState message={loadError} onRetry={fetchData} />
         ) : loading ? (
           <SkeletonRows count={6} />
         ) : (

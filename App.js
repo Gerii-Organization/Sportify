@@ -1,4 +1,4 @@
-import { StyleSheet } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -6,6 +6,10 @@ import { BlurView } from 'expo-blur';
 import { House, UtensilsCrossed, Dumbbell, Users, Store } from 'lucide-react-native';
 
 import { AuthProvider } from './src/context/AuthContext';
+import ErrorBoundary from './src/components/ErrorBoundary';
+import ActiveWorkoutBar from './src/components/ActiveWorkoutBar';
+import { navigationRef } from './src/lib/navigationRef';
+import { initCrashReporting } from './src/lib/crash';
 import { colors } from './src/theme';
 
 import AuthScreen from './src/screens/AuthScreen';
@@ -95,18 +99,33 @@ function MainTabs() {
   );
 }
 
+// Before anything renders, so a crash during the first paint is still reported.
+initCrashReporting();
+
 export default function App() {
   return (
-    <AuthProvider>
-      <NavigationContainer>
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="MainTabs" component={MainTabs} />
-          {STACK_SCREENS.map(({ name, component, presentation }) => (
-            <Stack.Screen key={name} name={name} component={component} options={{ presentation }} />
-          ))}
-        </Stack.Navigator>
-      </NavigationContainer>
-    </AuthProvider>
+    // Outside the providers on purpose. A boundary inside them cannot catch an
+    // error thrown while a provider is initialising, which is exactly when the
+    // white screen everyone complains about happens.
+    <ErrorBoundary where="app">
+      <AuthProvider>
+        <NavigationContainer ref={navigationRef}>
+          {/* Wrapped so the bar can be a sibling of the whole stack rather than
+              of the tabs. Mounted inside the tabs it only appeared on the five
+              tab screens — a workout left running while you read your records
+              or your streak had nothing on screen saying so. */}
+          <View style={{ flex: 1 }}>
+            <Stack.Navigator screenOptions={{ headerShown: false }}>
+              <Stack.Screen name="MainTabs" component={MainTabs} />
+              {STACK_SCREENS.map(({ name, component, presentation }) => (
+                <Stack.Screen key={name} name={name} component={component} options={{ presentation }} />
+              ))}
+            </Stack.Navigator>
+            <ActiveWorkoutBar />
+          </View>
+        </NavigationContainer>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
 

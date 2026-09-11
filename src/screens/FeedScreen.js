@@ -11,7 +11,9 @@ import { useAuth } from '../context/AuthContext';
 import useRefresh from '../lib/useRefresh';
 import ScreenHeader from '../components/ScreenHeader';
 import AmbientGlow from '../components/AmbientGlow';
+import { unwrap } from '../lib/query';
 import EmptyState from '../components/EmptyState';
+import ErrorState from '../components/ErrorState';
 import { SkeletonRows } from '../components/Skeleton';
 import FeedCard from '../components/FeedCard';
 import CommentSheet from '../components/CommentSheet';
@@ -38,6 +40,7 @@ export default function FeedScreen({ embedded = false }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [exhausted, setExhausted] = useState(false);
   const [commentsFor, setCommentsFor] = useState(null);
+  const [error, setError] = useState(null);
 
   const load = useCallback(async () => {
     if (!user) {
@@ -46,10 +49,20 @@ export default function FeedScreen({ embedded = false }) {
       return;
     }
 
-    const { data } = await supabase.rpc('get_feed', { p_limit: PAGE_SIZE, p_before: null });
-    setEvents(data || []);
-    setExhausted((data?.length || 0) < PAGE_SIZE);
-    setLoading(false);
+    setError(null);
+
+    try {
+      const data = await unwrap(supabase.rpc('get_feed', { p_limit: PAGE_SIZE, p_before: null }));
+      setEvents(data || []);
+      setExhausted((data?.length || 0) < PAGE_SIZE);
+    } catch (e) {
+      // Without this the feed rendered "Nothing here yet" on a dead network,
+      // which reads as "none of your friends did anything" — a claim about
+      // other people, made from a failed request.
+      setError(e?.message || 'Something went wrong.');
+    } finally {
+      setLoading(false);
+    }
   }, [user]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -60,14 +73,21 @@ export default function FeedScreen({ embedded = false }) {
     if (loadingMore || exhausted || events.length === 0) return;
     setLoadingMore(true);
 
-    const { data } = await supabase.rpc('get_feed', {
-      p_limit: PAGE_SIZE,
-      p_before: events[events.length - 1].created_at,
-    });
+    try {
+      const data = await unwrap(supabase.rpc('get_feed', {
+        p_limit: PAGE_SIZE,
+        p_before: events[events.length - 1].created_at,
+      }));
 
-    setEvents((prev) => [...prev, ...(data || [])]);
-    setExhausted((data?.length || 0) < PAGE_SIZE);
-    setLoadingMore(false);
+      setEvents((prev) => [...prev, ...(data || [])]);
+      setExhausted((data?.length || 0) < PAGE_SIZE);
+    } catch {
+      // Deliberately quiet, and deliberately NOT setting `exhausted`: a page
+      // that failed is a page to retry on the next scroll, not the end of the
+      // feed. What is already on screen stays.
+    } finally {
+      setLoadingMore(false);
+    }
   };
 
   /**
@@ -130,7 +150,9 @@ export default function FeedScreen({ embedded = false }) {
 
   const content = (
     <>
-        {loading ? (
+        {error ? (
+          <ErrorState message={error} onRetry={load} />
+        ) : loading ? (
           <SkeletonRows count={5} />
         ) : (
           <FlatList

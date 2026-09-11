@@ -1,4 +1,4 @@
-import { View } from 'react-native';
+import { View, Image } from 'react-native';
 import { User, Crown, Flame } from 'lucide-react-native';
 import { colors, levelTiers } from '../theme';
 import { getAvatar } from '../constants/cosmetics';
@@ -14,7 +14,10 @@ import { levelFromXp } from '../lib/level';
  * green everywhere else.
  *
  * Props:
- *   profile    A profile row. `equipped_avatar` and `xp` are the fields used.
+ *   profile    A profile row. `equipped_avatar`, `xp` and `avatar_url` are the
+ *              fields used. A photo replaces the glyph and keeps the border —
+ *              the cosmetic frame is what people paid for, the face is what
+ *              they want shown inside it.
  *   size       Outer diameter in points.
  *   rank       Optional leaderboard position; 1-3 add a coloured crown.
  *   muted      Render in the signed-out grey state.
@@ -49,6 +52,10 @@ export default function Avatar({ profile, size = 46, rank, muted = false }) {
     }
   }
 
+  // Signed-out renders the glyph whoever it is: the muted state is about the
+  // app not knowing who you are, and a face would contradict that.
+  const photo = muted ? null : profile?.avatar_url || null;
+
   const rankCrown = rank === 1 ? colors.energy : rank === 2 ? '#C0C0C0' : rank === 3 ? '#CD7F32' : null;
   const iconColor = muted ? colors.textSecondary : theme.type === 'glitch' ? '#00EAFF' : theme.color;
 
@@ -64,13 +71,29 @@ export default function Avatar({ profile, size = 46, rank, muted = false }) {
           backgroundColor: colors.surface,
           justifyContent: 'center',
           alignItems: 'center',
+          // Visible, so crowns and flames can sit outside the circle. The photo
+          // is clipped by its own borderRadius instead.
           overflow: 'visible',
         },
         extra,
         !muted && theme.type === 'demon' && { borderStyle: 'dashed' },
       ]}
     >
-      <User size={iconSize} color={iconColor} />
+      {photo ? (
+        <Image
+          source={{ uri: photo }}
+          // Inset by the border so the frame stays a frame rather than being
+          // covered by the photo's corner.
+          style={{
+            width: size - borderWidth * 2,
+            height: size - borderWidth * 2,
+            borderRadius: theme.type === 'glitch' && !muted ? size / 4 : size / 2,
+          }}
+          resizeMode="cover"
+        />
+      ) : (
+        <User size={iconSize} color={iconColor} />
+      )}
 
       {!muted && theme.type === 'royal' && (
         <Crown color={theme.color} size={iconSize * 0.8} fill="rgba(255, 215, 0, 0.3)" style={{ position: 'absolute', top: -size * 0.22 }} />

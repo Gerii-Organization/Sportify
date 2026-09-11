@@ -13,6 +13,7 @@ import FadeIn from '../components/FadeIn';
 import AmbientGlow from '../components/AmbientGlow';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
+import { formatVolume } from '../lib/units';
 
 /**
  * Every session you have finished.
@@ -33,7 +34,7 @@ import ErrorState from '../components/ErrorState';
  * double the ambient glow.
  */
 export default function HistoryScreen({ navigation, embedded = false }) {
-  const { user } = useAuth();
+  const { user, units } = useAuth();
   const [openId, setOpenId] = useState(null);
 
   const load = useCallback(async () => {
@@ -79,7 +80,7 @@ export default function HistoryScreen({ navigation, embedded = false }) {
               <View style={styles.rule} />
               <Total icon={<Clock color={colors.activity} size={18} />} value={formatHours(totals.minutes)} label="Trained" />
               <View style={styles.rule} />
-              <Total icon={<Weight color={colors.energy} size={18} />} value={formatVolume(totals.volume)} label="Lifted" />
+              <Total icon={<Weight color={colors.energy} size={18} />} value={formatVolume(totals.volume, units)} label="Lifted" />
             </FadeIn>
 
             {sessions.length === 0 ? (
@@ -116,7 +117,7 @@ export default function HistoryScreen({ navigation, embedded = false }) {
 
                           <View style={styles.rowRight}>
                             {Number(session.total_volume_kg) > 0 && (
-                              <Text style={styles.rowVolume}>{formatVolume(session.total_volume_kg)}</Text>
+                              <Text style={styles.rowVolume}>{formatVolume(session.total_volume_kg, units)}</Text>
                             )}
                             {expandable && (
                               <ChevronDown
@@ -202,12 +203,6 @@ function groupByMonth(sessions) {
 
 const formatHours = (minutes) => (minutes >= 60 ? `${Math.floor(minutes / 60)}h` : `${minutes}m`);
 
-/** Tonnes past four figures — "12.4t" is readable where "12420kg" is not. */
-function formatVolume(kg) {
-  const value = Number(kg) || 0;
-  if (value >= 1000) return `${(value / 1000).toFixed(1)}t`;
-  return `${Math.round(value)}kg`;
-}
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },

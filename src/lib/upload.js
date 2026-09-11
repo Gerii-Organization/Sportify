@@ -13,7 +13,21 @@ import { supabase } from './supabase';
  * Returns `{ url, path }`, or null when the user cancelled. Throws on a real
  * failure so the caller can say what went wrong.
  */
-export async function pickAndUploadImage({ bucket, pathPrefix, maxWidth = 1080 }) {
+export async function pickAndUploadImage({ bucket, pathPrefix, maxWidth = 1080, aspect = [16, 9] }) {
+  const uri = await pickImage({ aspect });
+  if (!uri) return null;
+
+  return uploadPickedImage({ uri, bucket, pathPrefix, maxWidth });
+}
+
+/**
+ * Just the picking half.
+ *
+ * Sign-up needs it on its own: there is no user id to store a file under until
+ * the account exists, so the photo is chosen at step three and uploaded after
+ * signUp returns. Resolves to a local uri, or null when cancelled.
+ */
+export async function pickImage({ aspect = [16, 9] } = {}) {
   const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
   if (!permission.granted) {
     throw new Error('Photo access is needed to choose an image.');
@@ -22,20 +36,23 @@ export async function pickAndUploadImage({ bucket, pathPrefix, maxWidth = 1080 }
   const picked = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: ImagePicker.MediaTypeOptions.Images,
     allowsEditing: true,
-    // Covers are drawn in a wide, short band, so cropping to that shape here
-    // beats letting the card decide which part of a portrait photo to discard.
-    aspect: [16, 9],
+    // Cropped to the shape it will be drawn in: a cover is a wide band, an
+    // avatar is a circle. Letting the component crop instead means it picks
+    // which part of a portrait photo to discard, and it always picks wrong.
+    aspect,
     quality: 1,
   });
 
   if (picked.canceled) return null;
+  return picked.assets[0].uri;
+}
 
-  const original = picked.assets[0];
-
+/** The uploading half. Returns the public URL, or throws. */
+export async function uploadPickedImage({ uri, bucket, pathPrefix, maxWidth = 1080 }) {
   // JPEG rather than the source format: a PNG screenshot of a workout plan can
   // be several times larger than the photo it replaces, for no visible gain.
   const resized = await ImageManipulator.manipulateAsync(
-    original.uri,
+    uri,
     [{ resize: { width: maxWidth } }],
     { compress: 0.75, format: ImageManipulator.SaveFormat.JPEG }
   );
@@ -58,5 +75,5 @@ export async function pickAndUploadImage({ bucket, pathPrefix, maxWidth = 1080 }
 
   // A cache-busting suffix, because the path is stable by design: without it
   // the old image stays on screen after a replacement.
-  return { url: `${data.publicUrl}?v=${Date.now()}`, path };
+  return `${data.publicUrl}?v=${Date.now()}`;
 }

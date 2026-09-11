@@ -5,6 +5,8 @@ import { supabase } from '../lib/supabase';
 import { colors, radius, spacing, gradients } from '../theme';
 import { todayKey } from '../lib/date';
 import BottomSheet from './BottomSheet';
+import { useAuth } from '../context/AuthContext';
+import { fromInputWeight, toDisplayWeight, weightLabel, formatDelta } from '../lib/units';
 
 /**
  * Body weight over time.
@@ -20,6 +22,7 @@ import BottomSheet from './BottomSheet';
 const DAYS_SHOWN = 30;
 
 export default function WeightSheet({ visible, onClose, profile, onSaved }) {
+  const { units } = useAuth();
   const [entries, setEntries] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(true);
@@ -47,9 +50,14 @@ export default function WeightSheet({ visible, onClose, profile, onSaved }) {
   }, [visible, load]);
 
   const handleSave = async () => {
-    const weight = parseFloat(input);
-    if (Number.isNaN(weight) || weight < 20 || weight > 400) {
-      return Alert.alert('Check the number', 'Enter a weight between 20 and 400 kg.');
+    // Typed in whatever the user reads, stored in kilograms — the bounds are
+    // checked on the stored value so they mean the same thing either way.
+    const weight = fromInputWeight(input, units);
+    if (weight === null || weight < 20 || weight > 400) {
+      return Alert.alert(
+        'Check the number',
+        `Enter a weight between ${toDisplayWeight(20, units, 1)} and ${toDisplayWeight(400, units, 1)} ${weightLabel(units)}.`
+      );
     }
 
     setSaving(true);
@@ -87,7 +95,7 @@ export default function WeightSheet({ visible, onClose, profile, onSaved }) {
         value={input}
         onChangeText={(v) => setInput(v.replace(/[^0-9.]/g, ''))}
         keyboardType="numeric"
-        placeholder={latest ? `Last: ${latest} kg` : 'e.g. 78.5'}
+        placeholder={latest ? `Last: ${toDisplayWeight(latest, units, 0.1)} ${weightLabel(units)}` : 'e.g. 78.5'}
         placeholderTextColor={colors.textFaint}
       />
 
@@ -106,10 +114,10 @@ export default function WeightSheet({ visible, onClose, profile, onSaved }) {
       ) : (
         <>
           <View style={styles.summary}>
-            <Stat label="Current" value={`${latest} kg`} />
+            <Stat label="Current" value={`${toDisplayWeight(latest, units, 0.1)} ${weightLabel(units)}`} />
             <Stat
               label="Change"
-              value={`${change > 0 ? '+' : ''}${change.toFixed(1)} kg`}
+              value={formatDelta(change, units)}
               tint={change > 0 ? colors.streak : colors.accent}
             />
             <Stat label="Readings" value={String(entries.length)} />
