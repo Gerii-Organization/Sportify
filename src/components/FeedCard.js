@@ -16,6 +16,9 @@ import Avatar from './Avatar';
  * people to stop looking at the row.
  */
 const KINDS = {
+  // A post has no verb: "Victor posted Bench felt light today" reads as a
+  // report about somebody writing, not as the thing they wrote.
+  post: { icon: MessageCircle, tint: colors.textSecondary, verb: '' },
   workout: { icon: Dumbbell, tint: colors.accent, verb: 'trained' },
   achievement: { icon: Trophy, tint: colors.energy, verb: 'unlocked' },
   record: { icon: TrendingUp, tint: colors.streak, verb: 'set a record' },

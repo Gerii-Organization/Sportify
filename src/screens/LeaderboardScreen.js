@@ -11,7 +11,7 @@ import { useAuth } from '../context/AuthContext';
 import Avatar from '../components/Avatar';
 import AmbientGlow from '../components/AmbientGlow';
 import { unwrap } from '../lib/query';
-import { SkeletonRows } from '../components/Skeleton';
+import { SkeletonLeaderboard } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import NameBadge from '../components/NameBadge';
@@ -120,7 +120,7 @@ export default function LeaderboardScreen({ embedded = false }) {
         <View style={styles.userInfo}>
           <View style={styles.nameRow}>
             <Text style={styles.userName} numberOfLines={1}>
-              {item.first_name || 'Athlete'} {isMe && '(Tu)'}
+              {item.first_name || 'Athlete'} {isMe && '(you)'}
             </Text>
             {/* Icon only here: a labelled pill on every row would compete with
                 the rank number, which is what the list is actually for. */}
@@ -151,7 +151,7 @@ export default function LeaderboardScreen({ embedded = false }) {
               style={[styles.toggleBtn, activeTab === 'friends' && styles.toggleBtnActive]}
               onPress={() => setActiveTab('friends')}
             >
-              <Users color={activeTab === 'friends' ? '#000' : '#888'} size={18} />
+              <Users color={activeTab === 'friends' ? colors.onAccent : colors.textFaint} size={18} />
               <Text style={[styles.toggleText, activeTab === 'friends' && styles.toggleTextActive]}>Friends Top</Text>
             </TouchableOpacity>
             
@@ -159,7 +159,7 @@ export default function LeaderboardScreen({ embedded = false }) {
               style={[styles.toggleBtn, activeTab === 'global' && styles.toggleBtnActive]}
               onPress={() => setActiveTab('global')}
             >
-              <Trophy color={activeTab === 'global' ? '#000' : '#888'} size={18} />
+              <Trophy color={activeTab === 'global' ? colors.onAccent : colors.textFaint} size={18} />
               <Text style={[styles.toggleText, activeTab === 'global' && styles.toggleTextActive]}>Global Top</Text>
             </TouchableOpacity>
           </View>
@@ -168,9 +168,7 @@ export default function LeaderboardScreen({ embedded = false }) {
         {error ? (
           <ErrorState message={error} onRetry={fetchData} />
         ) : loading ? (
-          <View style={styles.centerContainer}>
-            <SkeletonRows count={7} />
-          </View>
+          <SkeletonLeaderboard count={7} />
         ) : (
           <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}
           refreshControl={refreshControl}>
@@ -179,7 +177,7 @@ export default function LeaderboardScreen({ embedded = false }) {
                 icon={<Users color={colors.textFaint} size={44} />}
                 title={activeTab === 'friends' ? 'No one to rank yet' : 'Nobody on the board'}
                 message={activeTab === 'friends'
-                  ? 'Add a few friends and this becomes a race.'
+                  ? 'Add friends to see how you compare.'
                   : 'The global board fills up as people train.'}
               />
             ) : (
@@ -233,7 +231,7 @@ const styles = StyleSheet.create({
   scrollContent: { paddingHorizontal: 20, paddingBottom: 130 },
 
   userCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, padding: 16, borderRadius: 24, marginBottom: 10 },
-  myUserCard: { borderColor: colors.accent + '55', backgroundColor: 'rgba(46, 211, 198, 0.05)' },
+  myUserCard: { borderColor: colors.accent + '55', backgroundColor: 'rgba(155, 157, 214, 0.05)' },
   rankBox: { width: 30, alignItems: 'center' },
   rankText: { color: colors.textMuted, fontWeight: '600', fontSize: 15 },
   
@@ -246,7 +244,7 @@ const styles = StyleSheet.create({
   userTitle: { color: colors.accent, fontSize: 13, marginTop: 2 },
   
   userStats: { alignItems: 'flex-end' },
-  statChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255, 138, 43, 0.12)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, marginBottom: 6 },
+  statChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(224, 161, 122, 0.12)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, marginBottom: 6 },
   statChipText: { color: colors.streak, fontWeight: '600', fontSize: 13, marginLeft: 6 },
   statChipXP: { backgroundColor: colors.surfaceHigh, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 },
   statChipTextXP: { color: colors.text, fontWeight: '600', fontSize: 13 },

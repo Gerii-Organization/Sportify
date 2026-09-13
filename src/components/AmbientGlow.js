@@ -22,10 +22,14 @@ const { width: SCREEN_W } = Dimensions.get('window');
  *   height     how far down the screen it reaches
  *   intensity  0–1 opacity of the whole layer
  */
+// Nocturne has no daylight in it. All three tones are now moonlight at
+// different temperatures rather than aurora, teal and fire — 'warm' keeps a
+// terracotta cast because it sits behind the streak flame, which still has to
+// read as earned rather than as another cool metric.
 const TONES = {
-  ember: { inner: '#7FD9FF', mid: '#1E7FC4' },
-  accent: { inner: '#4FE8D8', mid: '#149C93' },
-  warm: { inner: '#FFB84D', mid: '#E8631A' },
+  ember: { inner: '#B9BBF0', mid: '#6F72AB' },
+  accent: { inner: '#C8CAEE', mid: '#8486C4' },
+  warm: { inner: '#E0A17A', mid: '#8A5A44' },
 };
 
 export default function AmbientGlow({ tone = 'ember', height = 340, intensity = 0.5 }) {

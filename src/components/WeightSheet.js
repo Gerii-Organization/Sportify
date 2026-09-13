@@ -7,6 +7,7 @@ import { todayKey } from '../lib/date';
 import BottomSheet from './BottomSheet';
 import { useAuth } from '../context/AuthContext';
 import { fromInputWeight, toDisplayWeight, weightLabel, formatDelta } from '../lib/units';
+import { SkeletonWeight } from './Skeleton';
 
 /**
  * Body weight over time.
@@ -108,9 +109,9 @@ export default function WeightSheet({ visible, onClose, profile, onSaved }) {
       </TouchableOpacity>
 
       {loading ? (
-        <ActivityIndicator color={colors.accent} style={{ marginTop: spacing.lg }} />
+        <SkeletonWeight />
       ) : entries.length === 0 ? (
-        <Text style={styles.empty}>No readings yet. Log one to start the chart.</Text>
+        <Text style={styles.empty}>No weigh-ins yet. Log one to start tracking.</Text>
       ) : (
         <>
           <View style={styles.summary}>

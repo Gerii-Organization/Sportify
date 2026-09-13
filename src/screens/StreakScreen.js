@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo } from 'react';
-import { View, Text, ScrollView, SafeAreaView, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, SafeAreaView, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChevronLeft, ChevronRight, Flame, Snowflake, Award, RotateCcw } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
@@ -12,6 +12,7 @@ import AmbientGlow from '../components/AmbientGlow';
 import ErrorState from '../components/ErrorState';
 import FadeIn from '../components/FadeIn';
 import Press from '../components/Press';
+import { SkeletonCalendar } from '../components/Skeleton';
 
 /**
  * The streak, as a screen rather than a sheet.
@@ -152,7 +153,7 @@ export default function StreakScreen({ navigation }) {
             {error ? (
               <ErrorState message={error} onRetry={reload} />
             ) : loading ? (
-              <ActivityIndicator color={colors.accent} style={{ marginVertical: 50 }} />
+              <SkeletonCalendar />
             ) : (
               <View style={styles.grid}>
                 {cells.map((date, i) => {
@@ -204,8 +205,7 @@ export default function StreakScreen({ navigation }) {
 
           <FadeIn index={restorable ? 4 : 3}>
             <Text style={styles.footnote}>
-              A day counts once you finish any workout. Miss a day and a freeze covers
-              it — buy them in the shop before you need one.
+              Finish any workout to count the day. If you miss one, a streak freeze keeps your streak going.
             </Text>
           </FadeIn>
         </ScrollView>
@@ -268,7 +268,7 @@ const styles = StyleSheet.create({
   heroLabel: { color: colors.textSecondary, fontSize: 16, fontWeight: '600', marginTop: -4 },
   freezeRow: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: 'rgba(143, 160, 255, 0.12)',
+    backgroundColor: 'rgba(169, 164, 212, 0.12)',
     paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999,
     marginTop: spacing.md,
   },
@@ -276,7 +276,7 @@ const styles = StyleSheet.create({
 
   restoreNote: {
     flexDirection: 'row', alignItems: 'center', gap: 9,
-    backgroundColor: 'rgba(255, 138, 43, 0.11)',
+    backgroundColor: 'rgba(224, 161, 122, 0.11)',
     borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12,
     marginBottom: spacing.md,
   },
@@ -344,7 +344,7 @@ const styles = StyleSheet.create({
   },
   dayToday: { borderWidth: 2, borderColor: colors.accent },
   dayText: { color: colors.textSecondary, fontSize: 14, fontWeight: '600' },
-  dayTextDone: { color: '#2A1000', fontWeight: '800' },
+  dayTextDone: { color: colors.onAccent, fontWeight: '800' },
   dayTextFuture: { color: colors.textDisabled },
 
   footnote: { color: colors.textMuted, fontSize: 13, lineHeight: 19, textAlign: 'center', paddingHorizontal: spacing.md },

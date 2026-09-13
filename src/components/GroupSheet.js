@@ -1,10 +1,12 @@
 import { useEffect, useState, useCallback } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { LogOut, Trash2, Check, Pencil } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors, radius, spacing } from '../theme';
 import Avatar from './Avatar';
 import BottomSheet from './BottomSheet';
+import { useConfirm } from './ConfirmDialog';
+import { SkeletonMembers } from './Skeleton';
 
 /**
  * Group settings — members, renaming, leaving, deleting.
@@ -19,6 +21,7 @@ import BottomSheet from './BottomSheet';
  * only get an error if they pressed them.
  */
 export default function GroupSheet({ visible, onClose, group, currentUserId, onChanged }) {
+  const confirmAction = useConfirm();
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [renaming, setRenaming] = useState(false);
@@ -79,51 +82,44 @@ export default function GroupSheet({ visible, onClose, group, currentUserId, onC
     onChanged?.();
   };
 
-  const handleLeave = () => {
-    Alert.alert(
-      'Leave group',
-      isOwner
-        ? 'You created this group. Leaving does not delete it — the conversation stays for everyone else.'
-        : 'You will stop receiving messages from this group.',
-      [
-        { text: 'Stay', style: 'cancel' },
-        {
-          text: 'Leave',
-          style: 'destructive',
-          onPress: async () => {
-            const { error } = await supabase
-              .from('group_members')
-              .delete()
-              .eq('group_id', group.id)
-              .eq('user_id', currentUserId);
+  const handleLeave = async () => {
+    const ok = await confirmAction({
+      tone: 'danger',
+      icon: LogOut,
+      title: `Leave ${group?.name || 'this group'}?`,
+      message: isOwner
+        ? 'The group stays active for the other members.'
+        : 'You will stop getting messages from this group.',
+      confirmLabel: 'Leave',
+      cancelLabel: 'Stay',
+    });
+    if (!ok) return;
 
-            if (error) return Alert.alert('Could not leave', error.message);
-            onClose();
-            onChanged?.();
-          },
-        },
-      ]
-    );
+    const { error } = await supabase
+      .from('group_members')
+      .delete()
+      .eq('group_id', group.id)
+      .eq('user_id', currentUserId);
+
+    if (error) return Alert.alert('Could not leave', error.message);
+    onClose();
+    onChanged?.();
   };
 
-  const handleDelete = () => {
-    Alert.alert(
-      'Delete group',
-      `"${group.name}" and every message in it will be removed for all ${members.length} members. This cannot be undone.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            const { error } = await supabase.from('groups').delete().eq('id', group.id);
-            if (error) return Alert.alert('Could not delete', error.message);
-            onClose();
-            onChanged?.();
-          },
-        },
-      ]
-    );
+  const handleDelete = async () => {
+    const ok = await confirmAction({
+      tone: 'danger',
+      icon: Trash2,
+      title: `Delete ${group?.name || 'this group'}?`,
+      message: `All messages will be deleted for all ${members.length} members. This cannot be undone.`,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+
+    const { error } = await supabase.from('groups').delete().eq('id', group.id);
+    if (error) return Alert.alert('Could not delete', error.message);
+    onClose();
+    onChanged?.();
   };
 
   return (
@@ -157,7 +153,7 @@ export default function GroupSheet({ visible, onClose, group, currentUserId, onC
       </Text>
 
       {loading ? (
-        <ActivityIndicator color={colors.accent} style={{ marginVertical: spacing.lg }} />
+        <SkeletonMembers count={4} />
       ) : (
         <View style={styles.list}>
           {members.map((member) => (

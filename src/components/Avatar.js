@@ -56,7 +56,7 @@ export default function Avatar({ profile, size = 46, rank, muted = false }) {
   // app not knowing who you are, and a face would contradict that.
   const photo = muted ? null : profile?.avatar_url || null;
 
-  const rankCrown = rank === 1 ? colors.energy : rank === 2 ? '#C0C0C0' : rank === 3 ? '#CD7F32' : null;
+  const rankCrown = rank === 1 ? colors.energy : rank === 2 ? '#BFBCC9' : rank === 3 ? '#B08968' : null;
   const iconColor = muted ? colors.textSecondary : theme.type === 'glitch' ? '#00EAFF' : theme.color;
 
   return (
@@ -96,7 +96,7 @@ export default function Avatar({ profile, size = 46, rank, muted = false }) {
       )}
 
       {!muted && theme.type === 'royal' && (
-        <Crown color={theme.color} size={iconSize * 0.8} fill="rgba(255, 215, 0, 0.3)" style={{ position: 'absolute', top: -size * 0.22 }} />
+        <Crown color={theme.color} size={iconSize * 0.8} fill="rgba(222, 184, 102, 0.3)" style={{ position: 'absolute', top: -size * 0.22 }} />
       )}
       {!muted && (theme.type === 'demon' || theme.type === 'inferno_avatar') && (
         <Flame color={theme.color} size={size * 0.8} style={{ position: 'absolute', opacity: 0.3, zIndex: -1 }} />

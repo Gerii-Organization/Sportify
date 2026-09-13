@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView,
+  View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView,
 } from 'react-native';
 import { Send } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
@@ -8,6 +8,7 @@ import { colors, radius, spacing } from '../theme';
 import { formatRelativeDate } from '../lib/date';
 import Avatar from './Avatar';
 import BottomSheet from './BottomSheet';
+import { SkeletonComments } from './Skeleton';
 
 /**
  * Comments on one feed event.
@@ -82,9 +83,9 @@ export default function CommentSheet({ event, visible, onClose, currentUserId, o
     <BottomSheet visible={visible} onClose={onClose} title={event?.title}>
       <ScrollView style={styles.list} keyboardShouldPersistTaps="handled">
         {loading ? (
-          <ActivityIndicator color={colors.accent} style={{ marginVertical: spacing.lg }} />
+          <SkeletonComments count={3} />
         ) : comments.length === 0 ? (
-          <Text style={styles.empty}>No comments yet. Say something.</Text>
+          <Text style={styles.empty}>No comments yet. Be the first.</Text>
         ) : (
           comments.map((comment) => (
             <View key={comment.id} style={styles.row}>

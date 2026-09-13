@@ -16,7 +16,7 @@ export const SPLIT_PRESETS = [
   {
     id: 'full_body',
     name: 'Full body',
-    note: 'One session type, everything each time. Hard to fall behind on.',
+    note: 'Train your whole body every session.',
     suggested: [2, 3],
     days: [
       { label: 'Full body', muscles: ['Chest', 'Back', 'Legs'] },
@@ -25,7 +25,7 @@ export const SPLIT_PRESETS = [
   {
     id: 'upper_lower',
     name: 'Upper / Lower',
-    note: 'Two alternating sessions. The usual step up from full body.',
+    note: 'Alternate upper and lower body days.',
     suggested: [4],
     days: [
       { label: 'Upper', muscles: ['Chest', 'Back', 'Shoulders', 'Arms'] },
@@ -35,7 +35,7 @@ export const SPLIT_PRESETS = [
   {
     id: 'ppl',
     name: 'Push / Pull / Legs',
-    note: 'Grouped by movement. Run once through for 3 days, twice for 6.',
+    note: 'Push, pull and legs. Works for 3 or 6 days a week.',
     suggested: [3, 6],
     days: [
       { label: 'Push', muscles: ['Chest', 'Shoulders', 'Arms'] },
@@ -57,7 +57,7 @@ export const SPLIT_PRESETS = [
   {
     id: 'bro',
     name: 'Bro split',
-    note: 'One muscle group a day. Most volume per group, least often.',
+    note: 'One muscle group per session.',
     suggested: [5],
     days: [
       { label: 'Chest', muscles: ['Chest'] },

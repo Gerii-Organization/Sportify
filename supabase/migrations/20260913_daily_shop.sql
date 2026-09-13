@@ -130,9 +130,11 @@ as $$
     greatest(1, s.price - (s.price * public.daily_discount(s.id)) / 100) as final_price,
     (
       s.id in (select item_id from public.user_inventory where user_id = auth.uid())
-      or (s.type = 'title' and s.id = any(
-            coalesce((select owned_titles from public.profiles where id = auth.uid()), array[]::text[])
-         ))
+      -- owned_titles is a jsonb array of title strings; `?` tests membership.
+      or (s.type = 'title' and coalesce(
+            (select owned_titles from public.profiles where id = auth.uid()),
+            '[]'::jsonb
+          ) ? s.id)
     ) as owned
   from public.shop_items s
   where s.id in (select id from public.daily_shop_ids());

@@ -170,7 +170,7 @@ export default function EditProfileSheet({ visible, onClose, profile, onSaved, i
         ))}
       </Section>
 
-      <Section title="Targets" note="Changes your calorie target and the workouts you are offered.">
+      <Section title="Targets" note="Used for your calorie target and workout suggestions.">
         <Row label="Goal" stacked>
           <ChipRow options={GOALS} selected={form.goal} onSelect={(v) => setField('goal', v)} />
         </Row>

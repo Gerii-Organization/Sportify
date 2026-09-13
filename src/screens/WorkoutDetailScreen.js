@@ -6,8 +6,8 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { 
   ChevronLeft, Edit3, Plus, X, Play, CheckCircle2, Circle, Clock, 
-  Save, Trash2, Zap, Star, Flame, ChevronUp, ChevronDown, Info,
-  Link2, Unlink2, CloudOff
+  Save, Trash2, ChevronUp, ChevronDown, Info,
+  Link2, Unlink2
 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors } from '../theme';
@@ -17,19 +17,20 @@ import { formatStopwatch } from '../lib/date';
 import { gradients } from '../theme';
 import RestTimer, { restSecondsFor } from '../components/RestTimer';
 import { useAuth } from '../context/AuthContext';
-import PersonalRecordCard from '../components/PersonalRecordCard';
-import { AchievementIcon } from '../lib/achievements';
 import { scheduleRestAlert, cancelRestAlert } from '../lib/restNotification';
 import { getSetting } from '../lib/settings';
 import { groupOf, restsAfter, linkWithNext, unlink } from '../lib/superset';
 import { ExerciseHistorySheet } from './RecordsScreen';
 import { queueCompletion, saveDraft, loadDraft, clearDraft } from '../lib/pendingWorkouts';
 import { nextType, patchForType, markFor, countsAsWork, describeType, tintFor } from '../lib/setTypes';
-import { fromInputWeight, toDisplayWeight, weightLabel, formatWeight } from '../lib/units';
+import { fromInputWeight, toDisplayWeight, weightLabel } from '../lib/units';
 import { listAllExercises, addCustom } from '../lib/customExercises';
 import { saveWorkoutToHealth } from '../lib/health';
 import { track, EVENTS } from '../lib/analytics';
 import Button from '../components/Button';
+import WorkoutSummary from '../components/WorkoutSummary';
+import { useConfirm } from '../components/ConfirmDialog';
+import { estimateKcal } from '../lib/workoutStats';
 import { deviceTimeZone } from '../lib/date';
 
 
@@ -44,6 +45,7 @@ const cueOf = (name) =>
 
 export default function WorkoutDetailScreen({ route, navigation }) {
   const { user, profile, refreshProfile, units } = useAuth();
+  const confirmAction = useConfirm();
   const workout = route?.params?.workout;
   const onSave = route?.params?.onSave;
   /** Chosen from the workouts screen's edit mode, so it opens ready to change
@@ -112,7 +114,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
   const [restEndsAt, setRestEndsAt] = useState(null);
   /** Id of the pending local notification, so it can be cancelled. */
   const restAlertId = useRef(null);
-  const [workoutStats, setWorkoutStats] = useState({ volume: 0, time: 0, message: '', xpGained: 50, energyGained: 0, isFirstWorkoutToday: false, newStreak: 0, records: [], achievements: [] });
+  const [workoutStats, setWorkoutStats] = useState({ volume: 0, time: 0, sets: 0, exercises: 0, kcal: null, message: '', xpGained: 50, energyGained: 0, isFirstWorkoutToday: false, newStreak: 0, records: [], achievements: [] });
 
   useEffect(() => {
     if (!workout) {
@@ -328,24 +330,33 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     setMuscleFilter(null);
   };
 
-  const confirmDeleteExercise = (exId) => {
-    Alert.alert("Remove Exercise", "Remove this exercise from the workout?", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Remove", style: "destructive", onPress: () => setCurrentWorkout({ ...currentWorkout, exercises: currentWorkout.exercises.filter(ex => ex.id !== exId) }) }
-    ]);
+  const confirmDeleteExercise = async (exId) => {
+    const exercise = currentWorkout.exercises.find((ex) => ex.id === exId);
+    const ok = await confirmAction({
+      tone: 'danger',
+      icon: Trash2,
+      title: `Remove ${exercise?.name || 'this exercise'}?`,
+      message: 'Its sets will be removed from this routine.',
+      confirmLabel: 'Remove',
+    });
+    if (!ok) return;
+    setCurrentWorkout((w) => ({ ...w, exercises: w.exercises.filter((ex) => ex.id !== exId) }));
   };
 
-  const confirmDeleteSet = (exId, setId) => {
-    Alert.alert("Remove Set", "Delete this set?", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Delete", style: "destructive", onPress: () => {
-        const updated = currentWorkout.exercises.map(ex => {
-          if (ex.id === exId) return { ...ex, sets: ex.sets.filter(s => s.id !== setId) };
-          return ex;
-        });
-        setCurrentWorkout({ ...currentWorkout, exercises: updated });
-      }}
-    ]);
+  const confirmDeleteSet = async (exId, setId) => {
+    const ok = await confirmAction({
+      tone: 'danger',
+      icon: Trash2,
+      title: 'Remove this set?',
+      confirmLabel: 'Remove',
+    });
+    if (!ok) return;
+    setCurrentWorkout((w) => ({
+      ...w,
+      exercises: w.exercises.map((ex) => (
+        ex.id === exId ? { ...ex, sets: ex.sets.filter((s) => s.id !== setId) } : ex
+      )),
+    }));
   };
 
   const toggleSetCompletion = (exerciseId, setId) => {
@@ -386,7 +397,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     const doneSets = allSets.filter((s) => s.completed);
 
     if (doneSets.length === 0) {
-      Alert.alert('Nothing logged yet', 'Mark at least one set as done before finishing.', [{ text: 'OK' }]);
+      Alert.alert('Nothing logged yet', 'Complete at least one set before finishing.');
       return;
     }
 
@@ -395,14 +406,14 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     // than refusing to save anything at all.
     if (doneSets.length < allSets.length) {
       const remaining = allSets.length - doneSets.length;
-      Alert.alert(
-        'Finish early?',
-        `You have ${remaining} set${remaining === 1 ? '' : 's'} left. You can save what you have done and come back to the rest another time.`,
-        [
-          { text: 'Keep training', style: 'cancel' },
-          { text: 'Save and finish', onPress: () => processWorkoutCompletion(doneSets.length, allSets.length) },
-        ]
-      );
+      const ok = await confirmAction({
+        icon: CheckCircle2,
+        title: 'Finish early?',
+        message: `You have ${remaining} set${remaining === 1 ? '' : 's'} left. The sets you completed will be saved.`,
+        confirmLabel: 'Finish',
+        cancelLabel: 'Keep going',
+      });
+      if (ok) processWorkoutCompletion(doneSets.length, allSets.length);
       return;
     }
 
@@ -410,14 +421,14 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     // nudge, not a lockout — the user decides.
     const minRealisticSeconds = doneSets.length * 20;
     if (timer < minRealisticSeconds) {
-      Alert.alert(
-        'That was quick',
-        `${doneSets.length} sets in ${formatStopwatch(timer)}. If that is right, go ahead — otherwise keep the timer running.`,
-        [
-          { text: 'Keep training', style: 'cancel' },
-          { text: 'Save anyway', onPress: () => processWorkoutCompletion(doneSets.length, allSets.length) },
-        ]
-      );
+      const ok = await confirmAction({
+        icon: Clock,
+        title: 'That was quick',
+        message: `${doneSets.length} sets in ${formatStopwatch(timer)}. Save this workout anyway?`,
+        confirmLabel: 'Save',
+        cancelLabel: 'Keep going',
+      });
+      if (ok) processWorkoutCompletion(doneSets.length, allSets.length);
       return;
     }
 
@@ -541,6 +552,11 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     setWorkoutStats({
       volume: totalKg,
       time: timer,
+      sets: performed.reduce((total, ex) => total + ex.sets.length, 0),
+      exercises: performed.length,
+      // On screen only, and labelled as an estimate. Never written to Health —
+      // see the note on saveWorkoutToHealth below.
+      kcal: estimateKcal({ duration: `${elapsedMinutes} min`, exercises: performed }, profile?.weight),
       message: randomMsg,
       xpGained: finalXP,
       energyGained: finalEnergy,
@@ -620,10 +636,14 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       // message costs nothing.
       navigation.goBack();
     } else if (mode === 'editing') {
-      Alert.alert('Unsaved Changes', 'You have unsaved edits. Do you still want to leave?', [
-        { text: 'Back to editing', style: 'cancel' },
-        { text: 'Leave without saving', style: 'destructive', onPress: () => navigation.goBack() }
-      ]);
+      confirmAction({
+        tone: 'danger',
+        icon: Edit3,
+        title: 'Discard your changes?',
+        message: 'Your edits to this routine will not be saved.',
+        confirmLabel: 'Discard',
+        cancelLabel: 'Keep editing',
+      }).then((ok) => { if (ok) navigation.goBack(); });
     } else {
       if (onSave) onSave(currentWorkout);
       navigation.goBack();
@@ -878,133 +898,17 @@ export default function WorkoutDetailScreen({ route, navigation }) {
           </View>
         )}
 
-        <Modal visible={showSummary} animationType="slide">
-          <SafeAreaView style={styles.summaryContainer}>
-            <LinearGradient colors={gradients.screen} style={{ flex: 1 }}>
-            <ScrollView contentContainerStyle={styles.summaryScroll}>
-              <View style={styles.summaryHeader}>
-                <CheckCircle2 color={colors.accent} size={80} style={{ marginBottom: 20 }} />
-                <Text style={styles.summaryTitle}>WORKOUT{'\n'}COMPLETED!</Text>
-                <Text style={styles.summaryMessage}>{workoutStats.message}</Text>
-            </View>
-
-            <View style={styles.duoCard}>
-              <View style={styles.duoStatRow}>
-                <View style={styles.duoStatBox}>
-                  <Text style={styles.duoStatLabel}>Total time</Text>
-                  <Text style={styles.duoStatValue}>{formatStopwatch(workoutStats.time)}</Text>
-                </View>
-                <View style={styles.duoDivider} />
-                <View style={styles.duoStatBox}>
-                  <Text style={styles.duoStatLabel}>Total volume</Text>
-                  <Text style={styles.duoStatValue}>{formatWeight(workoutStats.volume, units, { step: 1 })}</Text>
-                </View>
-              </View>
-            </View>
-
-            {completionId && (
-              <View style={styles.duoCard}>
-                <Text style={styles.duoRewardTitle}>How did it go?</Text>
-                {/* Saved on blur rather than behind a button: a note nobody
-                    remembered to save is the same as no note. */}
-                <TextInput
-                  style={styles.noteInput}
-                  value={note}
-                  onChangeText={setNote}
-                  onBlur={saveNote}
-                  placeholder="Bar felt heavy, shoulder fine — optional"
-                  placeholderTextColor={colors.textFaint}
-                  multiline
-                  maxLength={280}
-                />
-              </View>
-            )}
-
-            {/* Queued, not lost, and not rewarded yet either. The rewards card
-                is hidden rather than showing zeroes: the server decides XP and
-                energy, and it has not seen this session. Claiming +0 XP would
-                be the app reporting a punishment for training offline. */}
-            {workoutStats.queued ? (
-              <View style={styles.duoCard}>
-                <View style={styles.offlineRow}>
-                  <CloudOff color={colors.textMuted} size={20} />
-                  <Text style={styles.offlineTitle}>Saved on this phone</Text>
-                </View>
-                <Text style={styles.offlineBody}>
-                  No connection just now, so this session is waiting on your phone. It
-                  uploads by itself next time the app can reach the server, and your XP,
-                  energy and streak land then.
-                </Text>
-              </View>
-            ) : (
-              <View style={styles.duoCard}>
-                <Text style={styles.duoRewardTitle}>Rewards Earned</Text>
-                <View style={styles.duoStatRow}>
-                  <View style={styles.duoRewardBox}>
-                    <Star color={colors.water} size={32} fill={colors.water} />
-                    <Text style={[styles.duoStatValue, { color: colors.water, marginTop: 10 }]}>+{workoutStats.xpGained} XP</Text>
-                  </View>
-                  <View style={styles.duoRewardBox}>
-                    <Zap color={colors.energy} size={32} fill={colors.energy} />
-                    <Text style={[styles.duoStatValue, { color: colors.energy, marginTop: 10 }]}>+{workoutStats.energyGained} ⚡</Text>
-                  </View>
-                </View>
-              </View>
-            )}
-
-            <PersonalRecordCard records={workoutStats.records} />
-
-            {workoutStats.achievements?.length > 0 && (
-              <View style={[styles.duoCard, { borderColor: colors.accent }]}>
-                <Text style={styles.duoRewardTitle}>
-                  {workoutStats.achievements.length === 1 ? 'Achievement unlocked' : 'Achievements unlocked'}
-                </Text>
-                {workoutStats.achievements.map((a) => (
-                  <View key={a.code} style={styles.unlockRow}>
-                    <AchievementIcon name={a.icon} color={colors.accent} size={22} />
-                    <View style={{ flex: 1, marginLeft: 10 }}>
-                      <Text style={styles.unlockName}>{a.name}</Text>
-                      <Text style={styles.unlockDesc}>{a.description}</Text>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            )}
-
-            {workoutStats.freezeUsed && (
-              <View style={[styles.duoCard, { borderColor: colors.water }]}>
-                <Text style={[styles.duoRewardTitle, { color: colors.water, marginBottom: 6 }]}>
-                  Streak Freeze used
-                </Text>
-                <Text style={styles.duoStreakSub}>
-                  You missed a day, so one freeze was spent to keep your streak alive.
-                </Text>
-              </View>
-            )}
-
-            {workoutStats.isFirstWorkoutToday && (
-              <View style={[styles.duoCard, { borderColor: colors.streak, backgroundColor: 'rgba(255, 138, 43, 0.12)' }]}>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <View style={styles.streakCircle}>
-                    <Flame color={colors.streak} size={36} fill={colors.streak} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.duoStreakTitle}>{workoutStats.newStreak}-Day Streak! 🔥</Text>
-                    <Text style={styles.duoStreakSub}>Great work. You’ve extended your training streak.</Text>
-                  </View>
-                </View>
-              </View>
-            )}
-
-            </ScrollView>
-
-            <View style={styles.duoFooter}>
-              <Button label="Continue" onPress={closeSummaryAndExit} />
-            </View>
-            </LinearGradient>
-          </SafeAreaView>
-        </Modal>
-
+        <WorkoutSummary
+          visible={showSummary}
+          stats={workoutStats}
+          workoutName={currentWorkout.name}
+          units={units}
+          canNote={!!completionId}
+          note={note}
+          onChangeNote={setNote}
+          onSaveNote={saveNote}
+          onContinue={closeSummaryAndExit}
+        />
 
         <Modal visible={isExerciseSelectorVisible} animationType="slide" transparent>
           <View style={styles.modalOverlay}>
@@ -1133,7 +1037,7 @@ const styles = StyleSheet.create({
   gradientBg: { flex: 1 },
   detailHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingTop: Platform.OS === 'android' ? 40 : 15, borderBottomWidth: 1, borderBottomColor: colors.border },
   detailTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
-  timerHeader: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(46, 211, 198, 0.1)', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24 },
+  timerHeader: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(155, 157, 214, 0.1)', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24 },
   timerText: { color: colors.accent, fontSize: 17, fontWeight: '700', marginLeft: 10 },
   startBigBtn: { flexDirection: 'row', backgroundColor: colors.accent, margin: 20, padding: 20, borderRadius: 28, justifyContent: 'center', alignItems: 'center', shadowColor: colors.accent, shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
   startBigBtnText: { color: colors.onAccent, fontWeight: '700', fontSize: 17, marginLeft: 10 },
@@ -1154,13 +1058,13 @@ const styles = StyleSheet.create({
   tableHeader: { flexDirection: 'row', marginBottom: 10 },
   tableHeaderText: { color: colors.textMuted, fontSize: 13, textAlign: 'center', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.7 },
   setRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: colors.borderLight },
-  setRowCompleted: { backgroundColor: 'rgba(46, 211, 198, 0.05)', borderRadius: 12 },
+  setRowCompleted: { backgroundColor: 'rgba(155, 157, 214, 0.05)', borderRadius: 12 },
   setText: { color: colors.text, textAlign: 'center' },
   setInput: { flex: 1, backgroundColor: colors.surfaceHigh, color: colors.text, borderRadius: 10, padding: 10, marginHorizontal: 6, textAlign: 'center', fontSize: 15, fontWeight: '600' },
   checkboxContainer: { flex: 0.6, alignItems: 'center', justifyContent: 'center' },
   addSetBtn: { marginTop: 16, alignItems: 'center', paddingVertical: 6 },
   addSetText: { color: colors.textSecondary, fontSize: 15, fontWeight: '600' },
-  addExerciseBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(46, 211, 198, 0.1)', padding: 16, borderRadius: 18, marginBottom: 26, borderWidth: 1, borderColor: colors.accent + 'AA' },
+  addExerciseBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(155, 157, 214, 0.1)', padding: 16, borderRadius: 18, marginBottom: 26, borderWidth: 1, borderColor: colors.accent + 'AA' },
   addExerciseText: { color: colors.accent, fontWeight: '600', fontSize: 15, marginLeft: 10 },
   restWrapper: {
     position: 'absolute',
@@ -1209,20 +1113,7 @@ const styles = StyleSheet.create({
   exerciseDbName: { color: colors.text, fontSize: 15, fontWeight: '600' },
   exerciseDbMuscle: { color: colors.textSecondary, fontSize: 13, marginTop: 6 },
 
-  summaryContainer: { flex: 1, backgroundColor: colors.background },
-  summaryScroll: { padding: 20, alignItems: 'center', paddingBottom: 100 },
-  summaryHeader: { alignItems: 'center', marginVertical: 40 },
-  summaryTitle: { color: colors.accent, fontSize: 34, fontWeight: '900', textAlign: 'center', letterSpacing: 1 },
-  summaryMessage: { color: colors.text, fontSize: 15, textAlign: 'center', marginTop: 16, fontStyle: 'italic', paddingHorizontal: 20 },
 
-  duoCard: { backgroundColor: colors.card, width: '100%', borderRadius: 26, padding: 20, marginBottom: 20 },
-  duoStatRow: { flexDirection: 'row', justifyContent: 'space-evenly', alignItems: 'center' },
-  duoStatBox: { alignItems: 'center', flex: 1 },
-  noteInput: {
-    backgroundColor: colors.surface, color: colors.text,
-    borderRadius: 14, padding: 14, fontSize: 15, minHeight: 76,
-    textAlignVertical: 'top', marginTop: 4,
-  },
   // Last time's numbers are the reason the column exists, so they are readable
   // rather than the faintest thing on the row.
   // Colour comes from the set's type; this only carries the weight.
@@ -1236,26 +1127,9 @@ const styles = StyleSheet.create({
   addCustomText: { color: colors.onAccent, fontSize: 15, fontWeight: '700' },
   addCustomNote: { color: colors.textFaint, fontSize: 12, textAlign: 'center', marginTop: 12, lineHeight: 17 },
   prevKnown: { color: colors.textSecondary, fontVariant: ['tabular-nums'] },
-  duoDivider: { width: 2, height: 40, backgroundColor: colors.border },
-  duoStatLabel: { color: colors.textSecondary, fontSize: 13, fontWeight: '600', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.7 },
-  duoStatValue: { color: colors.text, fontSize: 26, fontWeight: '900' },
-  offlineRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
-  offlineTitle: { color: colors.text, fontSize: 16, fontWeight: '700', letterSpacing: -0.3 },
-  offlineBody: { color: colors.textMuted, fontSize: 13, lineHeight: 19 },
 
-  duoRewardTitle: { color: colors.text, fontSize: 15, fontWeight: '600', textAlign: 'center', marginBottom: 20 },
-  duoRewardBox: { alignItems: 'center', flex: 1 },
-  unlockRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: 1, borderTopColor: colors.border },
-  unlockName: { color: colors.text, fontSize: 15, fontWeight: '600' },
-  unlockDesc: { color: colors.textSecondary, fontSize: 13, marginTop: 2 },
 
-  streakCircle: { width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(255, 138, 43, 0.12)', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
-  duoStreakTitle: { color: colors.streak, fontSize: 20, fontWeight: '900' },
-  duoStreakSub: { color: colors.streak, fontSize: 13, marginTop: 6, fontWeight: '600' },
 
-  duoFooter: { position: 'absolute', bottom: Platform.OS === 'ios' ? 10 : 0, width: '100%', padding: 20, backgroundColor: colors.background, borderTopWidth: 1, borderTopColor: colors.border },
-  duoButton: { backgroundColor: colors.accent, paddingVertical: 20, borderRadius: 20, alignItems: 'center', width: '100%' },
-  duoButtonText: { color: colors.onAccent, fontSize: 17, fontWeight: '900', letterSpacing: 1 },
 
   modalOverlayFull: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' },
   modalContentTooFast: { backgroundColor: colors.card, borderRadius: 32, padding: 26, width: '85%', alignItems: 'center', borderWidth: 1, borderColor: colors.danger },

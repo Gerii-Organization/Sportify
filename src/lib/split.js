@@ -127,3 +127,30 @@ export function weekOutlook({ doneDays, target, weekKeys, today }) {
     reachable: left === 0 || left <= daysLeft,
   };
 }
+
+/**
+ * Sessions to aim for this week, reconciling the split with the weekly number.
+ *
+ * The two are independent on purpose (see constants/splits.js), but the week
+ * strip only ever showed the profile's number — so someone who said 5 a week
+ * at sign-up and later built a 3-day split saw "2 of 5" beside a plan with
+ * three days in it.
+ *
+ *   no split                       the profile's number
+ *   cycle longer than that number  the profile's number: a 5-day cycle at 3 a
+ *                                  week takes about 12 days, and 3 is still
+ *                                  what this week asks for
+ *   otherwise                      whole cycles that fit in it — a 3-day split
+ *                                  at 5 a week is 3, at 6 a week is 6
+ *
+ * Null when there is neither, which hides the strip rather than showing "of 0".
+ */
+export function weeklyTarget(split, perWeek) {
+  const goal = Number(perWeek) || 0;
+  const length = Array.isArray(split) ? split.length : 0;
+
+  if (!length) return goal || null;
+  if (!goal) return length;
+  if (length > goal) return goal;
+  return length * Math.floor(goal / length);
+}

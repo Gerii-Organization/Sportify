@@ -149,7 +149,7 @@ export default function SettingsDrawer({
                   label="Privacy policy"
                   onPress={() => {
                     if (!LINKS_CONFIGURED) {
-                      return Alert.alert('Not published yet', 'The privacy policy URL has not been set in src/constants/links.js.');
+                      return Alert.alert('Coming soon', 'The privacy policy will be available here soon.');
                     }
                     Linking.openURL(PRIVACY_URL);
                   }}
@@ -161,9 +161,8 @@ export default function SettingsDrawer({
                     Alert.alert(
                       'How scoring works',
                       'XP: 50 per workout, +20 when you lift over 1000 kg, 30 for hitting your water goal.\n\n' +
-                      'Those thresholds are metric wherever you have the app set to pounds — they are counted on the stored figure.\n\n' +
                       'Energy: 5 per minute trained, up to 500 a session. Spend it in the Shop.\n\n' +
-                      'Streak: one workout on consecutive calendar days. Miss a day and it resets, but the old streak can be bought back.'
+                      'Streak: train on consecutive days. Miss one and it resets, unless a streak freeze covers it.'
                     )
                   }
                 />
@@ -172,7 +171,7 @@ export default function SettingsDrawer({
                 {isLoggedIn ? (
                   <>
                     <TouchableOpacity activeOpacity={0.7} style={styles.logoutButton} onPress={onSignOut}>
-                      <LogIn color={colors.danger} size={20} /><Text style={styles.logoutText}>Sign Out</Text>
+                      <LogIn color={colors.danger} size={20} /><Text style={styles.logoutText}>Sign out</Text>
                     </TouchableOpacity>
 
                     {/* Quiet and last. It has to be findable — Play requires it
@@ -189,7 +188,7 @@ export default function SettingsDrawer({
                   </>
                 ) : (
                   <TouchableOpacity activeOpacity={0.7} style={styles.loginButtonWrapper} onPress={() => { onClose(); onSignIn(); }}>
-                    <Text style={styles.loginButtonText}>Log In / Create Account</Text>
+                    <Text style={styles.loginButtonText}>Log in or sign up</Text>
                   </TouchableOpacity>
                 )}
               </View>

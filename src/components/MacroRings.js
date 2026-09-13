@@ -14,9 +14,9 @@ import { colors, spacing } from '../theme';
  */
 
 const MACROS = [
-  { key: 'protein', label: 'Protein', color: colors.calories, dim: 'rgba(255,107,107,0.15)', r: 40 },
-  { key: 'carbs',   label: 'Carbs',   color: colors.activity, dim: 'rgba(77,121,255,0.15)',  r: 30 },
-  { key: 'fats',    label: 'Fats',    color: colors.energy, dim: 'rgba(255,215,0,0.15)',   r: 20 },
+  { key: 'protein', label: 'Protein', color: colors.calories, dim: 'rgba(255, 180, 171,0.15)', r: 40 },
+  { key: 'carbs',   label: 'Carbs',   color: colors.activity, dim: 'rgba(143, 199, 181, 0.15)',  r: 30 },
+  { key: 'fats',    label: 'Fats',    color: colors.energy, dim: 'rgba(222, 184, 102,0.15)',   r: 20 },
 ];
 
 export default function MacroRings({ totals, targets }) {

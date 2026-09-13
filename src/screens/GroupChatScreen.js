@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { 
   StyleSheet, View, Text, SafeAreaView, TextInput, TouchableOpacity, 
-  FlatList, KeyboardAvoidingView, Platform, ActivityIndicator
+  FlatList, KeyboardAvoidingView, Platform
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChevronLeft, Send, Hash, Users } from 'lucide-react-native';
@@ -13,6 +13,7 @@ import { formatClockTime } from '../lib/date';
 import { gradients } from '../theme';
 import GroupSheet from '../components/GroupSheet';
 import DaySeparator, { needsSeparator, dayLabel } from '../components/DaySeparator';
+import { SkeletonMessages } from '../components/Skeleton';
 
 
 export default function GroupChatScreen({ route, navigation }) {
@@ -157,7 +158,7 @@ export default function GroupChatScreen({ route, navigation }) {
         {loadError ? (
           <ErrorState message={loadError} />
         ) : loading ? (
-          <View style={styles.centerContainer}><ActivityIndicator color={colors.accent} /></View>
+          <SkeletonMessages group />
         ) : (
           <FlatList
             ref={flatListRef} data={messages} keyExtractor={(item) => item.id.toString()} renderItem={renderMessage}

@@ -27,16 +27,8 @@ $guard$;
 
 commit;
 
--- ---------------------------------------------------------------------------
--- RUN THIS PART BY HAND, after checking the existing definition:
---
---   select pg_get_viewdef('public.public_profiles', true);
---
--- The view has to be recreated with `avatar_url` added to its select list. It
--- is left out of the transaction above because replacing a view blindly would
--- drop whatever columns the current definition has, and this migration was
--- written without being able to read it.
--- ---------------------------------------------------------------------------
+-- The view other users read gains the column in 20260916_public_profiles_avatar.sql,
+-- written once the live view definition could be read.
 
 -- Storage for the files. Public read: an avatar is shown to everyone who can
 -- see the profile, and signed URLs for something that public buys nothing.

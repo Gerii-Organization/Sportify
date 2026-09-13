@@ -13,10 +13,9 @@ export default function CrashScreen({ onReset, detail }) {
   return (
     <View style={styles.wrap}>
       <CloudOff color={colors.textFaint} size={40} />
-      <Text style={styles.title}>Something broke</Text>
+      <Text style={styles.title}>Something went wrong</Text>
       <Text style={styles.body}>
-        Not your fault, and nothing you logged has been lost — it is saved on the server.
-        Try again, and if it keeps happening, closing and reopening the app clears it.
+        Your data is safe. Try again, or restart the app if this keeps happening.
       </Text>
 
       {detail ? <Text style={styles.detail} numberOfLines={3}>{detail}</Text> : null}

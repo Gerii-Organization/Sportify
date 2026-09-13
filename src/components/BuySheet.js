@@ -37,7 +37,7 @@ export default function BuySheet({ visible, onClose, item, type, balance = 0, bu
       {item.desc ? <Text style={styles.desc}>{item.desc}</Text> : null}
 
       <View style={styles.ledger}>
-        <Row label="Energy you have" value={balance.toLocaleString()} />
+        <Row label="Your balance" value={balance.toLocaleString()} />
         <Row label={name} value={`−${price.toLocaleString()}`} tint={colors.energy} />
 
         <View style={styles.rule} />
@@ -45,7 +45,7 @@ export default function BuySheet({ visible, onClose, item, type, balance = 0, bu
         {short ? (
           <Row label="Short by" value={(-remaining).toLocaleString()} strong tint={colors.textMuted} />
         ) : (
-          <Row label="Left after this" value={remaining.toLocaleString()} strong />
+          <Row label="After purchase" value={remaining.toLocaleString()} strong />
         )}
       </View>
 

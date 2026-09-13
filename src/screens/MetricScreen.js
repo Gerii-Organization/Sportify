@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { View, Text, ScrollView, SafeAreaView, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, SafeAreaView, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChevronLeft, Flame, Clock, Droplets, Moon, Plus } from 'lucide-react-native';
 import { colors, gradients, spacing } from '../theme';
@@ -15,6 +15,7 @@ import ErrorState from '../components/ErrorState';
 import ProgressArc from '../components/ProgressArc';
 import WaterSheet from '../components/WaterSheet';
 import WaterGlass from '../components/WaterGlass';
+import { SkeletonMetric } from '../components/Skeleton';
 
 /**
  * Detail for one daily metric.
@@ -71,7 +72,7 @@ export default function MetricScreen({ route, navigation }) {
         </View>
 
         {loading ? (
-          <ActivityIndicator color={config.color} style={{ marginTop: 60 }} />
+          <SkeletonMetric />
         ) : error ? (
           <ErrorState message={error} onRetry={reload} />
         ) : (

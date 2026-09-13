@@ -1,3 +1,5 @@
+import { levelTiers } from '../theme';
+
 /**
  * XP and level maths.
  *
@@ -31,4 +33,30 @@ export function levelInfo(xp) {
     intoLevel: xpIntoLevel(total),
     percent: levelProgressPercent(total),
   };
+}
+
+/** Below the first ring colour. Muted, because it is where everyone starts. */
+const ROOKIE = { name: 'Rookie', minLevel: 1, color: '#8C90AA' };
+
+/**
+ * The tier a level belongs to, and the one after it.
+ *
+ * Names and colours come from theme.levelTiers, the ladder the avatar rings
+ * already use, so a Gold profile card and a gold avatar ring are the same gold.
+ * Returns `{ name, minLevel, color, next: { name, minLevel } | null }`.
+ */
+export function tierFor(level) {
+  const lvl = Math.max(1, Math.floor(Number(level) || 1));
+  const ladder = [
+    ROOKIE,
+    ...[...levelTiers]
+      .sort((a, b) => a.minLevel - b.minLevel)
+      .map(({ name, minLevel, color }) => ({ name, minLevel, color })),
+  ];
+
+  let index = 0;
+  ladder.forEach((tier, i) => { if (lvl >= tier.minLevel) index = i; });
+
+  const next = ladder[index + 1];
+  return { ...ladder[index], next: next ? { name: next.name, minLevel: next.minLevel } : null };
 }

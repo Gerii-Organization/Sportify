@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { musclesOf, scoreDay, matchSession, nextInCycle, weekOutlook } from '../src/lib/split.js';
+import { musclesOf, scoreDay, matchSession, nextInCycle, weekOutlook, weeklyTarget } from '../src/lib/split.js';
 import { SPLIT_PRESETS, presetsFor, cycleNote } from '../src/constants/splits.js';
 
 const PPL = SPLIT_PRESETS.find((p) => p.id === 'ppl').days;
@@ -149,4 +149,24 @@ test('the cycle note states the real consequence', () => {
   assert.match(cycleNote(SPLIT_PRESETS.find((p) => p.id === 'bro').days, 3), /about 12 days/);
   assert.equal(cycleNote([], 3), null);
   assert.equal(cycleNote(PPL, 0), null);
+});
+
+test('a 3-day split counts against 3 a week, not the 5 given at sign-up', () => {
+  assert.equal(weeklyTarget(PPL, 5), 3);
+});
+
+test('a split run twice a week keeps the doubled target', () => {
+  assert.equal(weeklyTarget(PPL, 6), 6);
+  assert.equal(weeklyTarget([{}, {}], 5), 4); // upper/lower, two full cycles
+});
+
+test('a cycle longer than the week keeps the weekly number', () => {
+  assert.equal(weeklyTarget([{}, {}, {}, {}, {}], 3), 3);
+});
+
+test('without a split the profile number stands, and without either nothing does', () => {
+  assert.equal(weeklyTarget(null, 4), 4);
+  assert.equal(weeklyTarget([], '4'), 4);
+  assert.equal(weeklyTarget(PPL, null), 3);
+  assert.equal(weeklyTarget(null, null), null);
 });

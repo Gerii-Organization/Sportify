@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo } from 'react';
-import { View, Text, ScrollView, SafeAreaView, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, SafeAreaView, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
   ChevronLeft, ChevronRight, Dumbbell, Flame, Weight, Clock,
@@ -9,6 +9,7 @@ import { supabase } from '../lib/supabase';
 import { colors, gradients, spacing } from '../theme';
 import { todayKey, recentDayKeys, currentWeekKeys, startOfWeekIso } from '../lib/date';
 import { useAuth } from '../context/AuthContext';
+import { weeklyTarget } from '../lib/split';
 import useLoad from '../lib/useLoad';
 import { unwrap } from '../lib/query';
 import { formatVolume, formatDelta } from '../lib/units';
@@ -18,6 +19,7 @@ import AmbientGlow from '../components/AmbientGlow';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import WeeklyGoal from '../components/WeeklyGoal';
+import { SkeletonStats } from '../components/Skeleton';
 
 /** Shape of the screen's data before anything loads, and after a failure. */
 const EMPTY = { sessions: [], steps: [], streak: 0, weights: [], trainedDays: [], meals: [] };
@@ -123,7 +125,7 @@ export default function StatsScreen({ navigation, embedded = false }) {
   const content = (
     <>
         {loading ? (
-          <ActivityIndicator color={colors.accent} style={{ marginTop: 60 }} />
+          <SkeletonStats />
         ) : error ? (
           <ErrorState message={error} onRetry={reload} />
         ) : !user ? (
@@ -158,7 +160,7 @@ export default function StatsScreen({ navigation, embedded = false }) {
 
             <FadeIn index={1}>
               <WeeklyGoal
-                target={profile?.workouts_per_week}
+                target={weeklyTarget(profile?.split, profile?.workouts_per_week)}
                 doneDays={data.trainedDays}
                 weekKeys={currentWeekKeys()}
               />
@@ -193,9 +195,7 @@ export default function StatsScreen({ navigation, embedded = false }) {
             {summary.unlogged > 0 && (
               <FadeIn index={3}>
                 <Text style={styles.footnote}>
-                  {summary.unlogged} earlier session{summary.unlogged === 1 ? ' was' : 's were'} recorded
-                  before sets were tracked, so {summary.unlogged === 1 ? 'it is' : 'they are'} not counted
-                  in the weight total.
+                  {summary.unlogged} older session{summary.unlogged === 1 ? ' does' : 's do'} not include weights.
                 </Text>
               </FadeIn>
             )}
@@ -259,7 +259,7 @@ export default function StatsScreen({ navigation, embedded = false }) {
                   </View>
                 ))}
                 <Text style={styles.muscleNote}>
-                  Share of the sets you actually completed, not of what your plans contain.
+                  The share of planned sets you completed.
                 </Text>
               </FadeIn>
             )}
@@ -279,9 +279,7 @@ export default function StatsScreen({ navigation, embedded = false }) {
                 </View>
 
                 <Text style={styles.muscleNote}>
-                  Averaged over the days you actually logged something, not over
-                  the last thirty — a day with no entries is a day you did not
-                  record, which is different from a day you ate nothing.
+                  Averaged over the days you logged food.
                 </Text>
               </FadeIn>
             )}
@@ -290,13 +288,13 @@ export default function StatsScreen({ navigation, embedded = false }) {
               <Link
                 icon={<History color={colors.accent} size={20} />}
                 title="Workout history"
-                subtitle="Every session, with the sets you logged"
+                subtitle="All your past sessions"
                 onPress={() => navigation.navigate('HistoryScreen')}
               />
               <Link
                 icon={<Trophy color={colors.energy} size={20} />}
                 title="Personal records"
-                subtitle="Best set per exercise, and how it got there"
+                subtitle="Your best lifts over time"
                 onPress={() => navigation.navigate('RecordsScreen')}
               />
             </FadeIn>

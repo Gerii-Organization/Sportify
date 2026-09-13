@@ -135,3 +135,11 @@ export function deviceTimeZone() {
     return 'UTC';
   }
 }
+
+/** "Mar 2026", for "Member since" and "Friends since". Null when there is no usable date. */
+export function formatMonthYear(isoString) {
+  if (!isoString) return null;
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+}

@@ -1,102 +1,186 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import Animated, { useSharedValue, useAnimatedStyle, withSequence, withTiming, Easing } from 'react-native-reanimated';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, SafeAreaView, Alert } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, SafeAreaView, Alert, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { BlurView } from 'expo-blur';
 import { useFocusEffect } from '@react-navigation/native';
-import { ChevronLeft, Zap, Check, Clock, Lock } from 'lucide-react-native';
+import {
+  ChevronLeft, Zap, Star, Plus, Sparkles, BatteryCharging, Gem, Clock, Gift, Lock,
+  CircleCheck, Snowflake, Trophy, Flame,
+} from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
-import { colors } from '../theme';
+import { colors, gradients, TAB_BAR_CLEARANCE } from '../theme';
 import { RINGS, AVATARS, BADGES, TITLES, POWERUPS } from '../constants/cosmetics';
-import { gradients } from '../theme';
+import { DAILY_REWARDS } from '../constants/content';
+import { FEATURED_BUNDLE, ENERGY_PACKS, IAP_ENABLED } from '../constants/storeOffers';
 import { useAuth } from '../context/AuthContext';
-import ScreenHeader from '../components/ScreenHeader';
-import FreeCard from '../components/FreeCard';
 import EnergyBurst from '../components/EnergyBurst';
 import BuySheet from '../components/BuySheet';
 import ItemPreview from '../components/ItemPreview';
-import AmbientGlow from '../components/AmbientGlow';
-import { SkeletonShelf } from '../components/Skeleton';
+import GoldenApexFrame from '../components/shop/GoldenApexFrame';
+import { SkeletonShop } from '../components/Skeleton';
 import useRefresh from '../lib/useRefresh';
 import Press from '../components/Press';
 import FadeIn from '../components/FadeIn';
 import { todayKey } from '../lib/date';
+import { msUntilUtcMidnight, msUntilUtcMonday, formatClock, formatHoursMinutes, formatDaysHours } from '../lib/shopClock';
+import { rarityFor } from '../lib/rarity';
 
 const PURCHASE_ERRORS = {
   insufficient_funds: "You do not have enough energy for this.",
   nothing_to_restore: "You have no lost streak to restore right now.",
   already_active: "Coin Boost is already waiting for your next workout.",
-  no_profile: "Your profile could not be loaded. Try signing in again."
+  no_profile: "Your profile could not be loaded. Try signing in again.",
+  price_changed: "The price just changed. Check the new price and try again.",
+  unknown_item: "This item is no longer in the shop.",
 };
 
 /**
- * Shelves in the order they matter: things that change how you play first,
- * things that change how you look after. Each carries a one-line note, because
- * a category name alone does not tell you why you would want anything on it.
+ * Jump points, not filters.
+ *
+ * The chips came back with the new layout, but a chip that hides the
+ * other departments turns the shop back into a catalogue you have to pick a
+ * page in. Every section stays on screen; a chip scrolls to its section and
+ * lights up as you scroll past it.
  */
-const SHELVES = [
-  { key: 'powerup', type: 'powerup', title: 'Power-ups', note: 'Spent once, felt immediately', pick: (d) => d.powerups },
-  { key: 'title',   type: 'title',   title: 'Titles',    note: 'Shown next to your name',     pick: (d) => d.titles },
-  { key: 'ring',    type: 'ring',    title: 'Progress rings', note: 'The shape around your daily steps', pick: (d) => d.rings },
-  { key: 'avatar',  type: 'avatar',  title: 'Avatar frames',  note: 'How friends see you in lists',      pick: (d) => d.avatars },
-  { key: 'badge',   type: 'badge',   title: 'Badges',    note: 'Sits beside your name',        pick: (d) => d.badges },
+const CHIPS = [
+  { key: 'featured', label: 'For you', icon: Sparkles },
+  { key: 'boosters', label: 'Boosters', icon: Zap },
+  { key: 'bundles', label: 'Energy', icon: BatteryCharging },
+  { key: 'prestige', label: 'Cosmetics', icon: Gem },
 ];
+
+/** Cosmetic departments, in the order the wardrobe lists them. */
+const WARDROBE = [
+  { key: 'avatar', title: 'Avatar frames', kind: 'Avatar frame', pick: (c) => c.avatars },
+  { key: 'ring', title: 'Progress rings', kind: 'Progress ring', pick: (c) => c.rings },
+  { key: 'badge', title: 'Badges', kind: 'Profile badge', pick: (c) => c.badges },
+  { key: 'title', title: 'Titles', kind: 'Title', pick: (c) => c.titles },
+];
+
+/**
+ * Boosters drawn as a glyph in the shop's own two tones. ItemPreview uses each
+ * power-up's catalogue colour, which is the right thing on a profile and three
+ * unrelated yellows on a gold screen.
+ */
+const BOOSTER_GLYPHS = { Zap, Trophy, Flame, Snowflake };
+
+function BoosterGlyph({ item, size }) {
+  const Glyph = BOOSTER_GLYPHS[item.icon] || Zap;
+  return <Glyph color={item.icon === 'Snowflake' ? colors.accent : colors.gold} size={size} />;
+}
+
+/**
+ * Ownership and equipped state laid over the static catalogue. A guest owns
+ * nothing, not even the free defaults — there is no profile to equip them on.
+ */
+function buildCatalogue(profile, ownedIds = new Set()) {
+  const owns = (item) => !!profile && (item.price === 0 || ownedIds.has(item.id));
+  const titles = new Set(profile?.owned_titles || ['Novice']);
+
+  return {
+    rings: RINGS.map((i) => ({ ...i, owned: owns(i), equipped: profile?.equipped_ring === i.id })),
+    avatars: AVATARS.map((i) => ({ ...i, owned: owns(i), equipped: profile?.equipped_avatar === i.id })),
+    badges: BADGES.map((i) => ({ ...i, owned: owns(i), equipped: profile?.equipped_badge === i.id })),
+    titles: TITLES.map((i) => ({ ...i, owned: !!profile && titles.has(i.id), equipped: profile?.equipped_title === i.id })),
+  };
+}
+
+/** "+150 energy", "+40 XP", "+200 energy · +1 streak freeze". */
+function describeReward(reward) {
+  if (!reward) return 'Energy';
+  const parts = [];
+  if (reward.energy) parts.push(`+${reward.energy} energy`);
+  if (reward.xp) parts.push(`+${reward.xp} XP`);
+  if (reward.freezes) parts.push(`+${reward.freezes} streak freeze${reward.freezes === 1 ? '' : 's'}`);
+  return parts.join(' · ');
+}
+
+/**
+ * Nothing on this screen costs real money yet. Said plainly on tap, rather
+ * than hiding the offers until there is a store behind them — the layout is
+ * the point of having them here now.
+ */
+const comingSoon = () => Alert.alert('Coming soon', 'Purchases with real money are not available yet.');
+
+/**
+ * A countdown that re-renders itself and nothing else.
+ *
+ * The shop shows up to four timers. Ticking them from the screen would redraw
+ * every card once a second to change a few digits.
+ *
+ * `ms` is read fresh each tick through a ref, so a caller can pass an inline
+ * function without restarting the interval on every parent render.
+ * `onElapsed` fires when the value jumps UP (a midnight rolled over) or first
+ * reaches zero (a boost ran out) — the two moments the data behind it is stale.
+ */
+function Ticker({ ms, format, style, onElapsed }) {
+  const read = useRef(ms);
+  read.current = ms;
+  const elapsed = useRef(onElapsed);
+  elapsed.current = onElapsed;
+  const [value, setValue] = useState(() => ms());
+
+  useEffect(() => {
+    let last = read.current();
+    const id = setInterval(() => {
+      const next = read.current();
+      if (next > last || (next <= 0 && last > 0)) elapsed.current?.();
+      last = next;
+      setValue(next);
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  return <Text style={style}>{format(value)}</Text>;
+}
+
+function SectionHead({ title, note, right, badge }) {
+  return (
+    <View style={styles.sectionRow}>
+      <View style={styles.sectionCopy}>
+        <View style={styles.inlineGap}>
+          <Text style={styles.sectionTitle}>{title}</Text>
+          {badge}
+        </View>
+        {note ? <Text style={styles.sectionNote}>{note}</Text> : null}
+      </View>
+      {right}
+    </View>
+  );
+}
 
 export default function ShopScreen({ navigation }) {
   const { refreshControl } = useRefresh(() => fetchShopData());
   const { user, refreshProfile } = useAuth();
+  const { width } = useWindowDimensions();
   const [loading, setLoading] = useState(true);
   const [balance, setBalance] = useState(0);
   const [profileData, setProfileData] = useState(null);
-
-  const [rings, setRings] = useState([]);
-  const [avatars, setAvatars] = useState([]);
-  const [badges, setBadges] = useState([]);
-  const [titles, setTitles] = useState([]);
-  const [powerups, setPowerups] = useState(POWERUPS);
+  const [catalogue, setCatalogue] = useState(() => buildCatalogue(null));
 
   const [purchaseModalVisible, setPurchaseModalVisible] = useState(false);
   const [selectedItem, setSelectedItem] = useState(null);
   const [purchasing, setPurchasing] = useState(false);
 
-  const [boostExpiresAt, setBoostExpiresAt] = useState(null);
   /** Resets at midnight; the card says so rather than failing on tap. */
   const rewardClaimedToday = profileData?.last_reward_date === todayKey();
   const [claiming, setClaiming] = useState(false);
   /** Where the claimed energy flies from and to, measured on layout. */
   const [burst, setBurst] = useState(null);
-  const freeCardRef = useRef(null);
+  const claimRef = useRef(null);
   const balanceRef = useRef(null);
   const shake = useSharedValue(0);
   const [burstRunning, setBurstRunning] = useState(false);
   /** Today's rotation. Empty until 20260913_daily_shop.sql is applied, in
-   *  which case the section is just the free slot. */
+   *  which case Flash Rotation is just the free tribute. */
   const [dailyDeals, setDailyDeals] = useState([]);
-  const [timeLeftStr, setTimeLeftStr] = useState(null);
 
-  useEffect(() => {
-    if (!boostExpiresAt) {
-      setTimeLeftStr(null);
-      return;
-    }
-    const interval = setInterval(() => {
-      const now = new Date().getTime();
-      const exp = new Date(boostExpiresAt).getTime();
-      const diff = exp - now;
-
-      if (diff <= 0) {
-        setTimeLeftStr(null);
-        setBoostExpiresAt(null);
-        clearInterval(interval);
-      } else {
-        const h = Math.floor(diff / (1000 * 60 * 60));
-        const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-        const s = Math.floor((diff % (1000 * 60)) / 1000);
-        setTimeLeftStr(`${h}h ${m}m ${s}s`);
-      }
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [boostExpiresAt]);
+  const scrollRef = useRef(null);
+  /** Each section's y inside the scroll content, recorded on layout. */
+  const sectionY = useRef({});
+  const activeChipRef = useRef('featured');
+  const [activeChip, setActiveChip] = useState('featured');
+  const [wardrobeOpen, setWardrobeOpen] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -114,11 +198,8 @@ export default function ShopScreen({ navigation }) {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         setBalance(0);
-        setRings(RINGS.map(item => ({ ...item, owned: false, equipped: false })));
-        setAvatars(AVATARS.map(item => ({ ...item, owned: false, equipped: false })));
-        setBadges(BADGES.map(item => ({ ...item, owned: false, equipped: false })));
-        setTitles(TITLES.map(item => ({ ...item, owned: false, equipped: false })));
-        setLoading(false);
+        setProfileData(null);
+        setCatalogue(buildCatalogue(null));
         return;
       }
 
@@ -131,51 +212,17 @@ export default function ShopScreen({ navigation }) {
       if (profileError) throw profileError;
       if (!profile) return;
 
-      setProfileData(profile);
-
       const { data: inventory, error: invError } = await supabase.from('user_inventory').select('item_id').eq('user_id', user.id);
       if (invError) throw invError;
 
-      const ownedItemIds = new Set(inventory.map(item => item.item_id));
-      const ownedTitleIds = new Set(profile.owned_titles || ['Novice']);
-
+      setProfileData(profile);
       setBalance(profile.energy_points || 0);
-
-      if (profile.xp_boost_expires_at && new Date(profile.xp_boost_expires_at) > new Date()) {
-        setBoostExpiresAt(profile.xp_boost_expires_at);
-      } else {
-        setBoostExpiresAt(null);
-      }
-
-      setRings(RINGS.map(item => ({
-        ...item,
-        owned: item.price === 0 || ownedItemIds.has(item.id),
-        equipped: profile.equipped_ring === item.id
-      })));
-
-      setAvatars(AVATARS.map(item => ({
-        ...item,
-        owned: item.price === 0 || ownedItemIds.has(item.id),
-        equipped: profile.equipped_avatar === item.id
-      })));
-
-      setBadges(BADGES.map(item => ({
-        ...item,
-        owned: item.price === 0 || ownedItemIds.has(item.id),
-        equipped: profile.equipped_badge === item.id
-      })));
+      setCatalogue(buildCatalogue(profile, new Set(inventory.map((row) => row.item_id))));
 
       // Missing until the migration runs. A shop that fails to open because a
       // rotation could not be fetched is worse than one without a rotation.
       const { data: deals } = await supabase.rpc('get_daily_shop');
       setDailyDeals(deals || []);
-
-      setTitles(TITLES.map(item => ({
-        ...item,
-        owned: ownedTitleIds.has(item.id),
-        equipped: profile.equipped_title === item.id
-      })));
-
     } catch (error) {
       Alert.alert("Error", error.message);
     } finally {
@@ -184,37 +231,21 @@ export default function ShopScreen({ navigation }) {
   };
 
   /**
-   * The reward roll and the once-a-day check both happen in the database now.
-   * When they lived here, the roll could be re-rolled by restarting the app and
-   * the date check could be bypassed by changing the device clock.
-   *
-   * This also fixes the bug that made every spin reset total XP: the old code
-   * read the profile, added the prize in JavaScript and wrote the sum back, but
-   * `xp` was missing from the SELECT, so the sum was always 0 + prize.
-   */
-  /**
-   * Claims today's rung of the ladder.
-   *
-   * The server decides which day you are on and what it pays, so a modified
-   * client cannot claim day 7 on a Monday. It also refuses a second claim on
-   * the same date, which is what makes the date check meaningful.
-   */
-  /**
    * Where the energy flies from and to.
    *
    * Measured rather than guessed: both ends move with the header's safe area
-   * and with how many shelves are above the free slot, and a hardcoded
-   * coordinate would be right on exactly one device.
+   * and with the hero card's height, and a hardcoded coordinate would be right
+   * on exactly one device.
    */
   const measureFreeCard = () => {
-    freeCardRef.current?.measureInWindow?.((x, y, width, height) => {
-      setBurst((prev) => ({ ...prev, from: { x: x + width / 2, y: y + height / 2 } }));
+    claimRef.current?.measureInWindow?.((x, y, w, h) => {
+      setBurst((prev) => ({ ...prev, from: { x: x + w / 2, y: y + h / 2 } }));
     });
   };
 
   const measureBalance = () => {
-    balanceRef.current?.measureInWindow?.((x, y, width, height) => {
-      setBurst((prev) => ({ ...prev, to: { x: x + width / 2, y: y + height / 2 } }));
+    balanceRef.current?.measureInWindow?.((x, y, w, h) => {
+      setBurst((prev) => ({ ...prev, to: { x: x + w / 2, y: y + h / 2 } }));
     });
   };
 
@@ -236,6 +267,18 @@ export default function ShopScreen({ navigation }) {
     ],
   }));
 
+  /** The rung the tribute pays next. The server decides; this only labels it. */
+  const lastDay = profileData?.reward_day || 0;
+  const nextDay = rewardClaimedToday ? lastDay : (lastDay >= 7 ? 1 : lastDay + 1);
+  const nextReward = DAILY_REWARDS[Math.max(nextDay, 1) - 1];
+
+  /**
+   * Claims today's rung of the ladder.
+   *
+   * The server decides which day you are on and what it pays, so a modified
+   * client cannot claim day 7 on a Monday. It also refuses a second claim on
+   * the same date, which is what makes the date check meaningful.
+   */
   const handleClaimReward = async () => {
     if (claiming || rewardClaimedToday) return;
     setClaiming(true);
@@ -247,19 +290,21 @@ export default function ShopScreen({ navigation }) {
 
     if (!data?.ok) {
       if (data?.reason === 'already_claimed') {
-        Alert.alert('Come back tomorrow', 'Today\u2019s reward is already yours.');
+        Alert.alert('Come back tomorrow', 'Today’s reward is already yours.');
       } else {
         Alert.alert('Reward unavailable', 'Please try again in a moment.');
       }
       return;
     }
 
-    // No alert. An alert to say a reward arrived is a dialog that stands
-    // between you and the thing you just earned; the energy flying into the
-    // balance says it, and the balance changing proves it.
-    measureFreeCard();
-    measureBalance();
-    setBurstRunning(true);
+    // No alert. The energy flying into the balance says it, and the balance
+    // changing proves it. An XP-only day has no energy to throw, so it skips
+    // the bolts rather than animating currency that never arrives.
+    if (nextReward?.energy) {
+      measureFreeCard();
+      measureBalance();
+      setBurstRunning(true);
+    }
 
     // Refreshed now rather than on arrival: the number should already be
     // correct behind the bolts, so the shake lands on the new figure.
@@ -267,27 +312,19 @@ export default function ShopScreen({ navigation }) {
     refreshProfile();
   };
 
-  /** Header for a shelf. The note says why you would want anything on it. */
-  const SectionHead = ({ title, note }) => (
-    <View style={styles.sectionHead}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {note ? <Text style={styles.sectionNote}>{note}</Text> : null}
-    </View>
-  );
-
   const handleAction = async (item, categoryType) => {
     if (categoryType !== 'powerup' && item.equipped) return;
 
     if (categoryType === 'powerup' && item.id === 'p2') {
       if (!profileData || !profileData.previous_streak || profileData.previous_streak <= profileData.current_streak) {
-        Alert.alert("Not Available", "You don't have any lost streak to restore right now.");
+        Alert.alert('Nothing to restore', 'You do not have a lost streak to bring back.');
         return;
       }
     }
 
     if (categoryType === 'powerup' && item.id === 'p3') {
       if (profileData?.coin_boost_active) {
-        Alert.alert('Active', 'Coin Boost is already active for your next workout!');
+        Alert.alert('Already active', 'Coin Boost is already waiting for your next workout.');
         return;
       }
     }
@@ -296,18 +333,12 @@ export default function ShopScreen({ navigation }) {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      let updateField = '';
-      if (categoryType === 'ring') updateField = 'equipped_ring';
-      if (categoryType === 'avatar') updateField = 'equipped_avatar';
-      if (categoryType === 'badge') updateField = 'equipped_badge';
-      if (categoryType === 'title') updateField = 'equipped_title';
-
-      const { error } = await supabase.from('profiles').update({ [updateField]: item.id }).eq('id', user.id);
+      const field = { ring: 'equipped_ring', avatar: 'equipped_avatar', badge: 'equipped_badge', title: 'equipped_title' }[categoryType];
+      const { error } = await supabase.from('profiles').update({ [field]: item.id }).eq('id', user.id);
       if (!error) fetchShopData();
     } else {
       // Both cases go to the same place. The sheet shows what you would be left
-      // with when you can afford it, and how far off you are when you cannot —
-      // which used to be an Alert, i.e. discoverable only by trying to buy.
+      // with when you can afford it, and how far off you are when you cannot.
       setSelectedItem({ item, categoryType });
       setPurchaseModalVisible(true);
     }
@@ -351,6 +382,54 @@ export default function ShopScreen({ navigation }) {
     refreshProfile();
   };
 
+  // --- Chips ↔ sections ---------------------------------------------------
+
+  const trackSection = (key) => (event) => {
+    sectionY.current[key] = event.nativeEvent.layout.y;
+  };
+
+  const lightChip = (key) => {
+    if (activeChipRef.current === key) return;
+    activeChipRef.current = key;
+    setActiveChip(key);
+  };
+
+  const handleScroll = (event) => {
+    const { contentOffset, layoutMeasurement, contentSize } = event.nativeEvent;
+    // The last section is often too short to ever reach the top of the
+    // viewport, so hitting the bottom counts as having arrived at it.
+    if (contentOffset.y + layoutMeasurement.height >= contentSize.height - 24) {
+      return lightChip(CHIPS[CHIPS.length - 1].key);
+    }
+    let current = CHIPS[0].key;
+    for (const { key } of CHIPS) {
+      if ((sectionY.current[key] ?? Infinity) <= contentOffset.y + 32) current = key;
+    }
+    lightChip(current);
+  };
+
+  const jumpTo = (key) => {
+    lightChip(key);
+    scrollRef.current?.scrollTo({ y: Math.max(0, (sectionY.current[key] ?? 0) - 8), animated: true });
+  };
+
+  const goBack = () => {
+    if (navigation.canGoBack()) navigation.goBack();
+    else navigation.navigate('Dashboard');
+  };
+
+  // --- Cards --------------------------------------------------------------
+
+  const findItem = (id, type) => {
+    if (type === 'powerup') {
+      const item = POWERUPS.find((p) => p.id === id);
+      return item ? { item, kind: 'Booster' } : null;
+    }
+    const shelf = WARDROBE.find((w) => w.key === type);
+    const item = shelf?.pick(catalogue).find((x) => x.id === id);
+    return item ? { item, kind: shelf.kind } : null;
+  };
+
   /**
    * One of today's discounted items.
    *
@@ -359,293 +438,757 @@ export default function ShopScreen({ navigation }) {
    * the reason the section exists.
    */
   const renderDealCard = (deal) => {
-    const catalogue = [...powerups, ...titles, ...rings, ...avatars, ...badges];
-    const item = catalogue.find((x) => x.id === deal.id);
-    if (!item) return null;
+    const found = findItem(deal.id, deal.type);
+    if (!found) return null;
+    const { item, kind } = found;
 
-    const short = balance < deal.final_price;
+    const price = Number(deal.price) || 0;
+    const finalPrice = Number(deal.final_price) || 0;
+    const short = !deal.owned && balance < finalPrice;
+    const rarity = rarityFor(price);
 
     return (
       <Press
         key={`deal-${deal.id}`}
-        scale={0.955}
-        style={[styles.itemCard, styles.dealCard, short && styles.itemCardShort]}
-        onPress={() => handleAction({ ...item, price: deal.final_price, owned: deal.owned }, deal.type)}
-        accessibilityLabel={`${deal.name}, ${deal.discount} percent off, ${deal.final_price} energy`}
+        scale={0.96}
+        style={[styles.dealCard, short && styles.cardShort]}
+        onPress={() => handleAction({ ...item, price: finalPrice, owned: deal.owned }, deal.type)}
+        accessibilityLabel={`${deal.name}, ${deal.discount} percent off, ${finalPrice} energy`}
       >
-        <View style={styles.dealFlag}>
-          <Text style={styles.dealFlagText}>-{deal.discount}%</Text>
+        <View style={styles.dealTop}>
+          <View style={styles.discount}>
+            <Text style={styles.discountText}>-{deal.discount}%</Text>
+          </View>
+          {rarity ? (
+            <Text
+              style={[styles.rarity, { color: rarity.color }]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.75}
+            >
+              {rarity.label}
+            </Text>
+          ) : null}
         </View>
 
-        <View style={[styles.itemPreviewBox, short && styles.itemPreviewShort]}>
-          <ItemPreview item={item} type={deal.type} />
+        <View style={styles.dealIcon}>
+          {deal.type === 'powerup'
+            ? <BoosterGlyph item={item} size={22} />
+            : <ItemPreview item={item} type={deal.type} scale={0.72} />}
         </View>
 
-        <View style={styles.itemInfo}>
-          <Text style={[styles.itemName, short && styles.itemNameShort]}>{deal.name}</Text>
+        <Text style={styles.dealName} numberOfLines={1}>{deal.name}</Text>
+        <Text style={styles.dealNote} numberOfLines={1}>{item.desc || kind}</Text>
 
+        <View style={styles.dealPrice}>
           {deal.owned ? (
-            <View style={styles.statusBadgeOwned}>
-              <Text style={styles.statusTextOwned}>Owned</Text>
-            </View>
+            <Text style={styles.ownedText}>Owned</Text>
           ) : (
-            <View style={styles.dealPrices}>
-              <Text style={styles.dealWas}>{Number(deal.price).toLocaleString()}</Text>
-              <View style={short ? styles.priceShort : styles.priceContainer}>
-                {short
-                  ? <Lock color={colors.textFaint} size={12} />
-                  : <Zap color={colors.energy} size={14} />}
-                <Text style={short ? styles.priceShortText : styles.priceText}>
-                  {Number(deal.final_price).toLocaleString()}
-                </Text>
-              </View>
-            </View>
+            <>
+              <Text style={styles.dealWas}>{price.toLocaleString()}</Text>
+              {short
+                ? <Lock color={colors.textFaint} size={11} />
+                : <Zap color={colors.gold} size={11} fill={colors.gold} />}
+              <Text style={[styles.dealNow, short && styles.textShort]}>{finalPrice.toLocaleString()}</Text>
+            </>
           )}
         </View>
       </Press>
     );
   };
 
-  const renderItemCard = (item, categoryType) => {
-    const isPowerup = categoryType === 'powerup';
-    const isLocked = !isPowerup && !item.owned;
-    const isEquipped = !isPowerup && item.equipped;
-
-    // XP boost still running, or a coin boost waiting for the next workout.
-    const isBoostActive = (item.id === 'p1' && timeLeftStr) || (item.id === 'p3' && profileData?.coin_boost_active);
-
-    // Anything that would cost energy you do not have. Drawn as a state on the
-    // card — a shelf where everything looks equally available is a shelf you
-    // have to tap your way through to find out what you can afford.
-    const forSale = isPowerup || isLocked;
-    const short = forSale && !isBoostActive && balance < item.price;
+  const renderBooster = (item) => {
+    // A coin boost waits for the next workout; an XP boost runs on the clock.
+    const coinReady = item.id === 'p3' && !!profileData?.coin_boost_active;
+    const xpUntil = item.id === 'p1' ? Date.parse(profileData?.xp_boost_expires_at || '') : NaN;
+    const xpRunning = xpUntil > Date.now();
+    const active = coinReady || xpRunning;
+    const count = item.id === 'p4' ? profileData?.streak_freezes || 0 : 0;
+    const short = !active && balance < item.price;
 
     return (
       <Press
         key={item.id}
-        scale={0.955}
-        style={[
-          styles.itemCard,
-          short && styles.itemCardShort,
-          isEquipped && styles.itemCardEquipped,
-          isBoostActive && { borderColor: colors.energy, backgroundColor: 'rgba(255, 215, 0, 0.05)' }
-        ]}
-        onPress={() => {
-          if (isBoostActive) return;
-          handleAction(item, categoryType);
-        }}
-        disabled={isBoostActive}
+        scale={0.98}
+        style={[styles.booster, active && styles.boosterActive]}
+        onPress={() => handleAction(item, 'powerup')}
+        disabled={active}
+        accessibilityLabel={active ? `${item.name}, active` : `${item.name}, ${item.price} energy`}
       >
-        <View style={[styles.itemPreviewBox, short && styles.itemPreviewShort]}>
-          <ItemPreview item={item} type={categoryType} />
+        <View style={styles.boosterIcon}>
+          <BoosterGlyph item={item} size={20} />
+          {count > 0 ? (
+            <View style={styles.countBadge}>
+              <Text style={styles.countText}>x{count}</Text>
+            </View>
+          ) : null}
         </View>
-        <View style={styles.itemInfo}>
-          <Text style={[styles.itemName, short && styles.itemNameShort]}>{item.name || item.id}</Text>
-          {item.desc && <Text style={styles.itemDesc}>{item.desc}</Text>}
 
-          {isEquipped ? (
-            <View style={styles.statusBadge}>
-              <Check color={colors.accent} size={14} />
-              <Text style={styles.statusTextEquipped}>Equipped</Text>
-            </View>
-          ) : isBoostActive ? (
-            <View style={[styles.statusBadge, { backgroundColor: 'rgba(255, 215, 0, 0.15)' }]}>
-              <Clock color={colors.energy} size={14} />
-              <Text style={[styles.statusTextEquipped, { color: colors.energy }]}>{item.id === 'p3' ? 'Ready for Workout' : timeLeftStr}</Text>
-            </View>
-          ) : short ? (
-            <View style={styles.priceShort}>
-              <Lock color={colors.textFaint} size={12} />
-              <Text style={styles.priceShortText}>{(item.price - balance).toLocaleString()} more</Text>
-            </View>
-          ) : forSale ? (
-            <View style={styles.priceContainer}>
-              <Zap color={colors.energy} size={14} />
-              <Text style={styles.priceText}>{item.price}</Text>
-            </View>
-          ) : (
-            <View style={styles.statusBadgeOwned}>
-              <Text style={styles.statusTextOwned}>Equip</Text>
-            </View>
-          )}
+        <View style={styles.boosterCopy}>
+          <View style={styles.inlineGap}>
+            <Text style={styles.boosterName}>{item.name}</Text>
+            {active ? (
+              <View style={styles.activeTag}>
+                <Text style={styles.activeTagText}>ACTIVE</Text>
+              </View>
+            ) : null}
+          </View>
+          <Text style={styles.boosterDesc} numberOfLines={2}>{item.desc}</Text>
         </View>
+
+        {coinReady ? (
+          <View style={styles.equipped}>
+            <CircleCheck color={colors.gold} size={14} />
+            <Text style={styles.equippedText}>Equipped</Text>
+          </View>
+        ) : xpRunning ? (
+          <View style={styles.equipped}>
+            <Clock color={colors.gold} size={13} />
+            <Ticker ms={() => xpUntil - Date.now()} format={formatHoursMinutes} style={styles.equippedText} onElapsed={fetchShopData} />
+          </View>
+        ) : (
+          <View style={[styles.pricePill, short && styles.pricePillShort]}>
+            {short
+              ? <Lock color={colors.textFaint} size={12} />
+              : <Zap color={colors.gold} size={12} fill={colors.gold} />}
+            <Text style={[styles.pricePillText, short && styles.textShort]}>{item.price.toLocaleString()}</Text>
+          </View>
+        )}
       </Press>
     );
   };
 
-  if (loading) {
+  const renderPrestigeCard = (item, type, kind, cardWidth) => {
+    // What you have beats how rare it is: once it is yours, the tag says so.
+    const status = item.equipped ? 'EQUIPPED' : item.owned ? 'OWNED' : null;
+    const short = !item.owned && balance < item.price;
+    const rarity = rarityFor(item.price);
+
+    return (
+      <Press
+        key={`${type}-${item.id}`}
+        scale={0.97}
+        style={[styles.prestige, { width: cardWidth }, item.equipped && styles.prestigeEquipped]}
+        onPress={() => handleAction(item, type)}
+        accessibilityLabel={`${item.name || item.id}, ${kind}${rarity ? `, ${rarity.key}` : ''}${status ? `, ${status.toLowerCase()}` : `, ${item.price} energy`}`}
+      >
+        <View style={[styles.halo, rarity && { borderColor: `${rarity.color}99` }]}>
+          <ItemPreview item={item} type={type} scale={0.9} />
+          {status ? (
+            <View style={styles.haloTag}>
+              <Text style={styles.haloTagText}>{status}</Text>
+            </View>
+          ) : rarity ? (
+            <View style={[styles.haloTag, styles.rarityTag, { borderColor: `${rarity.color}66` }]}>
+              <Text style={[styles.haloTagText, { color: rarity.color }]}>{rarity.label}</Text>
+            </View>
+          ) : null}
+        </View>
+
+        <Text style={styles.prestigeName} numberOfLines={1}>{item.name || item.id}</Text>
+        <Text style={styles.prestigeKind}>{kind}</Text>
+
+        {item.equipped ? (
+          <View style={[styles.prestigeBtn, styles.prestigeBtnEquipped]}>
+            <CircleCheck color={colors.gold} size={14} />
+            <Text style={[styles.prestigeBtnText, { color: colors.gold }]}>Equipped</Text>
+          </View>
+        ) : item.owned ? (
+          <View style={styles.prestigeBtn}>
+            <Text style={styles.prestigeBtnText}>Equip</Text>
+          </View>
+        ) : (
+          <View style={styles.prestigeBtn}>
+            {short
+              ? <Lock color={colors.textFaint} size={13} />
+              : <Zap color={colors.gold} size={13} fill={colors.gold} />}
+            <Text style={[styles.prestigeBtnText, short && styles.textShort]}>{item.price.toLocaleString()}</Text>
+          </View>
+        )}
+      </Press>
+    );
+  };
+
+  // --- Screen -------------------------------------------------------------
+
+  if (loading && !profileData) {
     return (
       <SafeAreaView style={styles.container}>
-        <LinearGradient colors={gradients.screen} style={styles.gradientBg}>
-        <AmbientGlow tone="ember" height={300} intensity={0.42} />
-          <View style={styles.loadingContainer}>
-            <SkeletonShelf count={3} />
-          </View>
-        </LinearGradient>
+        <SkeletonShop />
       </SafeAreaView>
     );
   }
 
+  const cardWidth = (width - 40 - 12) / 2;
+  // Priced cosmetics only, most expensive first: the carousel is the display
+  // window, the wardrobe below it is the full rail.
+  const prestige = WARDROBE
+    .flatMap((w) => w.pick(catalogue).filter((i) => i.price > 0).map((item) => ({ item, type: w.key, kind: w.kind })))
+    .sort((a, b) => b.item.price - a.item.price);
+
   return (
     <SafeAreaView style={styles.container}>
-      <LinearGradient colors={gradients.screen} style={styles.gradientBg}>
-        {/* Shop is reachable both as a tab and, historically, as a pushed
-            card. `canGoBack` is what tells the two apart — a back arrow on a
-            root tab points at nothing. */}
-        {navigation.canGoBack() && (
-          <View style={styles.navRow}>
-            <TouchableOpacity
-              onPress={() => navigation.goBack()}
-              style={styles.backBtn}
-              accessibilityLabel="Go back"
-              activeOpacity={0.7}
-            >
-              <ChevronLeft color={colors.text} size={26} />
-            </TouchableOpacity>
+      {/* Header and chips stay put; only the shelves scroll under them. */}
+      <View style={styles.header}>
+        <Press scale={0.9} style={styles.backBtn} onPress={goBack} accessibilityLabel="Go back">
+          <ChevronLeft color={colors.textSecondary} size={22} />
+        </Press>
+
+        <View style={styles.titleBlock}>
+          <Text style={styles.title}>Shop</Text>
+          <View style={styles.inlineGap}>
+            <View style={styles.liveDot} />
+            <Text style={styles.restockLabel}>New deals in</Text>
+            <Ticker ms={msUntilUtcMidnight} format={formatClock} style={styles.restockTime} onElapsed={fetchShopData} />
           </View>
-        )}
+        </View>
 
-        <ScreenHeader
-          title="Shop"
-          subtitle="Spend what you have earned"
-          right={
-            <Animated.View
-              ref={balanceRef}
-              collapsable={false}
-              onLayout={measureBalance}
-              style={balanceStyle}
+        {/* Wraps onto two lines on narrow phones rather than squeezing the title. */}
+        <View style={styles.wallet}>
+          <View style={styles.xpChip} accessibilityLabel={`${(profileData?.xp || 0).toLocaleString()} XP`}>
+            <Star color={colors.accent} size={13} fill={colors.accent} />
+            <Text style={styles.xpText}>{(profileData?.xp || 0).toLocaleString()}</Text>
+          </View>
+
+          <Animated.View
+            ref={balanceRef}
+            collapsable={false}
+            onLayout={measureBalance}
+            style={[styles.energyChip, balanceStyle]}
+          >
+            <Zap color={colors.gold} size={13} fill={colors.gold} />
+            <Text style={styles.energyText}>{balance.toLocaleString()}</Text>
+            <Press scale={0.85} style={styles.plus} onPress={() => jumpTo('bundles')} accessibilityLabel="Get more energy">
+              <Plus color={colors.onGold} size={14} strokeWidth={3} />
+            </Press>
+          </Animated.View>
+        </View>
+      </View>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.chipBar}
+        contentContainerStyle={styles.chips}
+      >
+        {CHIPS.map(({ key, label, icon: Icon }) => {
+          const on = activeChip === key;
+          return (
+            <Press
+              key={key}
+              scale={0.95}
+              style={[styles.chip, on && styles.chipOn]}
+              onPress={() => jumpTo(key)}
+              accessibilityLabel={label}
+              accessibilityState={{ selected: on }}
             >
-              <BlurView intensity={30} tint="dark" style={styles.balanceContainer}>
-                <Zap color={colors.energy} size={20} fill={colors.energy} />
-                <Text style={styles.balanceText}>{balance.toLocaleString()}</Text>
-              </BlurView>
-            </Animated.View>
-          }
-        />
+              <Icon
+                color={on ? colors.onGold : key === 'prestige' ? colors.accent : colors.gold}
+                size={16}
+              />
+              <Text style={[styles.chipText, on && styles.chipTextOn]}>{label}</Text>
+            </Press>
+          );
+        })}
+      </ScrollView>
 
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}
-          refreshControl={refreshControl}>
-
-          {/* Every shelf at once, in order, with the free slot at the top.
-              The filter chips are gone: a shop you have to choose a department
-              in before seeing anything is a catalogue, and the point of opening
-              it is to see what there is. */}
+      <ScrollView
+        ref={scrollRef}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={refreshControl}
+        onScroll={handleScroll}
+        scrollEventThrottle={32}
+      >
+        <View onLayout={trackSection('featured')}>
           <FadeIn>
-            <SectionHead title="Daily shop" note="Resets every day" />
-            <View style={styles.grid}>
-              <View
-                ref={freeCardRef}
-                collapsable={false}
-                style={styles.freeSlot}
-                onLayout={() => measureFreeCard()}
-              >
-                <FreeCard
-                  day={profileData?.reward_day || 0}
-                  claimedToday={rewardClaimedToday}
-                  claiming={claiming}
-                  onClaim={handleClaimReward}
-                />
+            <LinearGradient colors={gradients.goldCard} style={styles.hero}>
+              <View style={styles.heroTop}>
+                <View style={styles.heroLabel}>
+                  <Zap color={colors.gold} size={12} fill={colors.gold} />
+                  <Text style={styles.heroLabelText}>{FEATURED_BUNDLE.label.toUpperCase()}</Text>
+                </View>
+                <View style={styles.timePill}>
+                  <Clock color={colors.textSecondary} size={12} />
+                  <Ticker ms={msUntilUtcMonday} format={(ms) => `${formatDaysHours(ms)} left`} style={styles.timePillText} />
+                </View>
               </View>
 
-              {dailyDeals.map((deal) => renderDealCard(deal))}
+              <View style={styles.heroBody}>
+                <View style={styles.heroCopy}>
+                  <Text style={styles.heroTitle}>{FEATURED_BUNDLE.name}</Text>
+                  <View style={styles.heroPerks}>
+                    <Zap color={colors.gold} size={13} fill={colors.gold} />
+                    <Text style={styles.heroEnergy}>+{FEATURED_BUNDLE.energy.toLocaleString()} energy</Text>
+                    <View style={styles.dot} />
+                    <Text style={styles.heroFreeze}>{FEATURED_BUNDLE.freezes} streak freezes</Text>
+                  </View>
+                  <Text style={styles.heroPerk}>{FEATURED_BUNDLE.perk}</Text>
+                </View>
+
+                <View style={styles.heroArt}>
+                  <GoldenApexFrame size={108} />
+                  {IAP_ENABLED ? <Text style={styles.heroWas}>{FEATURED_BUNDLE.was}</Text> : null}
+                  <Press
+                    scale={0.94}
+                    style={styles.heroPrice}
+                    onPress={comingSoon}
+                    accessibilityLabel={IAP_ENABLED ? `${FEATURED_BUNDLE.name}, ${FEATURED_BUNDLE.price}` : `${FEATURED_BUNDLE.name}, coming soon`}
+                  >
+                    <LinearGradient colors={gradients.gold} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.heroPriceFill}>
+                      <Text style={styles.heroPriceText}>{IAP_ENABLED ? FEATURED_BUNDLE.price : 'Soon'}</Text>
+                    </LinearGradient>
+                  </Press>
+                </View>
+              </View>
+            </LinearGradient>
+
+            <SectionHead
+              title="DAILY DEALS"
+              right={
+                <View style={styles.inlineGap}>
+                  <Clock color={colors.gold} size={13} />
+                  <Ticker ms={msUntilUtcMidnight} format={formatHoursMinutes} style={styles.goldTime} />
+                </View>
+              }
+            />
+
+            <View
+              ref={claimRef}
+              collapsable={false}
+              onLayout={measureFreeCard}
+              style={[styles.tribute, rewardClaimedToday && styles.tributeDone]}
+            >
+              <View style={[styles.tributeIcon, rewardClaimedToday && styles.tributeIconDone]}>
+                <Gift color={rewardClaimedToday ? colors.textFaint : colors.gold} size={24} />
+              </View>
+
+              <View style={styles.tributeCopy}>
+                <Text style={styles.tributeTitle}>Daily reward</Text>
+                <View style={[styles.inlineGap, { marginTop: 3 }]}>
+                  {nextReward?.energy
+                    ? <Zap color={colors.gold} size={13} fill={colors.gold} />
+                    : <Star color={colors.accent} size={13} fill={colors.accent} />}
+                  <Text style={styles.tributeReward}>{describeReward(nextReward)}</Text>
+                </View>
+                <Text style={styles.tributeNote}>
+                  {rewardClaimedToday ? 'Come back tomorrow for more' : `Day ${nextDay} of 7`}
+                </Text>
+              </View>
+
+              <Press
+                scale={0.94}
+                onPress={handleClaimReward}
+                disabled={rewardClaimedToday || claiming}
+                accessibilityLabel={rewardClaimedToday ? 'Already collected today' : `Claim ${describeReward(nextReward)}`}
+              >
+                {rewardClaimedToday ? (
+                  <View style={styles.claimedPill}>
+                    <CircleCheck color={colors.textMuted} size={14} />
+                    <Text style={styles.claimedText}>Claimed</Text>
+                  </View>
+                ) : (
+                  <LinearGradient colors={gradients.gold} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.claimBtn}>
+                    <Text style={styles.claimText}>{claiming ? 'Claiming…' : 'Claim'}</Text>
+                  </LinearGradient>
+                )}
+              </Press>
+
+              <View style={[styles.freeTag, rewardClaimedToday && styles.freeTagDone]}>
+                <Text style={[styles.freeTagText, rewardClaimedToday && styles.freeTagTextDone]}>
+                  {rewardClaimedToday ? 'CLAIMED' : 'FREE'}
+                </Text>
+              </View>
+            </View>
+
+            {dailyDeals.length > 0 ? (
+              <View style={styles.dealRow}>{dailyDeals.slice(0, 3).map(renderDealCard)}</View>
+            ) : null}
+          </FadeIn>
+        </View>
+
+        <View onLayout={trackSection('boosters')}>
+          <FadeIn index={1}>
+            <SectionHead
+              title="BOOSTERS"
+              note="One-time boosts for your XP, energy and streak"
+            />
+            {POWERUPS.map(renderBooster)}
+          </FadeIn>
+        </View>
+
+        <View onLayout={trackSection('bundles')}>
+          <FadeIn index={2}>
+            <SectionHead
+              title="ENERGY PACKS"
+              note="Top up your balance"
+              right={<Text style={styles.soon}>Coming soon</Text>}
+            />
+            <View style={styles.packRow}>
+              {ENERGY_PACKS.map((pack) => (
+                <Press
+                  key={pack.id}
+                  scale={0.96}
+                  style={[styles.pack, pack.featured && styles.packFeatured]}
+                  onPress={comingSoon}
+                  accessibilityLabel={IAP_ENABLED ? `${pack.label}, ${pack.energy} energy, ${pack.price}` : `${pack.label}, ${pack.energy} energy, coming soon`}
+                >
+                  {pack.tag ? (
+                    <View style={[styles.packTag, pack.cool && styles.packTagCool]}>
+                      <Text style={[styles.packTagText, pack.cool && styles.packTagTextCool]}>{pack.tag.toUpperCase()}</Text>
+                    </View>
+                  ) : null}
+
+                  <Text style={styles.packLabel}>{pack.label.toUpperCase()}</Text>
+                  <View style={[styles.packOrb, pack.featured && styles.packOrbFeatured]}>
+                    <Zap
+                      color={pack.cool ? colors.accent : colors.gold}
+                      fill={pack.cool ? colors.accent : colors.gold}
+                      size={22}
+                    />
+                  </View>
+                  <View style={styles.inlineTight}>
+                    <Text style={styles.packAmount}>{pack.energy.toLocaleString()}</Text>
+                    <Zap color={colors.gold} size={13} fill={colors.gold} />
+                  </View>
+
+                  {pack.featured ? (
+                    <LinearGradient colors={gradients.gold} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[styles.packBuy, styles.packBuyGold]}>
+                      <Text style={styles.packBuyTextGold}>{IAP_ENABLED ? pack.price : 'Soon'}</Text>
+                    </LinearGradient>
+                  ) : (
+                    <View style={styles.packBuy}>
+                      <Text style={styles.packBuyText}>{IAP_ENABLED ? pack.price : 'Soon'}</Text>
+                    </View>
+                  )}
+                </Press>
+              ))}
             </View>
           </FadeIn>
+        </View>
 
-          {SHELVES.map((shelf, index) => {
-            const items = shelf.pick({ powerups, titles, rings, avatars, badges }) || [];
-            if (items.length === 0) return null;
+        <View onLayout={trackSection('prestige')}>
+          <FadeIn index={3}>
+            <SectionHead
+              title="COSMETICS"
+              note="Frames, rings, badges and titles"
+              right={
+                <Press scale={0.95} onPress={() => setWardrobeOpen((open) => !open)} accessibilityLabel={wardrobeOpen ? 'Show fewer cosmetics' : 'See all cosmetics'}>
+                  <Text style={styles.link}>{wardrobeOpen ? 'Show less' : 'See all'}</Text>
+                </Press>
+              }
+            />
 
-            return (
-              <FadeIn key={shelf.key} index={Math.min(index + 1, 6)}>
-                <SectionHead title={shelf.title} note={shelf.note} />
-                <View style={styles.grid}>
-                  {items.map((item) => renderItemCard(item, shelf.type))}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.carousel}
+              contentContainerStyle={styles.carouselContent}
+              snapToInterval={cardWidth + 12}
+              decelerationRate="fast"
+            >
+              {prestige.map(({ item, type, kind }) => renderPrestigeCard(item, type, kind, cardWidth))}
+            </ScrollView>
+
+            {wardrobeOpen ? WARDROBE.map((shelf) => (
+              <View key={shelf.key}>
+                <Text style={styles.wardrobeHead}>{shelf.title}</Text>
+                <View style={styles.wardrobeGrid}>
+                  {shelf.pick(catalogue).map((item) => renderPrestigeCard(item, shelf.key, shelf.kind, cardWidth))}
                 </View>
-              </FadeIn>
-            );
-          })}
+              </View>
+            )) : null}
+          </FadeIn>
+        </View>
+      </ScrollView>
 
-        </ScrollView>
-
-        {/* Above everything, touches passed through. Mounted only while it
-            runs, so nine animated views do not sit over the shop at rest. */}
-        {burstRunning && (
-          <EnergyBurst
-            from={burst?.from}
-            to={burst?.to}
-            onArrive={shakeBalance}
-            onDone={() => setBurstRunning(false)}
-          />
-        )}
-
-        <BuySheet
-          visible={purchaseModalVisible}
-          onClose={() => setPurchaseModalVisible(false)}
-          item={selectedItem?.item}
-          type={selectedItem?.categoryType}
-          balance={balance}
-          busy={purchasing}
-          onConfirm={confirmPurchase}
+      {/* Above everything, touches passed through. Mounted only while it
+          runs, so nine animated views do not sit over the shop at rest. */}
+      {burstRunning && (
+        <EnergyBurst
+          from={burst?.from}
+          to={burst?.to}
+          onArrive={shakeBalance}
+          onDone={() => setBurstRunning(false)}
         />
-      </LinearGradient>
+      )}
+
+      <BuySheet
+        visible={purchaseModalVisible}
+        onClose={() => setPurchaseModalVisible(false)}
+        item={selectedItem?.item}
+        type={selectedItem?.categoryType}
+        balance={balance}
+        busy={purchasing}
+        onConfirm={confirmPurchase}
+      />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  gradientBg: { flex: 1 },
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  navRow: { paddingHorizontal: 16, paddingTop: 10, marginBottom: -14 },
-  backBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface },
-  balanceContainer: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255, 215, 0, 0.2)' },
-  balanceText: { color: colors.energy, fontSize: 17, fontWeight: '700', marginLeft: 10 },
-  scrollContent: { paddingBottom: 120 },
+  inlineGap: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  inlineTight: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  textShort: { color: colors.textFaint },
+  cardShort: { backgroundColor: '#151722' },
 
-  sectionHead: { paddingHorizontal: 20, marginTop: 22, marginBottom: 12 },
-  sectionTitle: { color: colors.text, fontSize: 18, fontWeight: '800', letterSpacing: -0.4 },
-  sectionNote: { color: colors.textMuted, fontSize: 12, marginTop: 3 },
-  // The free slot is one tile wide, like everything it sits beside.
-  freeSlot: { width: '48%', flexGrow: 1 },
-  dealCard: { borderWidth: 1, borderColor: 'rgba(255, 216, 74, 0.30)', overflow: 'hidden' },
-  dealFlag: {
-    position: 'absolute', top: 0, right: 0,
-    backgroundColor: colors.energy,
-    paddingHorizontal: 9, paddingVertical: 3,
-    borderBottomLeftRadius: 12,
+  // --- Header ---
+  header: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 12,
+    paddingHorizontal: 20, paddingTop: 10, paddingBottom: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border,
   },
-  dealFlagText: { color: '#2A1F00', fontSize: 11, fontWeight: '900', letterSpacing: 0.4 },
-  dealPrices: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  // Struck through and muted: there to be compared against, not read.
-  dealWas: {
-    color: colors.textFaint, fontSize: 12, fontWeight: '600',
-    textDecorationLine: 'line-through',
+  backBtn: {
+    width: 40, height: 40, borderRadius: 20, marginTop: 4,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
   },
+  titleBlock: { flexShrink: 0 },
+  title: { color: colors.text, fontSize: 26, fontWeight: '800', lineHeight: 30, letterSpacing: -0.6 },
+  liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.success, marginTop: 6 },
+  restockLabel: { color: colors.textMuted, fontSize: 13, marginTop: 6 },
+  restockTime: { color: colors.gold, fontSize: 13, fontWeight: '700', marginTop: 6, fontVariant: ['tabular-nums'] },
 
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingHorizontal: 20 },
-
-  itemCard: { backgroundColor: colors.card, width: '48%', flexGrow: 1, borderRadius: 26, padding: 16, alignItems: 'center' },
-  itemCardEquipped: { borderColor: colors.accent + 'AA', backgroundColor: 'rgba(46, 211, 198, 0.05)', shadowColor: colors.accent, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.3, shadowRadius: 10, elevation: 5 },
-  itemPreviewBox: { width: 70, height: 70, borderRadius: 35, backgroundColor: 'rgba(255,255,255,0.02)', justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
-  itemInfo: { alignItems: 'center', width: '100%' },
-  itemName: { color: colors.text, fontSize: 15, fontWeight: '600', marginBottom: 10, textAlign: 'center' },
-  itemDesc: { color: colors.textSecondary, fontSize: 11, marginBottom: 10, textAlign: 'center' },
-  // Out of reach: the card recedes rather than shouting. Still tappable — the
-  // sheet is where the shortfall gets spelled out.
-  itemCardShort: { backgroundColor: '#191C22' },
-  itemPreviewShort: { opacity: 0.55 },
-  itemNameShort: { color: colors.textSecondary },
-  priceShort: {
+  wallet: {
+    flex: 1, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end',
+    alignItems: 'center', gap: 6, marginTop: 8,
+  },
+  xpChip: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12,
+    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
+    borderRadius: 999, paddingHorizontal: 10, height: 32,
   },
-  priceShortText: { color: colors.textFaint, fontWeight: '600', fontSize: 13 },
+  xpText: { color: colors.text, fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  energyChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.goldBorder,
+    borderRadius: 999, paddingLeft: 10, paddingRight: 4, height: 32,
+  },
+  energyText: { color: colors.goldLight, fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  plus: {
+    width: 24, height: 24, borderRadius: 12, marginLeft: 2,
+    alignItems: 'center', justifyContent: 'center', backgroundColor: colors.gold,
+  },
 
-  priceContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255, 215, 0, 0.1)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 },
-  priceText: { color: colors.energy, fontWeight: '600', marginLeft: 6, fontSize: 13 },
-  statusBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(46, 211, 198, 0.15)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 },
-  statusTextEquipped: { color: colors.accent, fontWeight: '600', fontSize: 13, marginLeft: 6 },
-  statusBadgeOwned: { backgroundColor: 'rgba(255, 255, 255, 0.08)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 },
-  statusTextOwned: { color: colors.text, fontWeight: '600', fontSize: 13 },
+  // --- Chips ---
+  chipBar: { flexGrow: 0 },
+  chips: { paddingHorizontal: 20, paddingVertical: 12, gap: 10 },
+  chip: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    height: 40, paddingHorizontal: 16, borderRadius: 999,
+    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
+  },
+  chipOn: { backgroundColor: colors.gold, borderColor: colors.gold },
+  chipText: { color: colors.textSecondary, fontSize: 14, fontWeight: '600' },
+  chipTextOn: { color: colors.onGold, fontWeight: '700' },
+
+  scrollContent: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: TAB_BAR_CLEARANCE + 20 },
+
+  // --- Sections ---
+  sectionRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: 28, marginBottom: 12, gap: 12 },
+  sectionCopy: { flexShrink: 1 },
+  sectionTitle: { color: colors.text, fontSize: 15, fontWeight: '800', letterSpacing: 1.1 },
+  sectionNote: { color: colors.textMuted, fontSize: 12, marginTop: 3 },
+  goldTime: { color: colors.gold, fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  link: { color: colors.gold, fontSize: 13, fontWeight: '700' },
+  soon: { color: colors.textFaint, fontSize: 12, fontWeight: '600' },
+
+  // --- Featured bundle ---
+  hero: {
+    marginTop: 6, borderRadius: 22, borderWidth: 1, borderColor: colors.goldBorder,
+    padding: 16, overflow: 'hidden',
+  },
+  heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  heroLabel: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    borderWidth: 1, borderColor: colors.goldBorder, backgroundColor: colors.goldSoft,
+    borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5,
+  },
+  heroLabelText: { color: colors.gold, fontSize: 10, fontWeight: '800', letterSpacing: 1.4 },
+  timePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: colors.surface, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5,
+  },
+  timePillText: { color: colors.textSecondary, fontSize: 11, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  heroBody: { flexDirection: 'row', alignItems: 'center', marginTop: 12 },
+  heroCopy: { flex: 1, paddingRight: 8 },
+  heroTitle: { color: colors.text, fontSize: 20, fontWeight: '800', lineHeight: 24, letterSpacing: -0.4 },
+  heroPerks: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 8 },
+  heroEnergy: { color: colors.gold, fontSize: 13, fontWeight: '700' },
+  dot: { width: 4, height: 4, borderRadius: 2, backgroundColor: colors.textFaint },
+  heroFreeze: { color: colors.accent, fontSize: 13, fontWeight: '600' },
+  heroPerk: { color: colors.textMuted, fontSize: 11, lineHeight: 15, marginTop: 8 },
+  heroArt: { width: 120, height: 120, alignItems: 'center', justifyContent: 'center' },
+  heroWas: {
+    position: 'absolute', top: -4, right: 0,
+    color: colors.textFaint, fontSize: 12, fontWeight: '600', textDecorationLine: 'line-through',
+  },
+  heroPrice: {
+    position: 'absolute', bottom: 2, right: -6,
+    shadowColor: colors.gold, shadowOpacity: 0.35, shadowRadius: 12, shadowOffset: { width: 0, height: 4 },
+  },
+  heroPriceFill: { borderRadius: 999, paddingHorizontal: 16, paddingVertical: 8 },
+  heroPriceText: { color: colors.onGold, fontSize: 17, fontWeight: '800' },
+
+  // --- Daily tribute ---
+  tribute: {
+    flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 8,
+    backgroundColor: colors.card, borderWidth: 1, borderColor: 'rgba(222, 184, 102, 0.22)',
+    borderRadius: 18, padding: 14, paddingTop: 18,
+  },
+  tributeDone: { borderColor: colors.border, backgroundColor: '#151722' },
+  tributeIcon: {
+    width: 48, height: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.goldSoft, borderWidth: 1, borderColor: colors.goldBorder,
+  },
+  tributeIconDone: { backgroundColor: colors.surface, borderColor: colors.border },
+  tributeCopy: { flex: 1 },
+  tributeTitle: { color: colors.text, fontSize: 15, fontWeight: '700' },
+  tributeReward: { color: colors.gold, fontSize: 13, fontWeight: '700', flexShrink: 1 },
+  tributeNote: { color: colors.textMuted, fontSize: 11, marginTop: 3 },
+  claimBtn: { borderRadius: 999, paddingHorizontal: 16, paddingVertical: 10 },
+  claimText: { color: colors.onGold, fontSize: 14, fontWeight: '800' },
+  claimedPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border,
+    borderRadius: 999, paddingHorizontal: 12, paddingVertical: 9,
+  },
+  claimedText: { color: colors.textMuted, fontSize: 13, fontWeight: '600' },
+  freeTag: {
+    position: 'absolute', top: -9, left: 14,
+    backgroundColor: colors.gold, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2,
+  },
+  freeTagDone: { backgroundColor: colors.surfaceHigh },
+  freeTagText: { color: colors.onGold, fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+  freeTagTextDone: { color: colors.textMuted },
+
+  // --- Flash deals ---
+  dealRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  dealCard: {
+    flex: 1, alignItems: 'center', padding: 10,
+    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, borderRadius: 18,
+  },
+  dealTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', alignSelf: 'stretch' },
+  discount: {
+    borderWidth: 1, borderColor: colors.goldBorder, backgroundColor: colors.goldSoft,
+    borderRadius: 999, paddingHorizontal: 6, paddingVertical: 2,
+  },
+  discountText: { color: colors.gold, fontSize: 10, fontWeight: '800' },
+  // LEGENDARY is the longest word on the narrowest card; it shrinks before it clips.
+  rarity: { fontSize: 9, fontWeight: '800', letterSpacing: 0.6, flexShrink: 1, marginLeft: 4, textAlign: 'right' },
+  dealIcon: {
+    width: 48, height: 48, borderRadius: 14, marginTop: 12, marginBottom: 10,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: colors.border,
+  },
+  dealName: { color: colors.text, fontSize: 13, fontWeight: '700', textAlign: 'center' },
+  dealNote: { color: colors.textMuted, fontSize: 10, marginTop: 2, textAlign: 'center' },
+  dealPrice: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
+    alignSelf: 'stretch', marginTop: 10, paddingVertical: 6, borderRadius: 999,
+    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border,
+  },
+  // Struck through and muted: there to be compared against, not read.
+  dealWas: { color: colors.textFaint, fontSize: 10, fontWeight: '600', textDecorationLine: 'line-through', marginRight: 2 },
+  dealNow: { color: colors.text, fontSize: 13, fontWeight: '800' },
+  ownedText: { color: colors.textMuted, fontSize: 12, fontWeight: '600' },
+
+  // --- Boosters ---
+  booster: {
+    flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 10,
+    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, borderRadius: 18, padding: 14,
+  },
+  boosterActive: { borderColor: 'rgba(222, 184, 102, 0.45)', backgroundColor: '#1E1D27' },
+  boosterIcon: {
+    width: 46, height: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: colors.border,
+  },
+  countBadge: {
+    position: 'absolute', bottom: -6, right: -6, minWidth: 20,
+    alignItems: 'center', backgroundColor: colors.gold, borderRadius: 8, paddingHorizontal: 5, paddingVertical: 1,
+  },
+  countText: { color: colors.onGold, fontSize: 9, fontWeight: '900' },
+  boosterCopy: { flex: 1 },
+  boosterName: { color: colors.text, fontSize: 15, fontWeight: '700' },
+  activeTag: { backgroundColor: colors.gold, borderRadius: 5, paddingHorizontal: 5, paddingVertical: 1 },
+  activeTagText: { color: colors.onGold, fontSize: 8, fontWeight: '900', letterSpacing: 0.8 },
+  boosterDesc: { color: colors.textMuted, fontSize: 11, lineHeight: 15, marginTop: 3 },
+  equipped: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    borderWidth: 1, borderColor: colors.goldBorder, backgroundColor: colors.goldSoft,
+    borderRadius: 999, paddingHorizontal: 11, paddingVertical: 7,
+  },
+  equippedText: { color: colors.gold, fontSize: 12, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  pricePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: colors.border,
+    borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7,
+  },
+  pricePillShort: { backgroundColor: colors.surface },
+  pricePillText: { color: colors.text, fontSize: 13, fontWeight: '700' },
+
+  // --- Energy packs ---
+  packRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 14 },
+  pack: {
+    flex: 1, alignItems: 'center', paddingVertical: 16, paddingHorizontal: 8,
+    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, borderRadius: 18,
+  },
+  // Lifted rather than recoloured: taller, gold rim, a faint warm cast.
+  packFeatured: {
+    paddingVertical: 22, borderWidth: 1.5, borderColor: colors.gold, backgroundColor: '#1F1E27',
+    shadowColor: colors.gold, shadowOpacity: 0.18, shadowRadius: 16, shadowOffset: { width: 0, height: 0 },
+  },
+  packTag: {
+    position: 'absolute', top: -9,
+    backgroundColor: colors.gold, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2,
+  },
+  packTagCool: { backgroundColor: '#3F436D' },
+  packTagText: { color: colors.onGold, fontSize: 9, fontWeight: '900', letterSpacing: 0.6 },
+  packTagTextCool: { color: colors.calories },
+  packLabel: { color: colors.textMuted, fontSize: 10, fontWeight: '800', letterSpacing: 1.2, marginTop: 4 },
+  packOrb: {
+    width: 50, height: 50, borderRadius: 25, marginVertical: 12,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: colors.border,
+  },
+  packOrbFeatured: { backgroundColor: colors.goldSoft, borderColor: colors.goldBorder },
+  packAmount: { color: colors.text, fontSize: 16, fontWeight: '800' },
+  packBuy: {
+    alignSelf: 'stretch', alignItems: 'center', marginTop: 12, paddingVertical: 8, borderRadius: 999,
+    backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: colors.border,
+  },
+  packBuyGold: { borderWidth: 0 },
+  packBuyText: { color: colors.text, fontSize: 13, fontWeight: '700' },
+  packBuyTextGold: { color: colors.onGold, fontSize: 13, fontWeight: '800' },
+
+  // --- Prestige ---
+  carousel: { marginHorizontal: -20 },
+  carouselContent: { paddingHorizontal: 20, gap: 12 },
+  prestige: {
+    alignItems: 'center', padding: 14, paddingTop: 20,
+    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, borderRadius: 20,
+  },
+  prestigeEquipped: { borderColor: colors.goldBorder },
+  halo: {
+    width: 68, height: 68, borderRadius: 34, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.surface, borderWidth: 1.5, borderColor: colors.accentBorder,
+  },
+  haloTag: {
+    position: 'absolute', top: -10,
+    backgroundColor: '#3F436D', borderRadius: 999, paddingHorizontal: 7, paddingVertical: 2,
+  },
+  haloTagText: { color: colors.calories, fontSize: 9, fontWeight: '900', letterSpacing: 0.6 },
+  rarityTag: { backgroundColor: colors.surfaceHigh, borderWidth: 1 },
+  prestigeName: { color: colors.text, fontSize: 15, fontWeight: '700', marginTop: 12 },
+  prestigeKind: { color: colors.textMuted, fontSize: 11, marginTop: 2 },
+  prestigeBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    alignSelf: 'stretch', marginTop: 12, paddingVertical: 9, borderRadius: 999,
+    backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: colors.border,
+  },
+  prestigeBtnEquipped: { borderColor: colors.goldBorder, backgroundColor: colors.goldSoft },
+  prestigeBtnText: { color: colors.text, fontSize: 14, fontWeight: '700' },
+  wardrobeHead: { color: colors.textSecondary, fontSize: 13, fontWeight: '700', letterSpacing: 0.3, marginTop: 20, marginBottom: 10 },
+  wardrobeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
 });

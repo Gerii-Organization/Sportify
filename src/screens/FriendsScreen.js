@@ -1,13 +1,13 @@
 import { useState, useCallback } from 'react';
 import { 
   StyleSheet, View, Text, SafeAreaView, ScrollView, TouchableOpacity, 
-  TextInput, Modal, ActivityIndicator, Alert, KeyboardAvoidingView, Platform 
+  TextInput, Modal, Alert, KeyboardAvoidingView, Platform 
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Users, UserPlus, Search, X, Check, Clock, Plus, Bell, MessageSquare, Hash } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
-import { colors } from '../theme';
+import { colors, radius, spacing, TAB_BAR_CLEARANCE } from '../theme';
 import { levelFromXp } from '../lib/level';
 import { gradients } from '../theme';
 import { useAuth } from '../context/AuthContext';
@@ -15,12 +15,13 @@ import Avatar from '../components/Avatar';
 import AmbientGlow from '../components/AmbientGlow';
 import FeedScreen from './FeedScreen';
 import LeaderboardScreen from './LeaderboardScreen';
-import { SkeletonRows } from '../components/Skeleton';
+import { SkeletonChats, SkeletonPeople } from '../components/Skeleton';
 import useRefresh from '../lib/useRefresh';
 import Press from '../components/Press';
 import FadeIn from '../components/FadeIn';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
+import ComposeSheet from '../components/ComposeSheet';
 import { unwrap } from '../lib/query';
 import { shortTime } from '../lib/date';
 
@@ -34,7 +35,9 @@ export default function FriendsScreen() {
    * said to them. Splitting them meant the tab bar spent two of its five slots
    * on one idea.
    */
-  const [section, setSection] = useState('chats');
+  // Feed first: it is the half of this screen that has something new on it
+  // every time you open it. Chats only change when somebody writes to you.
+  const [section, setSection] = useState('feed');
 
   const [loading, setLoading] = useState(true);
   /** A failed load of the friends/chats/groups set. Kept apart from the
@@ -57,6 +60,9 @@ export default function FriendsScreen() {
   // Modal visibility
   const [searchModalVisible, setSearchModalVisible] = useState(false);
   const [requestsModalVisible, setRequestsModalVisible] = useState(false);
+  const [composeVisible, setComposeVisible] = useState(false);
+  /** Bumped after posting so the embedded feed reloads. */
+  const [feedNonce, setFeedNonce] = useState(0);
   const [startChatModalVisible, setStartChatModalVisible] = useState(false);
   const [createGroupModalVisible, setCreateGroupModalVisible] = useState(false);
   
@@ -93,11 +99,21 @@ export default function FriendsScreen() {
 
     try {
       await fetchFriendsAndChats(user.id);
-      await fetchGroups(user.id);
     } catch (e) {
       setLoadError(e?.message || 'Something went wrong.');
     } finally {
       setLoading(false);
+    }
+
+    // Separately, and deliberately not fatal. Groups are a shelf at the top of
+    // this screen; chats are the screen. A broken group policy taking the whole
+    // list down with it is how one failure became "you have no conversations"
+    // for someone with a year of them.
+    try {
+      await fetchGroups(user.id);
+    } catch (e) {
+      setGroups([]);
+      console.warn(`[Sportify] Groups could not be loaded: ${e.message}`);
     }
   };
 
@@ -264,6 +280,18 @@ export default function FriendsScreen() {
     finally { setLoading(false); }
   };
 
+  const closeSearchModal = () => {
+    setSearchModalVisible(false);
+    setSearchResults([]);
+    setSearchQuery('');
+  };
+
+  const closeGroupModal = () => {
+    setCreateGroupModalVisible(false);
+    setGroupName('');
+    setSelectedFriends([]);
+  };
+
   const toggleFriendSelection = (id) => {
     setSelectedFriends(prev => prev.includes(id) ? prev.filter(fId => fId !== id) : [...prev, id]);
   };
@@ -376,20 +404,32 @@ export default function FriendsScreen() {
             )}
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <TouchableOpacity accessibilityLabel="Friend requests" activeOpacity={0.7} 
-              style={[styles.headerIconBtn, { marginRight: 10 }]}
+            <Press
+              scale={0.9}
+              accessibilityLabel={receivedRequests.length > 0
+                ? `${receivedRequests.length} friend requests`
+                : 'Friend requests'}
+              style={styles.bellBtn}
               onPress={() => setRequestsModalVisible(true)}
+              hitSlop={12}
             >
-              <Bell color={colors.text} size={20} />
-              {receivedRequests.length > 0 && <View style={styles.notificationDot} />}
-            </TouchableOpacity>
-            
-
+              <Bell
+                color={receivedRequests.length > 0 ? colors.accent : colors.textSecondary}
+                size={23}
+              />
+              {receivedRequests.length > 0 && (
+                <View style={styles.bellCount}>
+                  <Text style={styles.bellCountText}>
+                    {receivedRequests.length > 9 ? '9+' : receivedRequests.length}
+                  </Text>
+                </View>
+              )}
+            </Press>
           </View>
         </View>
 
         <View style={styles.sectionTabs}>
-          {[{ id: 'chats', label: 'Chats' }, { id: 'feed', label: 'Feed' }, { id: 'ranking', label: 'Ranking' }].map((t) => {
+          {[{ id: 'feed', label: 'Feed' }, { id: 'chats', label: 'Chats' }, { id: 'ranking', label: 'Ranking' }].map((t) => {
             const active = section === t.id;
             return (
               <Press
@@ -409,13 +449,13 @@ export default function FriendsScreen() {
         </View>
 
         {section === 'feed' ? (
-          <FeedScreen embedded />
+          <FeedScreen embedded reloadKey={feedNonce} />
         ) : section === 'ranking' ? (
           <LeaderboardScreen embedded />
         ) : loadError ? (
           <ErrorState message={loadError} onRetry={fetchData} />
         ) : loading ? (
-          <SkeletonRows count={6} />
+          <SkeletonChats />
         ) : (
           <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}
           refreshControl={refreshControl}>
@@ -439,7 +479,7 @@ export default function FriendsScreen() {
               <EmptyState
                 icon={<MessageSquare color={colors.textFaint} size={44} />}
                 title="No conversations yet"
-                message="Start one with a friend — training is easier when someone notices you stopped."
+                message="Send a friend a message to get started."
                 actionLabel={inactiveChats.length > 0 ? 'Start a chat' : 'Find friends'}
                 onAction={() =>
                   inactiveChats.length > 0 ? setStartChatModalVisible(true) : setSearchModalVisible(true)
@@ -460,8 +500,10 @@ export default function FriendsScreen() {
       {isFabMenuOpen && section === 'chats' && (
         <TouchableOpacity style={styles.fabOverlay} activeOpacity={1} onPress={() => setIsFabMenuOpen(false)} />
       )}
-      <View style={[styles.fabContainer, section !== 'chats' && { display: 'none' }]}>
-        {isFabMenuOpen && (
+      {/* On the feed the button writes a post; on chats it opens the menu. The
+          ranking has nothing to add, so it has no button. */}
+      <View style={[styles.fabContainer, section === 'ranking' && { display: 'none' }]}>
+        {isFabMenuOpen && section === 'chats' && (
           <View style={styles.fabMenu}>
             <TouchableOpacity activeOpacity={0.7} style={styles.fabMenuItem} onPress={() => { setIsFabMenuOpen(false); setSearchModalVisible(true); }}>
               <Text style={styles.fabMenuItemText}>Add Friend</Text>
@@ -473,11 +515,13 @@ export default function FriendsScreen() {
             </TouchableOpacity>
           </View>
         )}
-        <TouchableOpacity accessibilityLabel="Add" activeOpacity={0.7} 
-          style={[styles.fabMain, isFabMenuOpen && styles.fabMainOpen]} 
-          onPress={() => setIsFabMenuOpen(!isFabMenuOpen)}
+        <TouchableOpacity
+          accessibilityLabel={section === 'feed' ? 'Write a post' : 'Add a friend or start a group'}
+          activeOpacity={0.7}
+          style={[styles.fabMain, isFabMenuOpen && styles.fabMainOpen]}
+          onPress={() => (section === 'feed' ? setComposeVisible(true) : setIsFabMenuOpen(!isFabMenuOpen))}
         >
-          <Plus color={colors.onAccent} size={32} style={{ transform: [{ rotate: isFabMenuOpen ? '45deg' : '0deg' }] }} />
+          <Plus color={isFabMenuOpen ? colors.text : colors.onAccent} size={28} style={{ transform: [{ rotate: isFabMenuOpen ? '45deg' : '0deg' }] }} />
         </TouchableOpacity>
       </View>
 
@@ -517,67 +561,142 @@ export default function FriendsScreen() {
       </Modal>
 
       {/* MODAL: FRIEND REQUESTS */}
-      <Modal visible={requestsModalVisible} animationType="slide" transparent>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+      <Modal
+        visible={requestsModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setRequestsModalVisible(false)}
+      >
+        {/* A sheet, not a dialog. It slides from the edge it is attached to and
+            the backdrop closes it — the same gesture as every other panel in the
+            app, which is what makes it feel like part of it. */}
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setRequestsModalVisible(false)}
+        >
+          <TouchableOpacity activeOpacity={1} style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.grabber} />
+
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Friend Requests</Text>
-              <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} onPress={() => setRequestsModalVisible(false)}><X color={colors.textMuted} size={24} /></TouchableOpacity>
+              <Text style={styles.modalTitle}>Requests</Text>
+              <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} onPress={() => setRequestsModalVisible(false)}>
+                <X color={colors.textMuted} size={24} />
+              </TouchableOpacity>
             </View>
-            <ScrollView style={{ maxHeight: 400 }}>
+
+            <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
               {receivedRequests.length === 0 && sentRequests.length === 0 ? (
-                <Text style={{color: colors.textMuted, textAlign: 'center', marginTop: 20}}>No pending requests.</Text>
+                <View style={styles.requestsEmpty}>
+                  <View style={styles.requestsEmptyGlyph}>
+                    <Bell color={colors.textFaint} size={26} />
+                  </View>
+                  <Text style={styles.requestsEmptyTitle}>Nothing waiting</Text>
+                  <Text style={styles.requestsEmptyText}>
+                    Requests you send or receive will show up here.
+                  </Text>
+                </View>
               ) : (
                 <>
                   {receivedRequests.length > 0 && (
-                    <View style={{ marginBottom: 20 }}>
-                      <Text style={styles.sectionTitle}>Received</Text>
+                    <View style={{ marginBottom: spacing.lg }}>
+                      <View style={styles.sheetLabelRow}>
+                        <Text style={styles.sheetLabel}>Waiting on you</Text>
+                        <Text style={styles.sheetCount}>{receivedRequests.length}</Text>
+                      </View>
                       {receivedRequests.map(req => renderRequestItem(req, 'received'))}
                     </View>
                   )}
                   {sentRequests.length > 0 && (
                     <View>
-                      <Text style={styles.sectionTitle}>Sent</Text>
+                      <View style={styles.sheetLabelRow}>
+                        <Text style={styles.sheetLabel}>Waiting on them</Text>
+                        <Text style={styles.sheetCount}>{sentRequests.length}</Text>
+                      </View>
                       {sentRequests.map(req => renderRequestItem(req, 'sent'))}
                     </View>
                   )}
                 </>
               )}
             </ScrollView>
-          </View>
-        </KeyboardAvoidingView>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
 
       {/* MODAL: ADD FRIEND (Search) */}
-      <Modal visible={searchModalVisible} animationType="slide" transparent>
+      <Modal
+        visible={searchModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={closeSearchModal}
+      >
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
           <View style={styles.modalContent}>
+            <View style={styles.grabber} />
+
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Find athletes</Text>
-              <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} onPress={() => { setSearchModalVisible(false); setSearchResults([]); }}><X color={colors.textMuted} size={24} /></TouchableOpacity>
+              <Text style={styles.modalTitle}>Find people</Text>
+              <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} onPress={closeSearchModal}>
+                <X color={colors.textMuted} size={24} />
+              </TouchableOpacity>
             </View>
+
+            {/* Searching on submit, not behind a button: a search box with a
+                Search button beside it asks you to do the same thing twice. */}
             <View style={styles.searchBar}>
-              <Search color={colors.textSecondary} size={20} />
-              <TextInput 
-                style={styles.searchInput} placeholder="Search by first name..." placeholderTextColor={colors.textMuted}
-                value={searchQuery} onChangeText={setSearchQuery} autoFocus onSubmitEditing={handleSearch}
+              <Search color={colors.textFaint} size={19} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search by first name"
+                placeholderTextColor={colors.textFaint}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                autoFocus
+                autoCorrect={false}
+                returnKeyType="search"
+                onSubmitEditing={handleSearch}
               />
-              <TouchableOpacity activeOpacity={0.7} onPress={handleSearch} style={styles.searchBtn}><Text style={{color: colors.onAccent, fontWeight: '600'}}>Search</Text></TouchableOpacity>
+              {searchQuery.length > 0 && (
+                <TouchableOpacity accessibilityLabel="Clear" activeOpacity={0.7} onPress={() => { setSearchQuery(''); setSearchResults([]); }} hitSlop={8}>
+                  <X color={colors.textFaint} size={16} />
+                </TouchableOpacity>
+              )}
             </View>
-            {isSearching ? <ActivityIndicator color={colors.accent} style={{ marginTop: 20 }} /> : (
-              <ScrollView style={{ marginTop: 16, maxHeight: 300 }}>
-                {searchResults.map(res => (
-                  <TouchableOpacity activeOpacity={0.7} key={res.id} style={styles.searchResultItem} onPress={() => navigation.navigate('PublicProfileScreen', { userId: res.id })}>
-                    <Avatar profile={res} size={40} />
-                    <View style={{ marginLeft: 16, flex: 1 }}>
-                      <Text style={styles.userName}>{res.first_name}</Text>
-                      <Text style={styles.userTitle}>Lvl {levelFromXp(res.xp)}</Text>
-                    </View>
-                    <TouchableOpacity accessibilityLabel="Add friend" activeOpacity={0.7} style={styles.sendReqBtn} onPress={() => sendFriendRequest(res.id)}>
-                      <UserPlus color={colors.accent} size={18} />
+
+            {isSearching ? (
+              <SkeletonPeople count={3} />
+            ) : (
+              <ScrollView style={{ marginTop: spacing.md, maxHeight: 340 }} showsVerticalScrollIndicator={false}>
+                {searchResults.length === 0 ? (
+                  <Text style={styles.sheetEmpty}>
+                    {searchQuery.trim()
+                      ? `Nobody called "${searchQuery.trim()}".`
+                      : 'Type a name and press search.'}
+                  </Text>
+                ) : (
+                  searchResults.map(res => (
+                    <TouchableOpacity
+                      activeOpacity={0.7}
+                      key={res.id}
+                      style={styles.pickRow}
+                      onPress={() => { closeSearchModal(); navigation.navigate('PublicProfileScreen', { userId: res.id }); }}
+                    >
+                      <Avatar profile={res} size={40} />
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={styles.pickName} numberOfLines={1}>{res.first_name}</Text>
+                        <Text style={styles.userTitle}>Level {levelFromXp(res.xp)}</Text>
+                      </View>
+                      <TouchableOpacity
+                        accessibilityLabel={`Add ${res.first_name}`}
+                        activeOpacity={0.7}
+                        style={styles.sendReqBtn}
+                        onPress={() => sendFriendRequest(res.id)}
+                      >
+                        <UserPlus color={colors.accent} size={18} />
+                      </TouchableOpacity>
                     </TouchableOpacity>
-                  </TouchableOpacity>
-                ))}
+                  ))
+                )}
               </ScrollView>
             )}
           </View>
@@ -585,35 +704,85 @@ export default function FriendsScreen() {
       </Modal>
 
       {/* MODAL: CREATE GROUP */}
-      <Modal visible={createGroupModalVisible} animationType="slide" transparent>
+      <Modal visible={createGroupModalVisible} animationType="slide" transparent onRequestClose={closeGroupModal}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
           <View style={styles.modalContent}>
+            <View style={styles.grabber} />
+
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>New group</Text>
-              <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} onPress={() => { setCreateGroupModalVisible(false); setGroupName(''); setSelectedFriends([]); }}><X color={colors.textMuted} size={24} /></TouchableOpacity>
+              <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} onPress={closeGroupModal}>
+                <X color={colors.textMuted} size={24} />
+              </TouchableOpacity>
             </View>
-            <TextInput 
-              style={[styles.searchInput, { backgroundColor: colors.surfaceHigh, borderRadius: 18, paddingHorizontal: 16, marginBottom: 20, width: '100%' }]}
-              placeholder="Group name (e.g. Gym Bros)" placeholderTextColor={colors.textMuted} value={groupName} onChangeText={setGroupName}
+
+            {/* Its own style, not the search bar's. `searchInput` carries
+                flex: 1 for the row it belongs in; in a column that makes the
+                field stretch vertically and swallow the rest of the sheet —
+                which is why the name could not be typed. */}
+            <TextInput
+              style={styles.sheetInput}
+              placeholder="Group name"
+              placeholderTextColor={colors.textFaint}
+              value={groupName}
+              onChangeText={setGroupName}
+              maxLength={40}
+              returnKeyType="done"
             />
-            <Text style={styles.sectionTitle}>Select members</Text>
-            <ScrollView style={{ maxHeight: 250, marginTop: 10 }}>
-              {activeChats.concat(inactiveChats).map(f => (
-                <TouchableOpacity activeOpacity={0.7} key={f.id} style={styles.searchResultItem} onPress={() => toggleFriendSelection(f.id)}>
-                  <Avatar profile={f} />
-                  <Text style={[styles.userName, { flex: 1, marginLeft: 16 }]}>{f.first_name}</Text>
-                  <View style={[styles.checkbox, selectedFriends.includes(f.id) && styles.checkboxSelected]}>
-                    {selectedFriends.includes(f.id) && <Check color={colors.onAccent} size={14} />}
-                  </View>
-                </TouchableOpacity>
-              ))}
+
+            <View style={styles.sheetLabelRow}>
+              <Text style={styles.sheetLabel}>Members</Text>
+              <Text style={styles.sheetCount}>
+                {selectedFriends.length} selected
+              </Text>
+            </View>
+
+            <ScrollView style={{ maxHeight: 260 }} showsVerticalScrollIndicator={false}>
+              {activeChats.concat(inactiveChats).length === 0 ? (
+                <Text style={styles.sheetEmpty}>Add a friend first to start a group.</Text>
+              ) : (
+                activeChats.concat(inactiveChats).map(f => {
+                  const picked = selectedFriends.includes(f.id);
+                  return (
+                    <TouchableOpacity
+                      activeOpacity={0.7}
+                      key={f.id}
+                      style={[styles.pickRow, picked && styles.pickRowOn]}
+                      onPress={() => toggleFriendSelection(f.id)}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: picked }}
+                    >
+                      <Avatar profile={f} size={40} />
+                      <Text style={styles.pickName} numberOfLines={1}>{f.first_name}</Text>
+                      <View style={[styles.checkbox, picked && styles.checkboxSelected]}>
+                        {picked && <Check color={colors.onAccent} size={14} strokeWidth={3} />}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })
+              )}
             </ScrollView>
-            <TouchableOpacity activeOpacity={0.7} style={[styles.bigAddBtn, { marginTop: 20 }]} onPress={handleCreateGroup}>
-              <Text style={styles.bigAddBtnText}>Create group</Text>
+
+            {/* Disabled rather than hidden, so it is obvious what is missing. */}
+            <TouchableOpacity
+              activeOpacity={0.8}
+              style={[styles.sheetPrimary, !groupName.trim() && styles.sheetPrimaryOff]}
+              onPress={handleCreateGroup}
+              disabled={!groupName.trim()}
+            >
+              <Text style={[styles.sheetPrimaryText, !groupName.trim() && styles.sheetPrimaryTextOff]}>
+                {groupName.trim() ? `Create "${groupName.trim()}"` : 'Name the group first'}
+              </Text>
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      <ComposeSheet
+        visible={composeVisible}
+        onClose={() => setComposeVisible(false)}
+        onPosted={() => setFeedNonce((n) => n + 1)}
+      />
 
     </SafeAreaView>
   );
@@ -647,13 +816,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   titleBadgeText: { color: colors.onAccent, fontSize: 12, fontWeight: '700' },
-  headerIconBtn: { backgroundColor: colors.surface, padding: 10, borderRadius: 18, position: 'relative' },
-  notificationDot: { position: 'absolute', top: -2, right: -2, width: 10, height: 10, borderRadius: 5, backgroundColor: colors.danger, borderWidth: 1, borderColor: '#000' },
+  // No surface behind it. A single icon in a header corner does not need a
+  // button drawn around it to read as tappable, and the count says the rest.
+  bellBtn: { padding: 4, position: 'relative' },
+  bellCount: {
+    position: 'absolute', top: -3, right: -5,
+    minWidth: 17, height: 17, borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: colors.danger,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 2, borderColor: colors.background,
+  },
+  bellCountText: { color: '#FFFFFF', fontSize: 10, fontWeight: '800' },
   
-  centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   scrollContent: { padding: 20, paddingBottom: 130 },
-  sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
-  sectionTitle: { color: colors.text, fontSize: 17, fontWeight: '700', marginBottom: 10 },
 
   // --- Section labels -----------------------------------------------------
   // Small, tracked, muted. A section label competing with the content it
@@ -718,24 +894,11 @@ const styles = StyleSheet.create({
   unreadPillText: { color: colors.onAccent, fontSize: 11, fontWeight: '700' },
 
   userCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, padding: 16, borderRadius: 24, marginBottom: 10 },
-  avatarBase: { width: 46, height: 46, borderRadius: 23, backgroundColor: colors.surface, justifyContent: 'center', alignItems: 'center' },
   userInfo: { flex: 1, marginLeft: 16 },
   userName: { color: colors.text, fontSize: 15, fontWeight: '600' },
-  userNameUnread: { fontWeight: '700' },
   userTitle: { color: colors.textSecondary, fontSize: 13, marginTop: 2 },
   // An unread preview reads brighter, so the row is scannable without relying
   // on the badge alone — colour and weight both carry the state.
-  previewUnread: { color: colors.text, fontWeight: '600' },
-  unreadBadge: {
-    minWidth: 22,
-    height: 22,
-    borderRadius: 11,
-    paddingHorizontal: 6,
-    backgroundColor: colors.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  unreadCount: { color: colors.onAccent, fontSize: 11, fontWeight: '700' },
   
   requestActions: { flexDirection: 'row', alignItems: 'center' },
   actionBtnReject: { backgroundColor: colors.surfaceHigh, width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center', marginRight: 10 },
@@ -743,32 +906,76 @@ const styles = StyleSheet.create({
   pendingBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 10 },
   pendingText: { color: colors.textSecondary, fontSize: 13, fontWeight: '600', marginLeft: 6 },
 
-  emptyContainer: { alignItems: 'center', marginTop: 40, paddingHorizontal: 20 },
-  emptyTitle: { color: colors.text, fontSize: 20, fontWeight: '700', marginBottom: 10 },
-  emptySub: { color: colors.textMuted, textAlign: 'center', marginBottom: 26 },
-  bigAddBtn: { backgroundColor: colors.accent, paddingVertical: 16, paddingHorizontal: 26, borderRadius: 18, alignItems: 'center' },
-  bigAddBtnText: { color: colors.onAccent, fontWeight: '600', fontSize: 15 },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end' },
-  modalContent: { backgroundColor: colors.sheet, borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 26, paddingBottom: 40, maxHeight: '90%' },
+  modalContent: { backgroundColor: colors.sheet, borderTopLeftRadius: radius.sheet, borderTopRightRadius: radius.sheet, padding: spacing.xl, paddingTop: 10, paddingBottom: 40, maxHeight: '90%' },
+  // The handle every sheet in the OS has. Without it a panel that slid up from
+  // the bottom reads as a screen that arrived, not as one you can push back.
+  grabber: { width: 38, height: 4, borderRadius: 2, backgroundColor: colors.surfaceHigh, alignSelf: 'center', marginBottom: spacing.md },
+
+  sheetInput: {
+    backgroundColor: colors.surfaceHigh,
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '600',
+    paddingHorizontal: 16,
+    height: 52,
+    borderRadius: radius.md,
+    marginBottom: spacing.lg,
+  },
+  sheetLabelRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 },
+  sheetLabel: { color: colors.textMuted, fontSize: 11, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase' },
+  sheetCount: { color: colors.accent, fontSize: 12, fontWeight: '700' },
+  sheetEmpty: { color: colors.textMuted, fontSize: 14, lineHeight: 20, paddingVertical: spacing.lg, textAlign: 'center' },
+
+  pickRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    backgroundColor: colors.surface, borderRadius: radius.lg,
+    paddingHorizontal: 14, paddingVertical: 11, marginBottom: 8,
+  },
+  pickRowOn: { backgroundColor: colors.accentSoft },
+  pickName: { flex: 1, color: colors.text, fontSize: 15, fontWeight: '600' },
+
+  sheetPrimary: {
+    height: 54, borderRadius: radius.md,
+    backgroundColor: colors.accent,
+    alignItems: 'center', justifyContent: 'center',
+    marginTop: spacing.lg,
+  },
+  sheetPrimaryOff: { backgroundColor: colors.surfaceHigh },
+  sheetPrimaryText: { color: colors.onAccent, fontSize: 16, fontWeight: '700' },
+  sheetPrimaryTextOff: { color: colors.textMuted },
+
+  requestsEmpty: { alignItems: 'center', paddingVertical: spacing.xl },
+  requestsEmptyGlyph: {
+    width: 60, height: 60, borderRadius: 30,
+    backgroundColor: colors.surface,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  requestsEmptyTitle: { color: colors.text, fontSize: 17, fontWeight: '700', marginTop: spacing.md },
+  requestsEmptyText: {
+    color: colors.textMuted, fontSize: 14, lineHeight: 20,
+    textAlign: 'center', marginTop: 6, paddingHorizontal: spacing.lg,
+  },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
   modalTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
-  searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceHigh, borderRadius: 18, paddingHorizontal: 16 },
-  searchInput: { flex: 1, color: colors.text, paddingVertical: 16, marginLeft: 10 },
-  searchBtn: { backgroundColor: colors.accent, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12 },
+  searchBar: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.surfaceHigh, borderRadius: radius.md, paddingHorizontal: 16, height: 52 },
+  searchInput: { flex: 1, color: colors.text, fontSize: 16, fontWeight: '600', padding: 0 },
   
   searchResultItem: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceHigh, padding: 16, borderRadius: 18, marginBottom: 10 },
-  sendReqBtn: { backgroundColor: 'rgba(46, 211, 198, 0.1)', padding: 10, borderRadius: 14, borderWidth: 1, borderColor: colors.accent + '55' },
+  sendReqBtn: { backgroundColor: 'rgba(155, 157, 214, 0.1)', padding: 10, borderRadius: 14, borderWidth: 1, borderColor: colors.accent + '55' },
 
   fabOverlay: { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 99 },
-  fabContainer: { position: 'absolute', bottom: 90, right: 20, alignItems: 'flex-end', zIndex: 100 },
+  // TAB_BAR_CLEARANCE, not a guessed 90: the floating bar is 62 tall with a
+  // 16 margin, and the old number put the button partly behind it.
+  fabContainer: { position: 'absolute', bottom: TAB_BAR_CLEARANCE + 4, right: 20, alignItems: 'flex-end', zIndex: 100 },
   fabMenu: { marginBottom: 16, alignItems: 'flex-end' },
   fabMenuItem: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   fabMenuItemText: { color: colors.text, fontWeight: '600', fontSize: 15, backgroundColor: colors.surfaceHigh, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, overflow: 'hidden', marginRight: 10 },
   fabMenuIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.accent, justifyContent: 'center', alignItems: 'center' },
-  fabMain: { width: 60, height: 60, borderRadius: 30, backgroundColor: colors.accent, justifyContent: 'center', alignItems: 'center', shadowColor: colors.accent, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10, elevation: 8 },
-  fabMainOpen: { backgroundColor: '#FFF' },
+  fabMain: { width: 56, height: 56, borderRadius: 28, backgroundColor: colors.accent, justifyContent: 'center', alignItems: 'center', shadowColor: colors.accent, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.45, shadowRadius: 14, elevation: 8 },
+  fabMainOpen: { backgroundColor: colors.surfaceHigh },
 
-  checkbox: { width: 24, height: 24, borderRadius: 6, borderWidth: 2, borderColor: '#555', justifyContent: 'center', alignItems: 'center' },
+  checkbox: { width: 24, height: 24, borderRadius: 6, borderWidth: 2, borderColor: colors.borderLight, justifyContent: 'center', alignItems: 'center' },
   checkboxSelected: { backgroundColor: colors.accent, borderColor: colors.accent }
 });

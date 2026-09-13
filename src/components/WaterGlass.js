@@ -53,14 +53,14 @@ export default function WaterGlass({ ml = 0, goalMl = 2500, animate = true }) {
             <Path d={GLASS} />
           </ClipPath>
           <LinearGradient id="water" x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0%" stopColor="#7FD3F5" stopOpacity="0.95" />
+            <Stop offset="0%" stopColor="#B4D4EA" stopOpacity="0.95" />
             <Stop offset="100%" stopColor={colors.water} stopOpacity="1" />
           </LinearGradient>
         </Defs>
 
         {/* The empty glass, so the unfilled part still reads as glass rather
             than as nothing. */}
-        <Path d={GLASS} fill="rgba(79, 184, 232, 0.07)" />
+        <Path d={GLASS} fill="rgba(143, 184, 217, 0.07)" />
 
         <AnimatedRect
           x="0"

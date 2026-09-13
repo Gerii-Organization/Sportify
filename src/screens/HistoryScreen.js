@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo } from 'react';
-import { View, Text, ScrollView, SafeAreaView, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, SafeAreaView, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChevronLeft, ChevronDown, Dumbbell, Clock, Weight } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
@@ -14,6 +14,7 @@ import AmbientGlow from '../components/AmbientGlow';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import { formatVolume } from '../lib/units';
+import { SkeletonHistory } from '../components/Skeleton';
 
 /**
  * Every session you have finished.
@@ -66,7 +67,7 @@ export default function HistoryScreen({ navigation, embedded = false }) {
   const content = (
     <>
         {loading ? (
-          <ActivityIndicator color={colors.accent} style={{ marginTop: 60 }} />
+          <SkeletonHistory />
         ) : error ? (
           <ErrorState message={error} onRetry={reload} />
         ) : (
@@ -84,7 +85,7 @@ export default function HistoryScreen({ navigation, embedded = false }) {
             </FadeIn>
 
             {sessions.length === 0 ? (
-              <EmptyState message="No finished workouts yet. Your sessions will collect here." />
+              <EmptyState message="Finished workouts will show up here." />
             ) : (
               months.map(([label, rows], monthIndex) => (
                 <FadeIn key={label} index={monthIndex + 1}>

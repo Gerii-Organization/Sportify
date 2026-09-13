@@ -17,9 +17,9 @@ export default function ErrorState({ message, onRetry }) {
   return (
     <View style={styles.wrap}>
       <CloudOff color={colors.textFaint} size={34} />
-      <Text style={styles.title}>Could not load</Text>
+      <Text style={styles.title}>Something went wrong</Text>
       <Text style={styles.body}>
-        Check your connection and try again. Nothing has been lost.
+        Check your connection and try again.
       </Text>
       {message ? <Text style={styles.detail} numberOfLines={2}>{message}</Text> : null}
       {onRetry ? (

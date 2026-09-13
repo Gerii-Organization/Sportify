@@ -1,11 +1,10 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import { 
-  View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView,
-  Modal, SafeAreaView, TextInput, KeyboardAvoidingView, Platform, Alert 
+import {
+  View, Text, StyleSheet, FlatList, ScrollView, SafeAreaView, TextInput, Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
-import { Plus, Dumbbell, Zap, Layout, ChevronDown, ChevronUp, Bookmark, Compass, Pencil, Search, X } from 'lucide-react-native';
+import { Plus, Dumbbell, Layout, ChevronDown, Bookmark, Compass, Pencil, Search, X, Check, Trash2, Copy, Globe } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors, radius, spacing } from '../theme';
 import { gradients } from '../theme';
@@ -24,13 +23,30 @@ import FadeIn from '../components/FadeIn';
 import WorkoutCard from '../components/WorkoutCard';
 import TodayCard from '../components/TodayCard';
 import SplitSheet from '../components/SplitSheet';
+import BottomSheet from '../components/BottomSheet';
+import { sortWorkouts, popularId, musclesOf } from '../lib/workoutStats';
+import { weeklyTarget } from '../lib/split';
+import NewRoutineSheet from '../components/NewRoutineSheet';
+import { useConfirm } from '../components/ConfirmDialog';
+import { SkeletonRoutines } from '../components/Skeleton';
 
 
-/** The heading beside the toolbar. Mine is the default, so it names itself. */
-const VIEW_TITLES = { mine: 'My workouts', saved: 'Saved', browse: 'Browse' };
+/** The heading above the list. Mine is the default, so it names itself. */
+const VIEW_TITLES = { mine: 'My routines', saved: 'Saved routines', browse: 'Browse' };
+
+/**
+ * Orders each list offers. Browse sorts on the server, where the whole table
+ * is; the other two are short lists already on the phone.
+ */
+const SORTS = {
+  mine: [['recent', 'Recent'], ['trained', 'Most trained'], ['name', 'Name']],
+  saved: [['recent', 'Recent'], ['name', 'Name']],
+  browse: [['recent', 'Newest'], ['saves', 'Most saved']],
+};
 
 export default function TrainingScreen({ navigation }) {
   const { user, profile } = useAuth();
+  const confirmAction = useConfirm();
   const { refreshControl } = useRefresh(() => fetchMyWorkouts());
   const [myWorkouts, setMyWorkouts] = useState([]);
   const [suggestedWorkouts, setSuggestedWorkouts] = useState([]);
@@ -58,15 +74,38 @@ export default function TrainingScreen({ navigation }) {
   const [browseQuery, setBrowseQuery] = useState('');
   /** 'recent' or 'saves'. */
   const [browseSort, setBrowseSort] = useState('recent');
-  const [isBuiltInExpanded, setIsBuiltInExpanded] = useState(false);
-  const [isNamingModalVisible, setIsNamingModalVisible] = useState(false);
   /** Set by whichever list fetch is feeding the current view. Shown only
    *  where the empty state would otherwise go, so a failed refresh with rows
    *  already on screen leaves those rows alone. */
   const [listError, setListError] = useState(null);
-  const [newWorkoutName, setNewWorkoutName] = useState('');
-  /** Set while the naming modal is renaming rather than creating. */
+  /** Whether each list has finished its first load, so an empty list reads
+   *  as loading rather than as "no routines" while the fetch is still out. */
+  const [loadedViews, setLoadedViews] = useState({ mine: false, saved: false });
+  /** Set while the name sheet is renaming rather than creating. */
   const [renaming, setRenaming] = useState(null);
+  /** Filter over your own and saved routines. Browse has its own box. */
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  /** Order for the two lists sorted on the phone. Browse keeps browseSort. */
+  const [sortBy, setSortBy] = useState({ mine: 'recent', saved: 'recent' });
+  const [sortSheetVisible, setSortSheetVisible] = useState(false);
+  /** workout_id → sessions in the last 30 days. Feeds "Most trained" and POPULAR. */
+  const [timesTrained, setTimesTrained] = useState({});
+
+  // The split was seeded once from the profile at mount — before the profile
+  // had loaded on a cold start, so a saved split showed as "Set a split" and
+  // the week counted against the sign-up number instead.
+  useEffect(() => {
+    setSplit(profile?.split || null);
+  }, [profile?.split]);
+
+  // Browse brings its own search box; a second one above it would be noise.
+  useEffect(() => {
+    if (view === 'browse') {
+      setSearchOpen(false);
+      setSearchQuery('');
+    }
+  }, [view]);
 
   useFocusEffect(
     useCallback(() => {
@@ -81,7 +120,10 @@ export default function TrainingScreen({ navigation }) {
 
   const fetchMyWorkouts = async () => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) {
+      setLoadedViews((v) => ({ ...v, mine: true }));
+      return;
+    }
 
     setListError(null);
 
@@ -110,6 +152,22 @@ export default function TrainingScreen({ navigation }) {
       // about the connection. They rendered identically before this.
       setListError(e?.message || 'Something went wrong.');
     }
+
+    setLoadedViews((v) => ({ ...v, mine: true }));
+
+    // Which plans you actually run. Not worth an error state: without it the
+    // list still works, it just cannot rank by use.
+    const { data: recent } = await supabase
+      .from('workout_completions')
+      .select('workout_id')
+      .eq('user_id', user.id)
+      .gte('completed_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
+
+    const counts = {};
+    for (const row of recent || []) {
+      if (row.workout_id) counts[row.workout_id] = (counts[row.workout_id] || 0) + 1;
+    }
+    setTimesTrained(counts);
   };
 
   const fetchPublicWorkouts = useCallback(async () => {
@@ -141,6 +199,8 @@ export default function TrainingScreen({ navigation }) {
       setSavedWorkouts(await unwrap(supabase.rpc('get_saved_workouts')) || []);
     } catch (e) {
       setListError(e?.message || 'Something went wrong.');
+    } finally {
+      setLoadedViews((v) => ({ ...v, saved: true }));
     }
   }, []);
 
@@ -177,9 +237,9 @@ export default function TrainingScreen({ navigation }) {
   const handleCopy = async (workoutId, name) => {
     const { data, error } = await supabase.rpc('copy_workout', { p_workout_id: workoutId });
     if (error || !data?.ok) {
-      return Alert.alert('Nothing copied', 'That workout is no longer available.');
+      return Alert.alert('Could not copy it', 'This routine is no longer available.');
     }
-    Alert.alert('Added', `"${name}" is in your workouts, with the sets cleared.`);
+    Alert.alert('Added', `"${name}" was added to your routines.`);
     fetchMyWorkouts();
     setView('mine');
   };
@@ -194,24 +254,23 @@ export default function TrainingScreen({ navigation }) {
    *
    * Starting it is different, and needs no copy: you can run anyone's plan.
    */
-  const openSavedWorkout = (workout) => {
+  const openSavedWorkout = async (workout) => {
     if (!editMode) return openWorkoutDetail(workout);
 
-    Alert.alert(
-      'Make your own copy?',
-      `"${workout.name}" belongs to ${workout.author_name || 'someone else'}. Changing it means taking a copy into your workouts — theirs stays as it is.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Copy and edit', onPress: () => forkAndEdit(workout) },
-      ]
-    );
+    const ok = await confirmAction({
+      icon: Copy,
+      title: 'Edit your own copy?',
+      message: `"${workout.name}" belongs to ${workout.author_name || 'someone else'}. You will edit a copy, and theirs stays the same.`,
+      confirmLabel: 'Copy and edit',
+    });
+    if (ok) forkAndEdit(workout);
   };
 
   const forkAndEdit = async (workout) => {
     const { data, error } = await supabase.rpc('copy_workout', { p_workout_id: workout.id });
 
     if (error || !data?.ok) {
-      return Alert.alert('Nothing copied', 'That workout is no longer available.');
+      return Alert.alert('Could not copy it', 'This routine is no longer available.');
     }
 
     await fetchMyWorkouts();
@@ -336,7 +395,7 @@ export default function TrainingScreen({ navigation }) {
    * weights you logged against it, which `copy_workout` strips before anyone
    * else sees them. People decline to share because they assume otherwise.
    */
-  const toggleVisibility = (workout) => {
+  const toggleVisibility = async (workout) => {
     const next = !workout.is_public;
 
     const apply = async () => {
@@ -351,32 +410,30 @@ export default function TrainingScreen({ navigation }) {
 
     if (!next) return apply();
 
-    Alert.alert(
-      'Share this workout?',
-      'Anyone can find it in Browse and copy it. They see the exercises and set counts — never the weights you lifted.',
-      [{ text: 'Cancel', style: 'cancel' }, { text: 'Share', onPress: apply }]
-    );
+    const ok = await confirmAction({
+      icon: Globe,
+      title: 'Share this routine?',
+      message: 'Anyone can find and copy it in Browse. The weights you lifted stay private.',
+      confirmLabel: 'Share',
+    });
+    if (ok) apply();
   };
 
   /**
    * Renaming, from the list. Nothing else about the plan changes.
    *
-   * Uses the naming modal that already exists for creating one, rather than
+   * Uses the same name sheet as creating one, rather than
    * `Alert.prompt` — that is iOS-only and silently does nothing on Android.
    */
   const promptRename = (workout) => {
     setRenaming(workout);
-    setNewWorkoutName(workout.name || '');
-    setIsNamingModalVisible(true);
   };
 
-  const commitRename = async () => {
-    const name = newWorkoutName.trim();
+  const commitRename = async (typed) => {
+    const name = (typed || '').trim();
     const target = renaming;
 
-    setIsNamingModalVisible(false);
     setRenaming(null);
-    setNewWorkoutName('');
 
     if (!target || !name || name === target.name) return;
 
@@ -389,27 +446,33 @@ export default function TrainingScreen({ navigation }) {
     setMyWorkouts((list) => list.map((w) => (w.id === target.id ? { ...w, name } : w)));
   };
 
-  const confirmDeleteWorkout = (id) => {
-    Alert.alert("Delete workout", "Delete this workout? This cannot be undone.", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Delete", style: "destructive", onPress: async () => {
-          setMyWorkouts(myWorkouts.filter(w => w.id !== id));
-          await supabase.from('user_workouts').delete().eq('id', id);
-        } 
-      }
-    ]);
+  const confirmDeleteWorkout = async (workout) => {
+    const ok = await confirmAction({
+      tone: 'danger',
+      icon: Trash2,
+      title: `Delete "${workout.name}"?`,
+      message: 'It will be removed from your routines. Workouts you already finished stay in your history.',
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+
+    setMyWorkouts((list) => list.filter((w) => w.id !== workout.id));
+    const { error } = await supabase.from('user_workouts').delete().eq('id', workout.id);
+    if (error) {
+      Alert.alert('Could not delete it', error.message);
+      fetchMyWorkouts();
+    }
   };
 
-  const triggerCustomWorkoutCreation = () => {
-    closeMainMenu();
-    setNewWorkoutName('');
-    setIsNamingModalVisible(true);
+  const closeNewSheet = () => {
+    setMainMenuVisible(false);
+    setRenaming(null);
   };
 
-  const handleCreateNamedWorkout = async () => {
-    const finalName = newWorkoutName.trim() || 'Custom Session';
-    setIsNamingModalVisible(false);
-    
+  const handleCreateNamedWorkout = async (typed) => {
+    const finalName = (typed || '').trim() || 'Custom Session';
+    setMainMenuVisible(false);
+
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
@@ -418,44 +481,93 @@ export default function TrainingScreen({ navigation }) {
     }).select().single();
 
     if (data) {
-      setMyWorkouts([data, ...myWorkouts]);
-      openWorkoutDetail(data); 
+      setMyWorkouts((list) => [data, ...list]);
+      openWorkoutDetail(data);
     }
   };
 
+  /**
+   * Adds a suggested plan and leaves the sheet open. Resolves true once the
+   * row is written, which is what turns its button into a tick.
+   */
   const addPreset = async (item) => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) return false;
 
-    const { data } = await supabase.from('user_workouts').insert({
+    const { data, error } = await supabase.from('user_workouts').insert({
       user_id: user.id, name: item.name, duration: item.duration,
       intensity: item.intensity, exercises: item.exercises || []
     }).select().single();
 
-    if (data) setMyWorkouts([data, ...myWorkouts]);
-    closeMainMenu();
-  };
-
-  const closeMainMenu = () => {
-    setMainMenuVisible(false);
-    setIsBuiltInExpanded(false); 
+    if (error || !data) {
+      Alert.alert('Could not add it', error?.message || 'Please try again.');
+      return false;
+    }
+    setMyWorkouts((list) => [data, ...list]);
+    return true;
   };
 
   const handleSaveWorkout = (updatedWorkout) => {
     setMyWorkouts(prevWorkouts => prevWorkouts.map(w => w.id === updatedWorkout.id ? updatedWorkout : w));
   };
 
+  /** Sessions this week, reconciled with the split — see weeklyTarget. */
+  const weekTarget = weeklyTarget(split, profile?.workouts_per_week);
+
   const advice = useMemo(
     () => trainingAdvice({
       sessions: weekSessions,
-      target: profile?.workouts_per_week,
+      target: weekTarget,
       today: todayKey(),
       trainedDays,
       split,
       weekKeys: currentWeekKeys(),
     }),
-    [weekSessions, profile?.workouts_per_week, trainedDays, split]
+    [weekSessions, weekTarget, trainedDays, split]
   );
+
+  const baseRows = view === 'mine' ? myWorkouts : view === 'saved' ? savedWorkouts : publicWorkouts;
+  const query = searchQuery.trim().toLowerCase();
+  const rows = useMemo(() => {
+    if (view === 'browse') return baseRows;
+    const sorted = sortWorkouts(baseRows, sortBy[view], timesTrained);
+    if (!query) return sorted;
+    // Name, muscle or author: "chest" finds the plans that train it even when
+    // one of them is called "Monday".
+    return sorted.filter((w) =>
+      (w.name || '').toLowerCase().includes(query)
+      || musclesOf(w).some((m) => m.toLowerCase().includes(query))
+      || (w.author_name || '').toLowerCase().includes(query)
+    );
+  }, [baseRows, view, sortBy, timesTrained, query]);
+
+  const listLoading = view === 'browse' ? browseLoading : !loadedViews[view];
+
+  const toggleSearch = () => {
+    if (searchOpen) {
+      setSearchOpen(false);
+      setSearchQuery('');
+      return;
+    }
+    if (view === 'browse') setView('mine');
+    setSearchOpen(true);
+  };
+  // Your own: the plan you clearly run most, twice or more this month.
+  // Everyone else's: the clear favourite, saved by at least three people.
+  const popular = useMemo(
+    () => (view === 'mine'
+      ? popularId(rows, (w) => timesTrained[String(w.id)], 2)
+      : popularId(rows, (w) => w.save_count, 3)),
+    [rows, view, timesTrained]
+  );
+  const activeSort = view === 'browse' ? browseSort : sortBy[view];
+  const sortLabel = (SORTS[view].find(([key]) => key === activeSort) || SORTS[view][0])[1];
+
+  const chooseSort = (key) => {
+    setSortSheetVisible(false);
+    if (view === 'browse') setBrowseSort(key);
+    else setSortBy((prev) => ({ ...prev, [view]: key }));
+  };
 
   /** Jumps to Browse already filtered to what the advice suggested. */
   const actOnAdvice = (muscle) => {
@@ -477,47 +589,25 @@ export default function TrainingScreen({ navigation }) {
     <SafeAreaView style={styles.container}>
       <LinearGradient colors={gradients.screen} style={styles.gradientBg}>
         <AmbientGlow tone="ember" height={300} intensity={0.38} />
-        <ScreenHeader title="Workouts" />
-
-        {/* Above the segments, not inside the list.
-            It answers "what should I do today", which is a question you ask
-            before choosing between Mine, Saved and Browse — under the tabs it
-            read as a property of whichever tab was open. */}
-        {!editMode && (
-        <TodayCard
-          advice={advice}
-          onAct={actOnAdvice}
-          week={{
-            target: profile?.workouts_per_week,
-            doneDays: trainedDays,
-            weekKeys: currentWeekKeys(),
-            splitName: split?.length ? `${split.length}-day split` : null,
-          }}
-          onEditSplit={() => setSplitSheetVisible(true)}
-        />
-        )}
-
-        {/* Icons rather than three word-buttons.
-            Mine is the default and has no icon of its own: Saved and Browse
-            light up when you are in them, and tapping the lit one comes back.
-            The two actions sit after a divider so a toggle and a command do not
-            read as the same kind of control. */}
-        <View style={styles.toolbar}>
-          <Text style={styles.viewTitle}>
-            {editMode ? 'Choose one to edit' : VIEW_TITLES[view]}
-          </Text>
-
-          {editMode ? (
-            <Press
-              scale={0.96}
-              style={styles.doneBtn}
-              onPress={() => setEditMode(false)}
-              accessibilityLabel="Finish editing"
-            >
-              <Text style={styles.doneText}>Done</Text>
-            </Press>
-          ) : (
+        {/* The tools live beside the screen title now, so the row above the
+            list can be what the list is: its name, its size, its order.
+            Saved and Browse light up when you are in them, and tapping the lit
+            one comes back; the pair after the divider do something. */}
+        <ScreenHeader
+          title="Workouts"
+          right={editMode ? null : (
             <View style={styles.toolRow}>
+              <Press
+                scale={0.9}
+                style={styles.tool}
+                onPress={toggleSearch}
+                hitSlop={4}
+                accessibilityLabel={searchOpen ? 'Close search' : 'Search your routines'}
+                accessibilityState={{ expanded: searchOpen }}
+              >
+                <Search color={searchOpen ? colors.accent : colors.textSecondary} size={18} />
+              </Press>
+
               <Press
                 scale={0.9}
                 style={[styles.tool, view === 'saved' && styles.toolOn]}
@@ -566,11 +656,87 @@ export default function TrainingScreen({ navigation }) {
               </Press>
             </View>
           )}
+        />
+
+        {/* Above the segments, not inside the list.
+            It answers "what should I do today", which is a question you ask
+            before choosing between Mine, Saved and Browse — under the tabs it
+            read as a property of whichever tab was open. */}
+        {!editMode && (
+        <TodayCard
+          advice={advice}
+          onAct={actOnAdvice}
+          week={{
+            target: weekTarget,
+            doneDays: trainedDays,
+            weekKeys: currentWeekKeys(),
+            splitName: split?.length ? `${split.length}-day split` : null,
+          }}
+          onEditSplit={() => setSplitSheetVisible(true)}
+        />
+        )}
+
+        <View style={styles.listHead}>
+          <View style={styles.listHeadTitle}>
+            <Text style={styles.viewTitle} numberOfLines={1}>
+              {editMode ? 'Choose one to edit' : VIEW_TITLES[view]}
+            </Text>
+            {!editMode ? (
+              <View style={styles.countPill}>
+                <Text style={styles.countText}>
+                  {rows.length} {view === 'browse' ? 'shown' : 'total'}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+
+          {editMode ? (
+            <Press
+              scale={0.96}
+              style={styles.doneBtn}
+              onPress={() => setEditMode(false)}
+              accessibilityLabel="Finish editing"
+            >
+              <Text style={styles.doneText}>Done</Text>
+            </Press>
+          ) : (
+            <Press
+              scale={0.96}
+              style={styles.sortBtn}
+              onPress={() => setSortSheetVisible(true)}
+              hitSlop={8}
+              accessibilityLabel={`Sort by ${sortLabel.toLowerCase()}. Change order`}
+            >
+              <Text style={styles.sortText}>Sort by {sortLabel.toLowerCase()}</Text>
+              <ChevronDown color={colors.accent} size={16} />
+            </Press>
+          )}
         </View>
+
+        {searchOpen && view !== 'browse' ? (
+          <View style={styles.mySearchRow}>
+            <Search color={colors.textFaint} size={17} />
+            <TextInput
+              style={styles.browseSearchInput}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholder={view === 'saved' ? 'Search saved routines' : 'Search your routines'}
+              placeholderTextColor={colors.textFaint}
+              selectionColor={colors.accent}
+              autoFocus
+              autoCorrect={false}
+              returnKeyType="search"
+              accessibilityLabel="Search routines by name, muscle or author"
+            />
+            <Press scale={0.9} onPress={toggleSearch} hitSlop={8} accessibilityLabel="Close search">
+              <X color={colors.textFaint} size={16} />
+            </Press>
+          </View>
+        ) : null}
 
         <FlatList
         refreshControl={refreshControl}
-        data={view === 'mine' ? myWorkouts : view === 'saved' ? savedWorkouts : publicWorkouts}
+        data={rows}
         keyExtractor={item => String(item.id)}
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
@@ -582,7 +748,7 @@ export default function TrainingScreen({ navigation }) {
                 style={styles.browseSearchInput}
                 value={browseQuery}
                 onChangeText={setBrowseQuery}
-                placeholder="Workout or person"
+                placeholder="Search routines or people"
                 placeholderTextColor={colors.textFaint}
                 autoCorrect={false}
                 returnKeyType="search"
@@ -593,26 +759,6 @@ export default function TrainingScreen({ navigation }) {
                   <X color={colors.textFaint} size={16} />
                 </Press>
               )}
-            </View>
-
-            {/* Two orders, because they answer different questions: what is new,
-                and what other people kept. */}
-            <View style={styles.browseSortRow}>
-              {[['recent', 'Newest'], ['saves', 'Most saved']].map(([key, label]) => {
-                const active = browseSort === key;
-                return (
-                  <Press
-                    key={key}
-                    scale={0.96}
-                    style={[styles.sortChip, active && styles.sortChipOn]}
-                    onPress={() => setBrowseSort(key)}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: active }}
-                  >
-                    <Text style={[styles.sortChipText, active && styles.sortChipTextOn]}>{label}</Text>
-                  </Press>
-                );
-              })}
             </View>
 
             <ScrollView
@@ -643,7 +789,9 @@ export default function TrainingScreen({ navigation }) {
         }
 
         ListEmptyComponent={
-          listError ? (
+          listLoading && !listError ? (
+            <SkeletonRoutines count={4} />
+          ) : listError ? (
             <ErrorState
               message={listError}
               onRetry={() => {
@@ -652,32 +800,40 @@ export default function TrainingScreen({ navigation }) {
                 else fetchMyWorkouts();
               }}
             />
+          ) : query && view !== 'browse' ? (
+            <EmptyState
+              icon={<Search color={colors.textFaint} size={44} />}
+              title={`Nothing matches "${searchQuery.trim()}"`}
+              message="Try a different name or muscle group."
+              actionLabel="Clear search"
+              onAction={() => setSearchQuery('')}
+            />
           ) : view === 'saved' ? (
             <EmptyState
               icon={<Bookmark color={colors.textFaint} size={44} />}
               title="Nothing saved"
-              message="Found a workout you like in Browse? The bookmark keeps it here without copying it into your own list."
-              actionLabel="Browse workouts"
+              message="Save routines from Browse and they will show up here."
+              actionLabel="Browse routines"
               onAction={() => setView('browse')}
             />
           ) : view === 'browse' ? (
             browseLoading ? null : (
               <EmptyState
                 icon={<Layout color={colors.textFaint} size={44} />}
-                title={browseMuscle ? `No ${browseMuscle.toLowerCase()} workouts` : 'No public workouts yet'}
+                title={browseMuscle ? `No ${browseMuscle.toLowerCase()} routines` : 'No shared routines yet'}
                 message={browseMuscle
-                  ? 'Nobody has shared one that trains this group yet. Try another filter.'
-                  : 'Nobody has shared one so far. Publish yours from the workout screen and it will show up here.'}
-                actionLabel="Build a workout"
+                  ? 'Nobody has shared one for this muscle group yet.'
+                  : 'Be the first to share one.'}
+                actionLabel="Create a routine"
                 onAction={() => setMainMenuVisible(true)}
               />
             )
           ) : (
           <EmptyState
             icon={<Dumbbell color={colors.textFaint} size={44} />}
-            title="No workouts yet"
-            message="Build your own, or pick one we have matched to your goal."
-            actionLabel="Add a workout"
+            title="No routines yet"
+            message="Create your own or add one of our suggestions."
+            actionLabel="Create a routine"
             onAction={() => setMainMenuVisible(true)}
           />
           )
@@ -687,14 +843,16 @@ export default function TrainingScreen({ navigation }) {
             <WorkoutCard
               workout={item}
               variant={view}
-              imageUrl={item.cover_url}
               editing={editMode}
+              highlight={!editMode && index === 0}
+              popular={item.id === popular}
+              weightKg={profile?.weight}
               onOpen={() =>
                 view === 'saved'
                   ? openSavedWorkout(item)
                   : openWorkoutDetail(item, editMode)
               }
-              onDelete={() => confirmDeleteWorkout(item.id)}
+              onDelete={() => confirmDeleteWorkout(item)}
               onRename={() => promptRename(item)}
               onToggleVisibility={() => toggleVisibility(item)}
               onCopy={() => handleCopy(item.id, item.name)}
@@ -704,66 +862,41 @@ export default function TrainingScreen({ navigation }) {
         )}
       />
 
-      <Modal visible={mainMenuVisible} transparent animationType="fade">
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={closeMainMenu}>
-          <TouchableOpacity activeOpacity={1} style={styles.glassMenu}>
-            <Text style={styles.menuTitle}>Choose a workout</Text>
-            
-            <TouchableOpacity activeOpacity={0.7} style={styles.menuOption} onPress={triggerCustomWorkoutCreation}>
-              <Zap color={colors.accent} size={22} /><Text style={styles.menuOptionText}>Create a custom workout</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity activeOpacity={0.7} 
-              style={[styles.menuOption, isBuiltInExpanded && styles.menuOptionExpanded]} 
-              onPress={() => setIsBuiltInExpanded(!isBuiltInExpanded)}
-            >
-              <Layout color={colors.accent} size={22} />
-              <Text style={styles.menuOptionText}>Suggested Workouts</Text>
-              {isBuiltInExpanded ? <ChevronUp color={colors.textMuted} size={20} style={styles.chevron} /> : <ChevronDown color={colors.textMuted} size={20} style={styles.chevron} />}
-            </TouchableOpacity>
-            
-            {isBuiltInExpanded && (
-              <View style={styles.expandedContainer}>
-                {suggestedWorkouts.map((item, index) => (
-                  <TouchableOpacity accessibilityLabel="Add" activeOpacity={0.7} key={index} style={styles.expandedItem} onPress={() => addPreset(item)}>
-                    <View>
-                      <Text style={styles.expandedItemName}>{item.name}</Text>
-                      <Text style={styles.expandedItemSub}>{item.duration} • {item.intensity}</Text>
-                    </View>
-                    <Plus color={colors.accent} size={20} />
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-            
-            <TouchableOpacity activeOpacity={0.7} onPress={closeMainMenu} style={{ marginTop: 20 }}>
-              <Text style={styles.closeText}>Cancel</Text>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
+      <NewRoutineSheet
+        visible={mainMenuVisible || !!renaming}
+        onClose={closeNewSheet}
+        renaming={renaming}
+        suggestions={suggestedWorkouts}
+        weightKg={profile?.weight}
+        onCreate={handleCreateNamedWorkout}
+        onRename={commitRename}
+        onAddPreset={addPreset}
+        onBrowse={() => { setMainMenuVisible(false); setView('browse'); }}
+      />
 
-      <Modal visible={isNamingModalVisible} transparent animationType="fade">
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
-          <View style={styles.glassMenu}>
-            <Text style={styles.menuTitle}>{renaming ? 'Rename workout:' : 'Pick a workout name:'}</Text>
-            <TextInput 
-              style={styles.nameInput} placeholder="Ex: Leg Day" placeholderTextColor={colors.textMuted}
-              value={newWorkoutName} onChangeText={setNewWorkoutName} autoFocus
-            />
-            <TouchableOpacity
-              activeOpacity={0.7}
-              style={styles.saveNameBtn}
-              onPress={renaming ? commitRename : handleCreateNamedWorkout}
-            >
-              <Text style={styles.saveNameBtnText}>{renaming ? 'Rename' : 'Create'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity activeOpacity={0.7} onPress={() => { setIsNamingModalVisible(false); setRenaming(null); }} style={{ marginTop: 20 }}>
-              <Text style={styles.closeText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+        <BottomSheet
+          visible={sortSheetVisible}
+          onClose={() => setSortSheetVisible(false)}
+          title="Sort routines"
+          avoidKeyboard={false}
+        >
+          {SORTS[view].map(([key, label]) => {
+            const on = key === activeSort;
+            return (
+              <Press
+                key={key}
+                scale={0.98}
+                style={[styles.sortOption, on && styles.sortOptionOn]}
+                onPress={() => chooseSort(key)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: on }}
+              >
+                <Text style={[styles.sortOptionText, on && styles.sortOptionTextOn]}>{label}</Text>
+                {on ? <Check color={colors.accent} size={18} /> : null}
+              </Press>
+            );
+          })}
+        </BottomSheet>
         <SplitSheet
           visible={splitSheetVisible}
           onClose={() => setSplitSheetVisible(false)}
@@ -781,25 +914,29 @@ const styles = StyleSheet.create({
   header: { padding: 20, paddingTop: 40 },
   dateText: { color: colors.textMuted, marginTop: 16, fontSize: 15 },
   title: { color: colors.text, fontSize: 34, fontWeight: '800', marginTop: 6 },
-  // --- Segmented control ---------------------------------------------------
-  // The two things you can do here, side by side, instead of a floating plus
-  // that hid one of them behind a menu.
-  toolbar: {
+  // --- List head -----------------------------------------------------------
+  listHead: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 20, marginBottom: 14,
+    paddingHorizontal: 20, marginBottom: 2, gap: 12,
   },
-  viewTitle: { color: colors.text, fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
-  toolRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  tool: {
-    width: 36, height: 36, borderRadius: 13,
-    backgroundColor: colors.surface,
-    alignItems: 'center', justifyContent: 'center',
+  listHeadTitle: { flexDirection: 'row', alignItems: 'center', gap: 10, flexShrink: 1 },
+  viewTitle: { color: colors.text, fontSize: 22, fontWeight: '800', letterSpacing: -0.5, flexShrink: 1 },
+  countPill: {
+    borderWidth: 1, borderColor: colors.borderLight,
+    borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3,
   },
-  toolOn: { backgroundColor: colors.accentSoft },
-  toolPrimary: { backgroundColor: colors.accent },
+  countText: { color: colors.textMuted, fontSize: 13, fontWeight: '500' },
+  sortBtn: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  sortText: { color: colors.accent, fontSize: 14, fontWeight: '500' },
+  toolRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  // Bare icons. The lit colour already says which list you are in; a tile
+  // behind every icon made five buttons compete with the one that creates.
+  tool: { width: 32, height: 36, alignItems: 'center', justifyContent: 'center' },
+  toolOn: {},
+  toolPrimary: { width: 36, marginLeft: 2, borderRadius: 13, backgroundColor: colors.accent },
   // A hairline between the pair on the left and the pair on the right: the
   // first two say where you are, the last two do something.
-  toolDivider: { width: 1, height: 20, backgroundColor: colors.border, marginHorizontal: 3 },
+  toolDivider: { width: 1, height: 20, backgroundColor: colors.border, marginHorizontal: 5 },
   doneBtn: {
     paddingHorizontal: 16, paddingVertical: 8, borderRadius: 999,
     backgroundColor: colors.accent,
@@ -812,14 +949,21 @@ const styles = StyleSheet.create({
     marginHorizontal: spacing.lg, marginBottom: 10,
   },
   browseSearchInput: { flex: 1, color: colors.text, fontSize: 15, padding: 0 },
-  browseSortRow: { flexDirection: 'row', gap: 8, paddingHorizontal: spacing.lg, marginBottom: 12 },
-  sortChip: {
-    paddingHorizontal: 13, paddingVertical: 7, borderRadius: radius.pill,
-    backgroundColor: colors.surface,
+  mySearchRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: colors.surface, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.border,
+    paddingHorizontal: 14, height: 44,
+    marginHorizontal: 20, marginTop: 12,
   },
-  sortChipOn: { backgroundColor: colors.accent },
-  sortChipText: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
-  sortChipTextOn: { color: colors.onAccent, fontWeight: '700' },
+  sortOption: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, height: 52, borderRadius: radius.md, marginBottom: 6,
+    backgroundColor: colors.surfaceRaised,
+  },
+  sortOptionOn: { backgroundColor: colors.accentSoft },
+  sortOptionText: { color: colors.textSecondary, fontSize: 15, fontWeight: '600' },
+  sortOptionTextOn: { color: colors.text },
 
   muscleFilterRow: { flexDirection: 'row', gap: 8, paddingBottom: 14, paddingRight: 20 },
   muscleChip: {
@@ -847,25 +991,10 @@ const styles = StyleSheet.create({
   listContent: { padding: 20, paddingBottom: 100 },
   glassCard: { backgroundColor: colors.card, borderRadius: 24, padding: 16, marginBottom: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   workoutMain: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  iconCircle: { backgroundColor: 'rgba(46, 211, 198, 0.1)', padding: 10, borderRadius: 14, marginRight: 16 },
+  iconCircle: { backgroundColor: 'rgba(155, 157, 214, 0.1)', padding: 10, borderRadius: 14, marginRight: 16 },
   workoutName: { color: colors.text, fontSize: 15, fontWeight: '600' },
   actionButtons: { flexDirection: 'row', alignItems: 'center' },
   playBtn: { backgroundColor: colors.accent, width: 35, height: 35, borderRadius: 17.5, justifyContent: 'center', alignItems: 'center', marginLeft: 16 },
   deleteBtn: { padding: 10 },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  glassMenu: { backgroundColor: colors.sheet, width: '100%', borderRadius: 35, padding: 26 },
-  menuTitle: { color: colors.text, fontSize: 20, fontWeight: '700', marginBottom: 20, textAlign: 'center' },
-  menuOption: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceHigh, padding: 20, borderRadius: 18, marginBottom: 10 },
-  menuOptionExpanded: { borderBottomLeftRadius: 0, borderBottomRightRadius: 0, marginBottom: 0 },
-  menuOptionText: { color: colors.text, fontSize: 15, fontWeight: '600', marginLeft: 16 },
-  chevron: { marginLeft: 'auto' },
-  expandedContainer: { backgroundColor: colors.surfaceRaised, padding: 16, borderBottomLeftRadius: 15, borderBottomRightRadius: 15, marginBottom: 10, borderTopWidth: 0 },
-  expandedItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
-  expandedItemName: { color: colors.text, fontSize: 15, fontWeight: '600' },
-  expandedItemSub: { color: colors.accent, fontSize: 13, marginTop: 6 },
-  closeText: { color: colors.textMuted, textAlign: 'center', fontSize: 15 },
   emptyText: { color: colors.textDisabled, textAlign: 'center', marginTop: 50 },
-  nameInput: { backgroundColor: colors.surfaceHigh, color: colors.text, borderRadius: 18, padding: 20, fontSize: 15, marginBottom: 20 },
-  saveNameBtn: { backgroundColor: colors.accent, padding: 20, borderRadius: 18, alignItems: 'center' },
-  saveNameBtnText: { color: colors.onAccent, fontWeight: '600', fontSize: 15 }
 });

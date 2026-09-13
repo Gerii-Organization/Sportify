@@ -245,7 +245,7 @@ export default function ScannerScreen() {
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission Denied', 'We need access to your gallery to analyze photos.');
+        Alert.alert('Photo access needed', 'Allow photo access in Settings to scan a photo.');
         return;
       }
 
@@ -592,7 +592,7 @@ export default function ScannerScreen() {
                   <EmptyState
                     icon={<Clock color={colors.textFaint} size={44} />}
                     title="Nothing logged yet"
-                    message="Point the camera at a meal and it will work out the calories and macros."
+                    message="Scan a meal to see its calories and macros."
                   />
                 }
                 showsVerticalScrollIndicator={false}
@@ -649,7 +649,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   modeBtnActive: {
-    backgroundColor: 'rgba(46, 211, 198, 0.2)',
+    backgroundColor: 'rgba(155, 157, 214, 0.2)',
   },
   modeText: {
     color: colors.text,
@@ -721,7 +721,7 @@ const styles = StyleSheet.create({
     alignItems: 'center'
   },
   ingredientChip: {
-    backgroundColor: 'rgba(46, 211, 198, 0.2)',
+    backgroundColor: 'rgba(155, 157, 214, 0.2)',
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 18,
@@ -787,7 +787,7 @@ const styles = StyleSheet.create({
   foodHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10, paddingRight: 10 },
   foodTitle: { color: colors.text, fontSize: 15, fontWeight: '600', marginRight: 10, flexShrink: 1 },
   matchBadge: {
-    backgroundColor: 'rgba(46, 211, 198, 0.15)',
+    backgroundColor: 'rgba(155, 157, 214, 0.15)',
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 10,
@@ -972,7 +972,7 @@ const styles = StyleSheet.create({
     marginRight: 10
   },
   ingredientTextExpanded: {
-    color: '#ddd',
+    color: colors.textSecondary,
     fontSize: 15
   },
   expandedAddBtn: {
@@ -1019,7 +1019,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     marginBottom: 10,
     borderWidth: 1,
-    borderColor: 'rgba(46, 211, 198, 0.2)'
+    borderColor: 'rgba(155, 157, 214, 0.2)'
   },
   historyItemLeft: {
     flexDirection: 'row',

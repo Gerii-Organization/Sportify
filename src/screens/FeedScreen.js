@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   FlatList, StyleSheet, SafeAreaView, Alert,
 } from 'react-native';
@@ -14,7 +14,7 @@ import AmbientGlow from '../components/AmbientGlow';
 import { unwrap } from '../lib/query';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
-import { SkeletonRows } from '../components/Skeleton';
+import { SkeletonFeed } from '../components/Skeleton';
 import FeedCard from '../components/FeedCard';
 import CommentSheet from '../components/CommentSheet';
 
@@ -31,7 +31,7 @@ const PAGE_SIZE = 20;
  * `embedded` drops the screen's own background and title so it can render as a
  * panel inside Social, which now owns both halves of "other people".
  */
-export default function FeedScreen({ embedded = false }) {
+export default function FeedScreen({ embedded = false, reloadKey = 0 }) {
   const { user } = useAuth();
   const navigation = useNavigation();
 
@@ -66,6 +66,10 @@ export default function FeedScreen({ embedded = false }) {
   }, [user]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  // Bumped by the composer after a post lands, so the new entry appears
+  // without waiting for the screen to be left and come back.
+  useEffect(() => { if (reloadKey) load(); }, [reloadKey, load]);
   const { refreshControl } = useRefresh(load);
 
   /** Cursor paging on created_at — stable even as new events arrive on top. */
@@ -139,8 +143,8 @@ export default function FeedScreen({ embedded = false }) {
     }
 
     Alert.alert(
-      'Added to your workouts',
-      `"${data.name}" is now in your list, with the sets cleared so you can log your own.`,
+      'Added to your routines',
+      `"${data.name}" was added to your routines.`,
       [
         { text: 'Later', style: 'cancel' },
         { text: 'Open it', onPress: () => navigation.navigate('Training') },
@@ -153,7 +157,7 @@ export default function FeedScreen({ embedded = false }) {
         {error ? (
           <ErrorState message={error} onRetry={load} />
         ) : loading ? (
-          <SkeletonRows count={5} />
+          <SkeletonFeed count={4} />
         ) : (
           <FlatList
             data={events}
@@ -179,7 +183,7 @@ export default function FeedScreen({ embedded = false }) {
               <EmptyState
                 icon={<Users color={colors.textFaint} size={44} />}
                 title="Nothing here yet"
-                message="Finish a workout, or add a few friends — everything you and they do shows up here."
+                message="Finish a workout or add friends to see activity here."
                 actionLabel="Find friends"
                 onAction={() => navigation.navigate('Social')}
               />

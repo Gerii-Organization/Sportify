@@ -21,7 +21,8 @@
         "NSCameraUsageDescription": "Sportify uses the camera to photograph a meal so it can estimate the calories and macros for you.",
         "NSPhotoLibraryUsageDescription": "Sportify lets you pick a photo of a meal from your library, and set a cover image on your own workouts.",
         "NSMotionUsageDescription": "Sportify reads your step count from the phone's motion sensor to fill in your daily activity."
-      }
+      },
+      "appleTeamId": "2MH6RUS6TX"
     },
     "android": {
       "adaptiveIcon": {
@@ -71,7 +72,16 @@
           "motionPermission": "Sportify reads your step count from the phone's motion sensor to fill in your daily activity."
         }
       ],
-      "@sentry/react-native"
+      "@sentry/react-native",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "buildReactNativeFromSource": true
+          }
+        }
+      ],
+      "./plugins/withoutPushEntitlement"
     ],
     "updates": {
       "url": "https://u.expo.dev/8cdb528c-17bb-428e-90d2-61ab83c4c0b8",

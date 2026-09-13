@@ -4,7 +4,7 @@ import {
   Dimensions, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Alert, Animated
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { Flame, Trophy, Menu, User, X, ChevronRight, Edit3, Droplets, Clock, Moon, TrendingUp, Crown, Plus, ChevronDown, ChevronUp, Edit2, Check, Star, CloudOff } from 'lucide-react-native';
+import { Flame, Trophy, Menu, User, X, Droplets, Clock, Moon, Crown, Plus, Edit2, Check, Star, CloudOff, Trash2, TriangleAlert } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Circle, G, Polygon, Defs, Filter, FeGaussianBlur } from 'react-native-svg';
 import Reanimated, { useSharedValue, useAnimatedProps, withTiming, withDelay, Easing } from 'react-native-reanimated';
@@ -16,15 +16,12 @@ import { Pedometer } from 'expo-sensors';
 import { colors, levelTiers, radius, spacing } from '../theme';
 import { getAvatar, getRing } from '../constants/cosmetics';
 import { levelInfo } from '../lib/level';
-import { todayKey, formatDuration, formatRelativeDate } from '../lib/date';
+import { todayKey, formatDuration } from '../lib/date';
 import { gradients } from '../theme';
 import Avatar from '../components/Avatar';
 import { useAuth } from '../context/AuthContext';
-import EditProfileSheet from '../components/EditProfileSheet';
 import MacroRings, { macroTargets } from '../components/MacroRings';
 import { WATER_GOAL_ML } from '../constants/content';
-import AchievementGrid from '../components/AchievementGrid';
-import { mergeAchievements } from '../lib/achievements';
 import WeightSheet from '../components/WeightSheet';
 import { getSetting, setSetting } from '../lib/settings';
 import { REST_CHOICES } from '../lib/rest';
@@ -36,12 +33,10 @@ import AmbientGlow from '../components/AmbientGlow';
 import useRefresh from '../lib/useRefresh';
 import { unwrap } from '../lib/query';
 import SettingsDrawer from '../components/dashboard/SettingsDrawer';
-import ProfileHero from '../components/dashboard/ProfileHero';
-import { getSocialCounts } from '../lib/social';
-import { pickAndUploadImage } from '../lib/upload';
 import Press from '../components/Press';
 import ProgressArc from '../components/ProgressArc';
 import DailyQuests from '../components/DailyQuests';
+import { useConfirm } from '../components/ConfirmDialog';
 
 const { width } = Dimensions.get('window');
 
@@ -61,17 +56,12 @@ function greetingFor(date) {
 }
 
 export default function DashboardScreen({ navigation, route }) {
+  const confirmAction = useConfirm();
   const { refreshControl } = useRefresh(() => fetchProfileAndStats());
   const { user, refreshProfile, pendingWorkouts, syncPending, units, setUnits } = useAuth();
   const scrollViewRef = useRef(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isMenuVisible, setMenuVisible] = useState(false);
-  const [isProfileModalVisible, setProfileModalVisible] = useState(false);
-  const [isEditProfileVisible, setEditProfileVisible] = useState(false);
-  /** Followers, following and friends. Zeroed and flagged unavailable until
-   *  the follows migration is applied. */
-  const [socialCounts, setSocialCounts] = useState(null);
-  const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [isWeightSheetVisible, setWeightSheetVisible] = useState(false);
   /** Device preferences. The rest timer and the daily reminders read these. */
   const [restAlerts, setRestAlerts] = useState(true);
@@ -157,39 +147,35 @@ export default function DashboardScreen({ navigation, route }) {
    * is the one action in the app with no undo. Play requires the feature; it
    * does not require making it easy to do by accident.
    */
-  const confirmDeleteAccount = () => {
-    Alert.alert(
-      'Delete your account?',
-      'This removes your profile, workouts, history, records, photos, messages ' +
-      'and friendships. It cannot be undone and nothing is kept.',
-      [
-        { text: 'Keep my account', style: 'cancel' },
-        {
-          text: 'Continue',
-          style: 'destructive',
-          onPress: () => Alert.alert(
-            'Last chance',
-            'Everything is erased immediately. There is no recovery.',
-            [
-              { text: 'Cancel', style: 'cancel' },
-              {
-                text: 'Delete forever',
-                style: 'destructive',
-                onPress: async () => {
-                  try {
-                    await deleteAccount(user?.id);
-                    setMenuVisible(false);
-                    fetchProfileAndStats();
-                  } catch (e) {
-                    Alert.alert('Could not delete the account', e.message);
-                  }
-                },
-              },
-            ]
-          ),
-        },
-      ]
-    );
+  const confirmDeleteAccount = async () => {
+    const first = await confirmAction({
+      tone: 'danger',
+      icon: Trash2,
+      title: 'Delete your account?',
+      message: 'Your profile, workouts, history, records, photos, messages and friendships will be permanently deleted.',
+      confirmLabel: 'Continue',
+      cancelLabel: 'Keep account',
+    });
+    if (!first) return;
+
+    // Asked twice on purpose: the list above is long enough that people stop
+    // reading, and this is the one action in the app with no undo.
+    const sure = await confirmAction({
+      tone: 'danger',
+      icon: TriangleAlert,
+      title: 'This cannot be undone',
+      message: 'Everything is deleted right away and cannot be recovered.',
+      confirmLabel: 'Delete forever',
+    });
+    if (!sure) return;
+
+    try {
+      await deleteAccount(user?.id);
+      setMenuVisible(false);
+      fetchProfileAndStats();
+    } catch (e) {
+      Alert.alert('Could not delete the account', e.message);
+    }
   };
 
   const refreshReminders = useCallback(() => {
@@ -242,9 +228,6 @@ export default function DashboardScreen({ navigation, route }) {
   const [taskType, setTaskType] = useState('manual');
   const [isPedometerAvailable, setIsPedometerAvailable] = useState(null);
   const [deviceSteps, setDeviceSteps] = useState(0);
-  const [completedWorkouts, setCompletedWorkouts] = useState([]);
-  const [achievements, setAchievements] = useState([]);
-  const [isHistoryExpanded, setIsHistoryExpanded] = useState(false);
 
   const [xpToast, setXpToast] = useState(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -413,84 +396,6 @@ export default function DashboardScreen({ navigation, route }) {
     return Math.max(1200, Math.round(tdee));
   };
 
-  const fetchCompletedWorkouts = useCallback(async () => {
-    if (!user) { setCompletedWorkouts([]); return; }
-    const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
-    const { data } = await supabase.from('workout_completions').select('id, workout_name, completed_at, duration_minutes').eq('user_id', user.id).gte('completed_at', weekAgo.toISOString()).order('completed_at', { ascending: false });
-    setCompletedWorkouts(data || []);
-  }, []);
-
-  const fetchAchievements = useCallback(async () => {
-    if (!user) { setAchievements([]); return; }
-
-    // The catalogue is every badge that exists; the second query is what this
-    // user has unlocked. Merging them lets locked badges stay visible as goals.
-    const [{ data: catalogue }, { data: unlocked }] = await Promise.all([
-      supabase.from('achievements').select('*').order('sort_order'),
-      supabase.from('user_achievements').select('code, unlocked_at').eq('user_id', user.id),
-    ]);
-
-    setAchievements(mergeAchievements(catalogue, unlocked));
-  }, [user]);
-
-  useEffect(() => {
-    if (!isProfileModalVisible) return;
-    fetchCompletedWorkouts();
-    fetchAchievements();
-  }, [isProfileModalVisible, fetchCompletedWorkouts, fetchAchievements]);
-
-  const toggleHistoryExpand = () => setIsHistoryExpanded(prev => !prev);
-
-  /**
-   * Sets or replaces the profile photo.
-   *
-   * Stored at <user-id>/avatar.jpg and overwritten in place, so changing it
-   * five times leaves one file rather than five orphans. Cropped square by the
-   * picker because it is always drawn in a circle.
-   */
-  const changeAvatar = async () => {
-    if (uploadingAvatar || !user) return;
-    setUploadingAvatar(true);
-
-    try {
-      const url = await pickAndUploadImage({
-        bucket: 'avatars',
-        pathPrefix: `${user.id}/avatar`,
-        aspect: [1, 1],
-        maxWidth: 512,
-      });
-
-      if (url) {
-        const { error } = await supabase
-          .from('profiles')
-          .update({ avatar_url: url })
-          .eq('id', user.id);
-
-        if (error) throw error;
-        setUserProfile((prev) => ({ ...prev, avatar_url: url }));
-        refreshProfile();
-      }
-    } catch (e) {
-      // The bucket and the column arrive with 20260912_profile_photo.sql. Until
-      // that runs, say so rather than showing a Postgres error.
-      const missing = /column|bucket|not found/i.test(e?.message || '');
-      Alert.alert(
-        'Could not set your photo',
-        missing ? 'Profile photos are not set up on the server yet.' : e.message
-      );
-    }
-
-    setUploadingAvatar(false);
-  };
-
-  /** Followers, following and friends, for the profile sheet. */
-  useEffect(() => {
-    if (!isProfileModalVisible || !user) return;
-    getSocialCounts(user.id).then(setSocialCounts);
-  }, [isProfileModalVisible, user]);
-
-
-
   const fetchProfileAndStats = async () => {
     if (user) {
       setIsLoggedIn(true);
@@ -604,7 +509,6 @@ export default function DashboardScreen({ navigation, route }) {
     const { data: unlocked } = await supabase.rpc('check_achievements');
     if (unlocked?.length) {
       showXpToast(0, `${unlocked[0].name} unlocked 🏆`);
-      fetchAchievements();
     }
   };
 
@@ -724,8 +628,8 @@ export default function DashboardScreen({ navigation, route }) {
         isLoggedIn && theme.type === 'demon' && { borderStyle: 'dashed' },
         isLoggedIn && theme.type === 'glitch' && { borderRadius: size / 4 }
       ]}>
-        <User size={iconSize} color={isLoggedIn ? (theme.type === 'glitch' ? '#00EAFF' : theme.color) : '#888'} />
-        {isLoggedIn && theme.type === 'royal' && <Crown color={theme.color} size={iconSize * 0.8} style={styles.avatarCrown} fill="rgba(255, 215, 0, 0.3)" />}
+        <User size={iconSize} color={isLoggedIn ? (theme.type === 'glitch' ? '#00EAFF' : theme.color) : colors.textFaint} />
+        {isLoggedIn && theme.type === 'royal' && <Crown color={theme.color} size={iconSize * 0.8} style={styles.avatarCrown} fill="rgba(222, 184, 102, 0.3)" />}
         {isLoggedIn && (theme.type === 'demon' || theme.type === 'inferno_avatar') && <Flame color={theme.color} size={size * 0.8} style={styles.avatarFlameBack} />}
         {isLoggedIn && theme.type === 'glitch' && <User size={iconSize} color="#FF00FF" style={styles.avatarGlitchOverlay} />}
       </View>
@@ -929,7 +833,7 @@ const renderProgressShape = () => {
             >
               <CloudOff color={colors.textFaint} size={15} />
               <Text style={styles.staleText} numberOfLines={1}>
-                Showing the last figures that loaded
+                Showing saved data
               </Text>
               <Text style={styles.staleAction}>Retry</Text>
             </Press>
@@ -951,7 +855,7 @@ const renderProgressShape = () => {
             <Press
               scale={0.95}
               style={styles.identity}
-              onPress={() => (isLoggedIn ? setProfileModalVisible(true) : navigation.navigate('AuthScreen'))}
+              onPress={() => navigation.navigate(isLoggedIn ? 'ProfileScreen' : 'AuthScreen')}
               accessibilityLabel={isLoggedIn ? 'Open your profile' : 'Sign in'}
             >
               <Avatar profile={userProfile} size={42} muted={!isLoggedIn} />
@@ -1159,7 +1063,7 @@ const renderProgressShape = () => {
         onCycleRestLength={cycleRestLength}
         onToggleStreakReminders={toggleStreakReminders}
         onToggleWaterReminders={toggleWaterReminders}
-        onOpenProfile={() => setProfileModalVisible(true)}
+        onOpenProfile={() => navigation.navigate('ProfileScreen')}
         onOpenWeight={() => setWeightSheetVisible(true)}
         onOpenWater={() => setWaterModalVisible(true)}
         onOpenProgress={() => navigation.navigate('ProgressScreen')}
@@ -1174,123 +1078,6 @@ const renderProgressShape = () => {
         currentMl={dailyStats.water}
         onLogged={onWaterLogged}
       />
-
-      <Modal visible={isProfileModalVisible} animationType="slide">
-        <View style={styles.profileContainer}>
-          <LinearGradient colors={gradients.flat} style={{ flex: 1 }}>
-            <SafeAreaView style={{ flex: 1 }}>
-
-              <View style={styles.profileHeaderContent}>
-                <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} onPress={() => setProfileModalVisible(false)} style={styles.backBtn}>
-                  <X color={colors.text} size={28} />
-                </TouchableOpacity>
-                <Text style={styles.headerTitle}>My Profile</Text>
-                <TouchableOpacity activeOpacity={0.7}
-                  style={styles.editBtn}
-                  onPress={() => setEditProfileVisible(true)}
-                  accessibilityLabel="Edit your profile"
-                >
-                  <Edit3 color={colors.onAccent} size={18} />
-                </TouchableOpacity>
-              </View>
-
-              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
-
-                {isEditProfileVisible ? (
-                  <View style={{ paddingHorizontal: spacing.lg }}>
-                    <EditProfileSheet
-                      inline
-                      visible
-                      onClose={() => setEditProfileVisible(false)}
-                      profile={userProfile}
-                      onSaved={(updates) => {
-                        setUserProfile((prev) => ({ ...prev, ...updates }));
-                        setStepsGoal(updates.step_goal);
-                        refreshProfile();
-                        setEditProfileVisible(false);
-                      }}
-                    />
-                  </View>
-                ) : (
-                  <>
-                  <ProfileHero
-                    profile={userProfile}
-                    level={currentLevel}
-                    levelXp={currentLevelXp}
-                    xpPercentage={xpPercentage}
-                    counts={socialCounts}
-                    uploading={uploadingAvatar}
-                    onChangePhoto={changeAvatar}
-                  />
-
-                <View style={styles.sectionWrapper}>
-                  <View style={styles.sectionHeaderRow}>
-                    <Text style={styles.profileSectionTitle}>Recent Activity</Text>
-                    <TouchableOpacity activeOpacity={0.7} style={styles.viewHistoryBtn} onPress={toggleHistoryExpand}>
-                      <Text style={styles.seeMore}>View History</Text>
-                      {isHistoryExpanded ? <ChevronUp color={colors.accent} size={20} style={{ marginLeft: 6 }} /> : <ChevronDown color={colors.accent} size={20} style={{ marginLeft: 6 }} />}
-                    </TouchableOpacity>
-                  </View>
-
-                  {isHistoryExpanded && completedWorkouts.length === 0 && (
-                    <Text style={styles.historyEmptyText}>No workouts in the last 7 days.</Text>
-                  )}
-                  {isHistoryExpanded && completedWorkouts.length > 0 && completedWorkouts.map((w) => (
-                    <RecentWorkoutItem key={w.id} title={w.workout_name} date={formatRelativeDate(w.completed_at)} duration={`${w.duration_minutes} min`} />
-                  ))}
-                  {!isHistoryExpanded && completedWorkouts.length > 0 && (
-                    <RecentWorkoutItem title={completedWorkouts[0].workout_name} date={formatRelativeDate(completedWorkouts[0].completed_at)} duration={`${completedWorkouts[0].duration_minutes} min`} />
-                  )}
-                </View>
-
-                {/* Progress lives here rather than in the tab bar.
-                    It is not somewhere you go several times a day — it is where
-                    you look at what you have accumulated, which is what a
-                    profile is. Tapping your own avatar is already that gesture.
-
-                    A pushed route rather than an inline panel: Progress has
-                    four segments with their own scroll views, and nesting that
-                    inside a modal gives both of them half the height. */}
-                <Press
-                  scale={0.98}
-                  style={styles.progressEntry}
-                  onPress={() => { setProfileModalVisible(false); navigation.navigate('ProgressScreen'); }}
-                  accessibilityLabel="Open your progress"
-                >
-                  <View style={styles.progressEntryIcon}>
-                    <TrendingUp color={colors.accent} size={20} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.progressEntryTitle}>Progress</Text>
-                    <Text style={styles.progressEntrySub}>Analytics, history, records and badges</Text>
-                  </View>
-                  <ChevronRight color={colors.textFaint} size={18} />
-                </Press>
-
-                <View style={styles.sectionWrapper}>
-                  <Text style={styles.profileSectionTitle}>Achievements</Text>
-                  <AchievementGrid achievements={achievements} />
-                  {/* The strip shows what you have; the screen shows how far
-                      the rest are. Locked badges without a distance are just
-                      grey circles. */}
-                  <Press
-                    scale={0.98}
-                    style={styles.seeAllRow}
-                    onPress={() => { setProfileModalVisible(false); navigation.navigate('AchievementsScreen'); }}
-                    accessibilityLabel="See all achievements"
-                  >
-                    <Text style={styles.seeAllText}>See all achievements</Text>
-                    <ChevronRight color={colors.accent} size={16} />
-                  </Press>
-                </View>
-                  </>
-                )}
-
-              </ScrollView>
-            </SafeAreaView>
-          </LinearGradient>
-        </View>
-      </Modal>
 
       <WeightSheet
         visible={isWeightSheetVisible}
@@ -1378,28 +1165,6 @@ function ProfileStatItem({ label, value, onPress }) {
   );
 }
 
-function RecentWorkoutItem({ title, date, duration, intensity }) {
-  return (
-    <View style={styles.recentItem}>
-      <View style={styles.recentLeft}>
-        <View style={styles.recentIconBox}><TrendingUp color={colors.accent} size={18}/></View>
-        <View>
-          <Text style={styles.recentTitle}>{title}</Text>
-          <Text style={styles.recentSub}>{date}</Text>
-        </View>
-      </View>
-      {intensity != null ? (
-        <View style={[styles.intensityTag, { borderColor: intensity === 'Hard' || intensity === 'Insane' ? colors.danger : colors.accent }]}>
-          <Text style={styles.intensityText}>{intensity}</Text>
-        </View>
-      ) : (
-        <View style={[styles.intensityTag, { borderColor: colors.accent }]}>
-          <Text style={styles.intensityText}>{duration}</Text>
-        </View>
-      )}
-    </View>
-  );
-}
 
 const styles = StyleSheet.create({
   staleStrip: {
@@ -1412,7 +1177,7 @@ const styles = StyleSheet.create({
   staleAction: { color: colors.accent, fontSize: 12, fontWeight: '700' },
   pendingStrip: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: 'rgba(255, 216, 74, 0.10)', borderRadius: radius.md,
+    backgroundColor: 'rgba(222, 184, 102, 0.10)', borderRadius: radius.md,
     paddingVertical: 10, paddingHorizontal: 14,
     marginHorizontal: spacing.lg, marginBottom: spacing.sm,
   },
@@ -1427,7 +1192,7 @@ const styles = StyleSheet.create({
 
   xpToastContainer: { position: 'absolute', top: 0, left: 20, right: 20, zIndex: 9999, alignItems: 'center' },
   xpToastContent: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, padding: 16, borderRadius: 24, borderWidth: 1, borderColor: colors.water, shadowColor: colors.water, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 10, elevation: 8, width: '100%' },
-  xpToastIconBg: { backgroundColor: 'rgba(59, 130, 246, 0.2)', padding: 10, borderRadius: 18 },
+  xpToastIconBg: { backgroundColor: 'rgba(182, 184, 240, 0.2)', padding: 10, borderRadius: 18 },
   xpToastTitle: { color: colors.text, fontSize: 15, fontWeight: '600' },
   xpToastAmount: { color: colors.water, fontSize: 15, fontWeight: '900', marginTop: 2 },
 
@@ -1535,23 +1300,6 @@ const styles = StyleSheet.create({
 
 
 
-  progressEntry: {
-    flexDirection: 'row', alignItems: 'center', gap: 14,
-    backgroundColor: colors.card, borderRadius: 20,
-    padding: 16, marginHorizontal: 20, marginBottom: 20,
-  },
-  progressEntryIcon: {
-    width: 42, height: 42, borderRadius: 15,
-    backgroundColor: colors.accentSoft,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  progressEntryTitle: { color: colors.text, fontSize: 16, fontWeight: '700', letterSpacing: -0.3 },
-  progressEntrySub: { color: colors.textMuted, fontSize: 12, marginTop: 3 },
-  seeAllRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    paddingVertical: 12, marginTop: 4,
-  },
-  seeAllText: { color: colors.accent, fontSize: 14, fontWeight: '600' },
 
 
   modalTitle: { color: colors.text, fontSize: 26, fontWeight: '800', marginBottom: 26 },
@@ -1561,11 +1309,6 @@ const styles = StyleSheet.create({
   avatarFlameBack: { position: 'absolute', opacity: 0.3, zIndex: -1 },
   avatarGlitchOverlay: { position: 'absolute', opacity: 0.5, marginLeft: 6 },
 
-  profileContainer: { flex: 1, backgroundColor: colors.background },
-  profileHeaderContent: { flexDirection: 'row', justifyContent: 'space-between', padding: 20, alignItems: 'center' },
-  headerTitle: { color: colors.text, fontSize: 17, fontWeight: '700' },
-  backBtn: { padding: 6 },
-  editBtn: { backgroundColor: colors.accent, width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
 
 
 
@@ -1574,19 +1317,6 @@ const styles = StyleSheet.create({
   statBoxValue: { color: colors.text, fontSize: 17, fontWeight: '700' },
   statBoxLabel: { color: colors.textMuted, fontSize: 11, marginTop: 6 },
 
-  sectionWrapper: { paddingHorizontal: 20, marginBottom: 26 },
-  sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
-  profileSectionTitle: { color: colors.text, fontSize: 17, fontWeight: '700' },
-  seeMore: { color: colors.accent, fontSize: 13, fontWeight: '600' },
-  viewHistoryBtn: { flexDirection: 'row', alignItems: 'center' },
-  historyEmptyText: { color: colors.textMuted, fontSize: 15, marginTop: 10 },
 
-  recentItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: colors.card, padding: 16, borderRadius: 22, marginBottom: 10 },
-  recentLeft: { flexDirection: 'row', alignItems: 'center' },
-  recentIconBox: { backgroundColor: 'rgba(46, 211, 198, 0.1)', padding: 10, borderRadius: 14, marginRight: 16 },
-  recentTitle: { color: colors.text, fontSize: 15, fontWeight: '600' },
-  recentSub: { color: colors.textMuted, fontSize: 13, marginTop: 2 },
-  intensityTag: { borderWidth: 1, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 },
-  intensityText: { color: colors.text, fontSize: 11, fontWeight: '600' },
 
 });

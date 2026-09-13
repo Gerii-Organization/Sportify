@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { View, Text, ScrollView, SafeAreaView, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, SafeAreaView, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChevronLeft, Lock } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
@@ -13,6 +13,7 @@ import Press from '../components/Press';
 import FadeIn from '../components/FadeIn';
 import AmbientGlow from '../components/AmbientGlow';
 import ErrorState from '../components/ErrorState';
+import { SkeletonAchievements } from '../components/Skeleton';
 
 /**
  * All twelve achievements, with how close the locked ones are.
@@ -46,7 +47,7 @@ export default function AchievementsScreen({ navigation, embedded = false }) {
   const content = (
     <>
       {loading ? (
-        <ActivityIndicator color={colors.energy} style={{ marginTop: 60 }} />
+        <SkeletonAchievements />
       ) : error ? (
         <ErrorState message={error} onRetry={reload} />
       ) : (
@@ -165,7 +166,7 @@ const styles = StyleSheet.create({
     width: 46, height: 46, borderRadius: 16,
     backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center',
   },
-  glyphDone: { backgroundColor: 'rgba(255, 216, 74, 0.14)' },
+  glyphDone: { backgroundColor: 'rgba(222, 184, 102, 0.14)' },
   name: { color: colors.textSecondary, fontSize: 15, fontWeight: '700' },
   nameDone: { color: colors.text },
   description: { color: colors.textMuted, fontSize: 12, marginTop: 2, marginBottom: 8, lineHeight: 17 },

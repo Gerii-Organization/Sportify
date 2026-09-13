@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { View, Text, ScrollView, SafeAreaView, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, SafeAreaView, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChevronLeft, ChevronRight, Trophy, TrendingUp, TrendingDown, Minus } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
@@ -15,6 +15,7 @@ import BottomSheet from '../components/BottomSheet';
 import { formatWeight, toDisplayWeight } from '../lib/units';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
+import { SkeletonRecords, SkeletonRecordDetail } from '../components/Skeleton';
 
 /**
  * Personal records, and what led to them.
@@ -76,7 +77,7 @@ export default function RecordsScreen({ navigation, embedded = false }) {
   const content = (
     <>
         {loading ? (
-          <ActivityIndicator color={colors.energy} style={{ marginTop: 60 }} />
+          <SkeletonRecords />
         ) : error ? (
           <ErrorState message={error} onRetry={reload} />
         ) : (
@@ -89,14 +90,13 @@ export default function RecordsScreen({ navigation, embedded = false }) {
               <EmptyState
                 icon={<Trophy color={colors.textFaint} size={34} />}
                 title="Nothing logged yet"
-                message="Finish a workout with weights and reps filled in. Every exercise you train shows up here with its best set."
+                message="Log sets with weight and reps to see your best lifts here."
               />
             ) : (
               <>
                 <FadeIn>
                   <Text style={styles.intro}>
-                    Best set per exercise, ranked by estimated one-rep max. Tap any
-                    of them for the full progression.
+                    Your best set for each exercise. Tap one to see your progress.
                   </Text>
                 </FadeIn>
 
@@ -202,7 +202,7 @@ function ExerciseDetail({ name, record, onBack, embedded = false, showNav = true
         )}
 
         {loading ? (
-          <ActivityIndicator color={colors.energy} style={{ marginTop: 60 }} />
+          <SkeletonRecordDetail />
         ) : error ? (
           <ErrorState message={error} onRetry={reload} />
         ) : (

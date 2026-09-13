@@ -45,7 +45,7 @@ export const SIGNUP_STEPS = [
   {
     id: 'about',
     title: 'About you',
-    note: 'Age and sex change how your daily calories are worked out.',
+    note: 'Used to calculate your daily calorie target.',
     fields: ['firstName', 'age', 'sex'],
     validate: ({ firstName, age, sex }) => {
       if (!firstName.trim()) return 'What should we call you?';
@@ -59,7 +59,7 @@ export const SIGNUP_STEPS = [
   {
     id: 'body',
     title: 'Your measurements',
-    note: 'Used for the calorie target and the starting weights we suggest. You can change them any time.',
+    note: 'Used for your calorie target and suggested weights. You can change them anytime.',
     fields: ['weight', 'height'],
     validate: ({ weight, height }) => {
       if (!numberIn(weight, 30, 300)) return 'Enter a weight between 30 and 300 kg.';
@@ -70,14 +70,14 @@ export const SIGNUP_STEPS = [
   {
     id: 'commitment',
     title: 'How often will you train?',
-    note: 'Be honest rather than ambitious — this is what your weekly target is measured against.',
+    note: 'Choose what you can keep up. Your weekly goal is based on this.',
     fields: ['workouts'],
     validate: ({ workouts }) => (numberIn(workouts, 1, 7) ? null : 'Pick between 1 and 7.'),
   },
   {
     id: 'split',
     title: 'How do you split your training?',
-    note: 'Sportify uses this to tell you which session is due. You can change it any time, and skipping a day never breaks it.',
+    note: 'We will suggest which session is next. You can change it anytime.',
     fields: ['split'],
     // Optional on purpose. Someone who does not think in splits should not be
     // blocked at the last step of signing up — without one the app falls back

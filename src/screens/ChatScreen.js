@@ -1,14 +1,16 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   StyleSheet, View, Text, SafeAreaView, TextInput, TouchableOpacity, 
-  FlatList, KeyboardAvoidingView, Platform, ActivityIndicator, Alert, Modal, Image
+  FlatList, KeyboardAvoidingView, Platform, Alert, Modal, Image
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ChevronLeft, Send, Check, CheckCheck, X, Search, ImageIcon } from 'lucide-react-native';
+import { ChevronLeft, Send, Check, CheckCheck, X, Search, ImageIcon, Reply, Pencil, Trash2 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { unwrap } from '../lib/query';
 import ErrorState from '../components/ErrorState';
+import { REACTIONS, summarise, toggleLocally } from '../lib/reactions';
 import * as ImagePicker from 'expo-image-picker';
+import { SkeletonMessages } from '../components/Skeleton';
 
 
 export default function ChatScreen({ route, navigation }) {
@@ -21,6 +23,15 @@ export default function ChatScreen({ route, navigation }) {
   /** A conversation that would not load. Blank here reads as "no messages",
    *  which is a claim about a chat the user knows they have. */
   const [loadError, setLoadError] = useState(null);
+  /** The message being replied to, or null. */
+  const [replyTo, setReplyTo] = useState(null);
+  /** The message whose action sheet is open. */
+  const [actionsFor, setActionsFor] = useState(null);
+  /** True while the other person is typing, from the presence channel. */
+  const [theyAreTyping, setTheyAreTyping] = useState(false);
+  const [theyAreOnline, setTheyAreOnline] = useState(false);
+  const presenceRef = useRef(null);
+  const typingTimer = useRef(null);
   
   /** Conversation search. The messages are already in memory, so this filters
    *  what is rendered rather than going back to the server. */
@@ -89,19 +100,84 @@ export default function ChatScreen({ route, navigation }) {
     if (unreadIds.length > 0) await supabase.from('messages').update({ is_read: true }).in('id', unreadIds);
   };
 
+  /**
+   * Who is here, and who is typing.
+   *
+   * Presence rather than a table: neither fact outlives the moment, and writing
+   * "is typing" to the database would mean a row per keystroke and a stale true
+   * every time somebody's app is killed mid-sentence.
+   *
+   * The channel name is the pair sorted, so both sides compute the same one
+   * without either having to be the host.
+   */
+  useEffect(() => {
+    if (!myId || !friendId) return undefined;
+
+    const room = [myId, friendId].sort().join(':');
+    const channel = supabase.channel(`chat-presence:${room}`, {
+      config: { presence: { key: myId } },
+    });
+
+    channel
+      .on('presence', { event: 'sync' }, () => {
+        const state = channel.presenceState();
+        const theirs = state[friendId]?.[0];
+        setTheyAreOnline(!!theirs);
+        setTheyAreTyping(!!theirs?.typing);
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') await channel.track({ typing: false });
+      });
+
+    presenceRef.current = channel;
+
+    return () => {
+      clearTimeout(typingTimer.current);
+      supabase.removeChannel(channel);
+      presenceRef.current = null;
+    };
+  }, [myId, friendId]);
+
+  /**
+   * Announces typing, and stops announcing it two seconds after you stop.
+   *
+   * Without the timeout the flag stays true until the next keystroke, so
+   * pausing to think reads as still typing — and sending the message would be
+   * the only thing that ever cleared it.
+   */
+  const announceTyping = () => {
+    const channel = presenceRef.current;
+    if (!channel) return;
+
+    channel.track({ typing: true });
+    clearTimeout(typingTimer.current);
+    typingTimer.current = setTimeout(() => channel.track({ typing: false }), 2000);
+  };
+
   const sendMessage = async (imageUrl = null) => {
     if ((!inputText.trim() && !imageUrl) || !myId) return;
 
+    const quoted = replyTo;
+
     const newMessage = {
       sender_id: myId, receiver_id: friendId, content: inputText.trim(), image_url: imageUrl,
-      id: Date.now().toString(), created_at: new Date().toISOString(), is_read: false, is_edited: false, is_deleted: false
+      id: Date.now().toString(), created_at: new Date().toISOString(),
+      is_read: false, is_edited: false, is_deleted: false,
+      reply_to: quoted?.id ?? null, reactions: {},
     };
 
     setMessages(prev => [...prev, newMessage]);
     setInputText('');
+    setReplyTo(null);
 
-    await supabase.from('messages').insert([{ 
-      sender_id: myId, receiver_id: friendId, content: newMessage.content, image_url: imageUrl 
+    // Sending ends the sentence; leaving the flag set would show you as still
+    // typing until the timer happened to fire.
+    clearTimeout(typingTimer.current);
+    presenceRef.current?.track({ typing: false });
+
+    await supabase.from('messages').insert([{
+      sender_id: myId, receiver_id: friendId, content: newMessage.content, image_url: imageUrl,
+      reply_to: quoted?.id ?? null,
     }]);
   };
 
@@ -135,13 +211,39 @@ export default function ChatScreen({ route, navigation }) {
     }
   };
 
+  /**
+   * Every message opens the same sheet; what is in it depends on whose it is.
+   *
+   * It used to be an Alert, and only on your own messages — so there was no way
+   * to reply to or react to anything anyone else said, which is most of a
+   * conversation.
+   */
   const handleLongPress = (item) => {
-    if (item.sender_id !== myId || item.is_deleted) return;
-    Alert.alert("Message", "What would you like to do?", [
-        { text: "Edit text", onPress: () => { setEditingMessage(item); setEditInput(item.content); } },
-        { text: "Delete", onPress: () => deleteMessage(item.id), style: "destructive" },
-        { text: "Cancel", style: "cancel" }
-    ]);
+    if (item.is_deleted) return;
+    setActionsFor(item);
+  };
+
+  /**
+   * Applies a reaction immediately, then lets the server's answer replace it.
+   *
+   * The round trip is long enough that waiting for it makes the tap feel
+   * broken, and the server recomputes the same map from the same rule.
+   */
+  const react = async (message, emoji) => {
+    setActionsFor(null);
+    setMessages((prev) => prev.map((m) =>
+      m.id === message.id ? { ...m, reactions: toggleLocally(m.reactions, emoji, myId) } : m
+    ));
+
+    const { data, error } = await supabase.rpc('toggle_reaction', {
+      p_message_id: message.id,
+      p_emoji: emoji,
+    });
+
+    if (error || !data?.ok) return;
+    setMessages((prev) => prev.map((m) =>
+      m.id === message.id ? { ...m, reactions: data.reactions } : m
+    ));
   };
 
   const deleteMessage = async (id) => {
@@ -191,9 +293,20 @@ export default function ChatScreen({ route, navigation }) {
         onLongPress={() => handleLongPress(item)} delayLongPress={300}
       >
         {item.is_deleted ? (
-          <Text style={{ color: colors.textMuted, fontStyle: 'italic', fontSize: 15 }}>🚫 This message was deleted</Text>
+          <Text style={{ color: colors.textMuted, fontStyle: 'italic', fontSize: 15 }}>This message was deleted</Text>
         ) : (
           <>
+            {/* The quoted message, when this is a reply. Looked up rather than
+                stored: the original can be edited or deleted after the reply
+                was sent, and a copy would keep showing what it used to say. */}
+            {item.reply_to ? (
+              <View style={[styles.quote, isMe ? styles.quoteMine : styles.quoteTheirs]}>
+                <Text style={styles.quoteText} numberOfLines={2}>
+                  {quotedTextFor(item.reply_to)}
+                </Text>
+              </View>
+            ) : null}
+
             {/* Image messages carry an image_url instead of, or as well as, text. */}
             {item.image_url && <Image source={{uri: item.image_url}} style={styles.chatImage} />}
             {item.content ? <Text style={[styles.messageText, isMe ? styles.myMessageText : styles.theirMessageText]}>{item.content}</Text> : null}
@@ -211,9 +324,36 @@ export default function ChatScreen({ route, navigation }) {
             </View>
           )}
         </View>
+
+        {reactionRows(item).length > 0 && (
+          <View style={styles.reactionRow}>
+            {reactionRows(item).map((r) => (
+              <TouchableOpacity
+                key={r.emoji}
+                activeOpacity={0.7}
+                style={[styles.reactionChip, r.mine && styles.reactionChipMine]}
+                onPress={() => react(item, r.emoji)}
+                accessibilityLabel={`${r.count} ${r.emoji}${r.mine ? ', including yours' : ''}`}
+              >
+                <Text style={styles.reactionEmoji}>{r.emoji}</Text>
+                {r.count > 1 ? <Text style={styles.reactionCount}>{r.count}</Text> : null}
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
       </TouchableOpacity>
       </>
     );
+  };
+
+  const reactionRows = (item) => summarise(item.reactions, myId);
+
+  /** What a reply is quoting, read from the list rather than from a copy. */
+  const quotedTextFor = (id) => {
+    const original = messages.find((m) => String(m.id) === String(id));
+    if (!original) return 'Message unavailable';
+    if (original.is_deleted) return 'Deleted message';
+    return original.content || (original.image_url ? 'Photo' : '');
   };
 
   return (
@@ -230,7 +370,18 @@ export default function ChatScreen({ route, navigation }) {
             <Avatar profile={friendProfile} size={36} />
             <View style={{ alignItems: 'center' }}>
               <Text style={styles.headerName}>{friendName}</Text>
-              <Text style={{color: colors.accent, fontSize: 11, marginTop: 2}}>View profile</Text>
+              {/* Typing wins over online: it says both, and it is the one that
+                  is about to change what is on screen. */}
+              {theyAreTyping ? (
+                <Text style={styles.headerTyping}>typing…</Text>
+              ) : theyAreOnline ? (
+                <View style={styles.headerOnline}>
+                  <View style={styles.onlineDot} />
+                  <Text style={styles.headerOnlineText}>online</Text>
+                </View>
+              ) : (
+                <Text style={styles.headerProfileLink}>View profile</Text>
+              )}
             </View>
           </TouchableOpacity>
 
@@ -270,7 +421,7 @@ export default function ChatScreen({ route, navigation }) {
         {loadError ? (
           <ErrorState message={loadError} />
         ) : loading ? (
-          <View style={styles.centerContainer}><ActivityIndicator color={colors.accent} /></View>
+          <SkeletonMessages />
         ) : (
           <FlatList
             ref={flatListRef}
@@ -290,13 +441,34 @@ export default function ChatScreen({ route, navigation }) {
 
         {/* INPUT AREA CU BUTON PENTRU POZE */}
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}>
+          {/* What you are replying to, above the box you are typing in — the
+              only place it can be where you can still see both. */}
+          {replyTo ? (
+            <View style={styles.replyBar}>
+              <View style={styles.replyStripe} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.replyWho}>
+                  {replyTo.sender_id === myId ? 'Replying to yourself' : `Replying to ${friendProfile?.first_name || 'them'}`}
+                </Text>
+                <Text style={styles.replyText} numberOfLines={1}>
+                  {replyTo.content || (replyTo.image_url ? 'Photo' : '')}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setReplyTo(null)} hitSlop={10} accessibilityLabel="Cancel reply">
+                <X color={colors.textMuted} size={18} />
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
           <View style={styles.inputContainer}>
             <TouchableOpacity activeOpacity={0.7} style={styles.attachBtn} onPress={pickAndSendImage} accessibilityLabel="Choose from gallery">
               <ImageIcon color={colors.textSecondary} size={24} />
             </TouchableOpacity>
             <TextInput
               style={styles.textInput} placeholder="Message..." placeholderTextColor={colors.textMuted}
-              value={inputText} onChangeText={setInputText} multiline
+              value={inputText}
+              onChangeText={(t) => { setInputText(t); announceTyping(); }}
+              multiline
             />
             <TouchableOpacity accessibilityLabel="Send message" activeOpacity={0.7} style={[styles.sendBtn, !inputText.trim() && { opacity: 0.5 }]} onPress={() => sendMessage()} disabled={!inputText.trim()}>
               <Send color={colors.onAccent} size={20} />
@@ -319,6 +491,61 @@ export default function ChatScreen({ route, navigation }) {
         </Modal>
 
       </LinearGradient>
+      {/* The long-press sheet. Reactions first: it is the most common thing
+          anyone wants to do to a message, and it takes one tap from here. */}
+      <Modal visible={!!actionsFor} transparent animationType="fade" onRequestClose={() => setActionsFor(null)}>
+        <TouchableOpacity style={styles.sheetBackdrop} activeOpacity={1} onPress={() => setActionsFor(null)}>
+          <TouchableOpacity activeOpacity={1} style={styles.actionSheet} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.grabber} />
+
+            <View style={styles.emojiRow}>
+              {REACTIONS.map((emoji) => (
+                <TouchableOpacity
+                  key={emoji}
+                  activeOpacity={0.7}
+                  style={styles.emojiBtn}
+                  onPress={() => react(actionsFor, emoji)}
+                  accessibilityLabel={`React with ${emoji}`}
+                >
+                  <Text style={styles.emoji}>{emoji}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <TouchableOpacity
+              activeOpacity={0.7}
+              style={styles.actionRow}
+              onPress={() => { setReplyTo(actionsFor); setActionsFor(null); }}
+            >
+              <Reply color={colors.text} size={19} />
+              <Text style={styles.actionText}>Reply</Text>
+            </TouchableOpacity>
+
+            {actionsFor?.sender_id === myId && (
+              <>
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  style={styles.actionRow}
+                  onPress={() => { setEditingMessage(actionsFor); setEditInput(actionsFor.content); setActionsFor(null); }}
+                >
+                  <Pencil color={colors.text} size={19} />
+                  <Text style={styles.actionText}>Edit</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  style={styles.actionRow}
+                  onPress={() => { const id = actionsFor.id; setActionsFor(null); deleteMessage(id); }}
+                >
+                  <Trash2 color={colors.danger} size={19} />
+                  <Text style={[styles.actionText, { color: colors.danger }]}>Delete</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -330,14 +557,6 @@ const styles = StyleSheet.create({
   headerBtn: { padding: 6, width: 40, alignItems: 'center' },
   headerCenter: { flexDirection: 'row', alignItems: 'center', flex: 1, justifyContent: 'center' },
   headerName: { color: colors.text, fontSize: 15, fontWeight: '600' },
-  avatarBase: { backgroundColor: colors.surface, justifyContent: 'center', alignItems: 'center' },
-  
-  centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  searchBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    backgroundColor: colors.surface, borderRadius: 14,
-    marginHorizontal: 16, marginBottom: 10, paddingHorizontal: 14, paddingVertical: 10,
-  },
   searchField: { flex: 1, color: colors.text, fontSize: 15, padding: 0 },
   searchCount: { color: colors.textMuted, fontSize: 13, fontWeight: '600', fontVariant: ['tabular-nums'] },
   searchEmpty: { color: colors.textMuted, textAlign: 'center', marginTop: 40, paddingHorizontal: 24 },
@@ -355,6 +574,53 @@ const styles = StyleSheet.create({
   timeText: { fontSize: 11, fontWeight: '600' },
 
   inputContainer: { flexDirection: 'row', alignItems: 'flex-end', padding: 10, backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.border },
+
+  headerTyping: { color: colors.accent, fontSize: 11, marginTop: 2, fontStyle: 'italic' },
+  headerOnline: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3 },
+  onlineDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.success },
+  headerOnlineText: { color: colors.success, fontSize: 11, fontWeight: '600' },
+  headerProfileLink: { color: colors.accent, fontSize: 11, marginTop: 2 },
+
+  replyBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: colors.surface,
+    paddingHorizontal: 12, paddingVertical: 9,
+  },
+  replyStripe: { width: 3, alignSelf: 'stretch', borderRadius: 2, backgroundColor: colors.accent },
+  replyWho: { color: colors.accent, fontSize: 11, fontWeight: '700' },
+  replyText: { color: colors.textMuted, fontSize: 13, marginTop: 2 },
+
+  quote: { borderLeftWidth: 3, paddingLeft: 8, marginBottom: 6, opacity: 0.85 },
+  quoteMine: { borderLeftColor: 'rgba(0,0,0,0.35)' },
+  quoteTheirs: { borderLeftColor: colors.accent },
+  quoteText: { color: colors.textMuted, fontSize: 13 },
+
+  reactionRow: { flexDirection: 'row', gap: 5, marginTop: 7 },
+  reactionChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    backgroundColor: 'rgba(0,0,0,0.22)',
+    paddingHorizontal: 7, paddingVertical: 3, borderRadius: 999,
+  },
+  reactionChipMine: { backgroundColor: colors.accentSoft, borderWidth: 1, borderColor: colors.accentBorder },
+  reactionEmoji: { fontSize: 13 },
+  reactionCount: { color: colors.text, fontSize: 11, fontWeight: '700' },
+
+  sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+  actionSheet: {
+    backgroundColor: colors.sheet,
+    borderTopLeftRadius: 32, borderTopRightRadius: 32,
+    padding: 20, paddingTop: 10, paddingBottom: 34,
+  },
+  grabber: { width: 38, height: 4, borderRadius: 2, backgroundColor: colors.surfaceHigh, alignSelf: 'center', marginBottom: 18 },
+  emojiRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 14 },
+  emojiBtn: {
+    width: 48, height: 48, borderRadius: 24,
+    backgroundColor: colors.surface,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  emoji: { fontSize: 24 },
+  actionRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 15 },
+  actionText: { color: colors.text, fontSize: 16, fontWeight: '600' },
   attachBtn: { padding: 10, marginRight: 6, marginBottom: 2 },
   textInput: { flex: 1, backgroundColor: colors.surface, color: colors.text, minHeight: 45, maxHeight: 100, borderRadius: 24, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 10, fontSize: 15 },
   sendBtn: { backgroundColor: colors.accent, width: 45, height: 45, borderRadius: 22.5, justifyContent: 'center', alignItems: 'center', marginLeft: 10, marginBottom: 2 },

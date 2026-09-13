@@ -20,6 +20,7 @@ import WorkoutDetailScreen from './src/screens/WorkoutDetailScreen';
 import FriendsScreen from './src/screens/FriendsScreen';
 import ShopScreen from './src/screens/ShopScreen';
 import PublicProfileScreen from './src/screens/PublicProfileScreen';
+import ProfileScreen from './src/screens/ProfileScreen';
 import StatsScreen from './src/screens/StatsScreen';
 import StreakScreen from './src/screens/StreakScreen';
 import MetricScreen from './src/screens/MetricScreen';
@@ -29,6 +30,7 @@ import RecordsScreen from './src/screens/RecordsScreen';
 import AchievementsScreen from './src/screens/AchievementsScreen';
 import ChatScreen from './src/screens/ChatScreen';
 import GroupChatScreen from './src/screens/GroupChatScreen';
+import { ConfirmProvider } from './src/components/ConfirmDialog';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -58,6 +60,7 @@ const STACK_SCREENS = [
   { name: 'WorkoutDetailScreen', component: WorkoutDetailScreen, presentation: 'fullScreenModal' },
   { name: 'AuthScreen', component: AuthScreen, presentation: 'modal' },
   { name: 'PublicProfileScreen', component: PublicProfileScreen, presentation: 'card' },
+  { name: 'ProfileScreen', component: ProfileScreen, presentation: 'card' },
   { name: 'StatsScreen', component: StatsScreen, presentation: 'card' },
   { name: 'StreakScreen', component: StreakScreen, presentation: 'card' },
   { name: 'MetricScreen', component: MetricScreen, presentation: 'card' },
@@ -109,6 +112,7 @@ export default function App() {
     // white screen everyone complains about happens.
     <ErrorBoundary where="app">
       <AuthProvider>
+        <ConfirmProvider>
         <NavigationContainer ref={navigationRef}>
           {/* Wrapped so the bar can be a sibling of the whole stack rather than
               of the tabs. Mounted inside the tabs it only appeared on the five
@@ -124,13 +128,14 @@ export default function App() {
             <ActiveWorkoutBar />
           </View>
         </NavigationContainer>
+        </ConfirmProvider>
       </AuthProvider>
     </ErrorBoundary>
   );
 }
 
 const styles = StyleSheet.create({
-  tabBarTint: { backgroundColor: 'rgba(15, 18, 22, 0.72)' },
+  tabBarTint: { backgroundColor: 'rgba(17, 19, 27, 0.78)' },
   tabBar: {
     position: 'absolute',
     height: 62,

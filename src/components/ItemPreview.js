@@ -80,7 +80,7 @@ export default function ItemPreview({ item, type, scale = 1 }) {
       return (
         <View style={[frame, { borderColor: item.color, borderWidth: 3 }]}>
           <User color={colors.text} size={s(24)} />
-          <Crown color={item.color} size={s(22)} style={{ position: 'absolute', top: s(-18) }} fill="rgba(255, 215, 0, 0.3)" />
+          <Crown color={item.color} size={s(22)} style={{ position: 'absolute', top: s(-18) }} fill="rgba(222, 184, 102, 0.3)" />
         </View>
       );
     }
@@ -115,7 +115,7 @@ export default function ItemPreview({ item, type, scale = 1 }) {
       );
     }
     return (
-      <View style={[frame, { borderColor: '#444' }]}>
+      <View style={[frame, { borderColor: colors.borderLight }]}>
         <User color={colors.text} size={s(24)} />
       </View>
     );

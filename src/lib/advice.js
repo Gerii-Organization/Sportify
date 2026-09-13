@@ -86,7 +86,7 @@ export function trainingAdvice({ sessions, target, today, trainedDays, split, we
       headline: 'Done for today',
       detail: run > 1
         ? `${run} days in a row. Tomorrow is optional.`
-        : 'Logged. Rest counts as part of the plan.',
+        : 'Logged. Enjoy the rest of your day.',
       muscle: null,
     };
   }
@@ -97,7 +97,7 @@ export function trainingAdvice({ sessions, target, today, trainedDays, split, we
     return {
       tone: 'rest',
       headline: 'A rest day is worth taking',
-      detail: `You have trained ${run} days straight. Strength is built while you recover, not while you lift.`,
+      detail: `You have trained ${run} days straight. Recovery is when you get stronger.`,
       muscle: null,
     };
   }
