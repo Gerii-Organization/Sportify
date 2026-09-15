@@ -1,8 +1,21 @@
-import { Image, View } from 'react-native';
+import { useEffect } from 'react';
+import { Image, View, StyleSheet } from 'react-native';
 import Svg, { Defs, LinearGradient, RadialGradient, Stop, Circle, Path, Polygon, G } from 'react-native-svg';
+import Animated, {
+  useSharedValue, useAnimatedProps, useAnimatedStyle, withRepeat, withTiming, withSequence, withDelay,
+  cancelAnimation, Easing, useReducedMotion,
+} from 'react-native-reanimated';
 
 /**
  * The Golden Apex avatar frame: a gilded ring under a crown, with wings.
+ *
+ * Animated (roadmap G5), in three slow layers so it reads as precious rather
+ * than busy:
+ *   · a warm halo behind it that breathes over a few seconds
+ *   · a glint that travels once around the ring, then rests
+ *   · the crown's gem catching the light as the glint passes the top
+ * All three run on the UI thread, and all three stop for Reduce Motion — the
+ * frame is then drawn exactly as it was before it moved.
  *
  * Drawn in SVG so the shop has it without a binary asset in the repo. The
  * painted version from the mockup is better, and swapping to it is one line:
@@ -12,21 +25,78 @@ import Svg, { Defs, LinearGradient, RadialGradient, Stop, Circle, Path, Polygon,
  *
  * A `require` of a file that does not exist fails the whole bundle, not just
  * this component — which is why the line is not already there.
- *
- * The mockup's PNG is wide with the frame centred, so `cover` in a square box
- * crops the empty sides and keeps the frame whole.
  */
 const PAINTED = null;
 
 const RIM = '#6D5A2D';
+const RING_R = 56;
+const RING_LENGTH = 2 * Math.PI * RING_R;
+const GLINT = 34;
+const LOOP_MS = 5200;
 
-export default function GoldenApexFrame({ size = 110, style }) {
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
+const AnimatedPolygon = Animated.createAnimatedComponent(Polygon);
+
+export default function GoldenApexFrame({ size = 110, style, animated = true }) {
+  const reduceMotion = useReducedMotion();
+  const moving = animated && !reduceMotion;
+
+  const halo = useSharedValue(0);
+  const glint = useSharedValue(0);
+
+  useEffect(() => {
+    if (!moving) {
+      cancelAnimation(halo);
+      cancelAnimation(glint);
+      halo.value = 0;
+      glint.value = 0;
+      return undefined;
+    }
+    halo.value = withRepeat(withTiming(1, { duration: 2600, easing: Easing.inOut(Easing.sin) }), -1, true);
+    // Travel for 1.8 s, then rest: a glint that never stops reads as a loader.
+    glint.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: 1800, easing: Easing.inOut(Easing.cubic) }),
+        withDelay(LOOP_MS - 1800, withTiming(0, { duration: 0 }))
+      ),
+      -1,
+      false
+    );
+    return () => {
+      cancelAnimation(halo);
+      cancelAnimation(glint);
+    };
+  }, [moving, halo, glint]);
+
+  const haloStyle = useAnimatedStyle(() => ({
+    opacity: 0.22 + halo.value * 0.3,
+    transform: [{ scale: 0.92 + halo.value * 0.08 }],
+  }));
+
+  // Starts at the top of the ring (the circle is rotated -90°) and goes round.
+  const glintProps = useAnimatedProps(() => ({
+    strokeDashoffset: -glint.value * RING_LENGTH,
+    strokeOpacity: glint.value > 0 && glint.value < 1 ? 0.85 : 0,
+  }));
+
+  // The gem flares as the glint leaves the top and again as it returns.
+  const gemProps = useAnimatedProps(() => {
+    const nearTop = Math.min(glint.value, 1 - glint.value);
+    return { fillOpacity: 0.75 + Math.max(0, 0.12 - nearTop) * 2 };
+  });
+
   if (PAINTED) {
     return <Image source={PAINTED} style={[{ width: size, height: size }, style]} resizeMode="cover" />;
   }
 
   return (
     <View style={[{ width: size, height: size }, style]} pointerEvents="none">
+      {moving ? (
+        <Animated.View style={[StyleSheet.absoluteFill, styles.center, haloStyle]}>
+          <View style={[styles.halo, { width: size * 0.7, height: size * 0.7, borderRadius: size * 0.35, top: size * 0.21 }]} />
+        </Animated.View>
+      ) : null}
+
       <Svg width={size} height={size} viewBox="0 0 200 200">
         <Defs>
           <LinearGradient id="gilt" x1="0" y1="0" x2="0" y2="1">
@@ -49,8 +119,8 @@ export default function GoldenApexFrame({ size = 110, style }) {
           </RadialGradient>
         </Defs>
 
-        {/* Back to front: wings, spikes, ring, lower wings, clasp, crown. The
-            crown is last because it sits on the ring and hides its top edge. */}
+        {/* Back to front: wings, spikes, ring, glint, lower wings, clasp, crown.
+            The crown is last because it sits on the ring and hides its top. */}
         <Wing />
         <G transform="translate(200, 0) scale(-1, 1)">
           <Wing />
@@ -61,11 +131,27 @@ export default function GoldenApexFrame({ size = 110, style }) {
         <Polygon points="36,182 50,152 64,164" fill="url(#gilt)" stroke={RIM} strokeWidth={1.2} />
         <Polygon points="164,182 150,152 136,164" fill="url(#gilt)" stroke={RIM} strokeWidth={1.2} />
 
-        <Circle cx={100} cy={112} r={56} fill="none" stroke="url(#gilt)" strokeWidth={16} />
+        <Circle cx={100} cy={112} r={RING_R} fill="none" stroke="url(#gilt)" strokeWidth={16} />
         <Circle cx={100} cy={112} r={64} fill="none" stroke={RIM} strokeWidth={1.2} />
         <Circle cx={100} cy={112} r={48} fill="none" stroke={RIM} strokeWidth={1.2} />
         {/* Rivets, as a dashed stroke rather than thirty circles. */}
-        <Circle cx={100} cy={112} r={56} fill="none" stroke="#F5E6BE" strokeOpacity={0.4} strokeWidth={2} strokeDasharray="1.5 12" />
+        <Circle cx={100} cy={112} r={RING_R} fill="none" stroke="#F5E6BE" strokeOpacity={0.4} strokeWidth={2} strokeDasharray="1.5 12" />
+
+        {moving ? (
+          <G transform="rotate(-90 100 112)">
+            <AnimatedCircle
+              cx={100}
+              cy={112}
+              r={RING_R}
+              fill="none"
+              stroke="#FFF6DC"
+              strokeWidth={10}
+              strokeLinecap="round"
+              strokeDasharray={`${GLINT} ${RING_LENGTH}`}
+              animatedProps={glintProps}
+            />
+          </G>
+        ) : null}
 
         <LowerWing />
         <G transform="translate(200, 0) scale(-1, 1)">
@@ -80,7 +166,11 @@ export default function GoldenApexFrame({ size = 110, style }) {
           fill="url(#gilt)" stroke={RIM} strokeWidth={1.2} strokeLinejoin="round"
         />
         <Path d="M66 62 L134 62 L130 76 L70 76 Z" fill="url(#gilt)" stroke={RIM} strokeWidth={1.2} />
-        <Polygon points="100,28 106,40 100,52 94,40" fill="url(#ruby)" />
+        {moving ? (
+          <AnimatedPolygon points="100,28 106,40 100,52 94,40" fill="url(#ruby)" animatedProps={gemProps} />
+        ) : (
+          <Polygon points="100,28 106,40 100,52 94,40" fill="url(#ruby)" />
+        )}
         <Polygon points="100,62 104,69 100,76 96,69" fill="url(#ruby)" />
         <Circle cx={82} cy={69} r={2.4} fill="url(#ruby)" />
         <Circle cx={118} cy={69} r={2.4} fill="url(#ruby)" />
@@ -111,3 +201,15 @@ function LowerWing() {
     </G>
   );
 }
+
+const styles = StyleSheet.create({
+  center: { alignItems: 'center' },
+  halo: {
+    position: 'absolute',
+    backgroundColor: 'rgba(222, 184, 102, 0.35)',
+    shadowColor: '#DEB866',
+    shadowOpacity: 0.9,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 0 },
+  },
+});

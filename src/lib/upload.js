@@ -77,3 +77,44 @@ export async function uploadPickedImage({ uri, bucket, pathPrefix, maxWidth = 10
   // the old image stays on screen after a replacement.
   return `${data.publicUrl}?v=${Date.now()}`;
 }
+
+/**
+ * Takes a photo with the camera instead of choosing one. Same crop contract as
+ * pickImage. Resolves to a local uri, or null when cancelled.
+ */
+export async function takePhoto({ aspect = [3, 4] } = {}) {
+  const permission = await ImagePicker.requestCameraPermissionsAsync();
+  if (!permission.granted) {
+    throw new Error('Camera access is needed to take a photo.');
+  }
+
+  const taken = await ImagePicker.launchCameraAsync({ allowsEditing: true, aspect, quality: 1 });
+  if (taken.canceled) return null;
+  return taken.assets[0].uri;
+}
+
+/**
+ * Uploads to a PRIVATE bucket and returns the storage path, never a URL.
+ *
+ * uploadPickedImage hands back a public URL, which is right for avatars and
+ * covers and wrong for progress photos: a public URL is readable by anyone it
+ * leaks to, forever. Private files are shown through createSignedUrls, which
+ * expire. A new path per photo (no upsert) — these accumulate on purpose.
+ */
+export async function uploadPrivateImage({ uri, bucket, path, maxWidth = 1080 }) {
+  const resized = await ImageManipulator.manipulateAsync(
+    uri,
+    [{ resize: { width: maxWidth } }],
+    { compress: 0.75, format: ImageManipulator.SaveFormat.JPEG }
+  );
+
+  const response = await fetch(resized.uri);
+  const blob = await response.blob();
+
+  const { error } = await supabase.storage
+    .from(bucket)
+    .upload(path, blob, { contentType: 'image/jpeg', upsert: false });
+
+  if (error) throw error;
+  return path;
+}

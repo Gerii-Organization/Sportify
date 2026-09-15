@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { 
-  StyleSheet, View, Text, SafeAreaView, TextInput, TouchableOpacity, 
+  StyleSheet, View, Text, TextInput, TouchableOpacity, 
   FlatList, KeyboardAvoidingView, Platform, Alert, Modal, Image
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChevronLeft, Send, Check, CheckCheck, X, Search, ImageIcon, Reply, Pencil, Trash2 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
@@ -477,7 +478,7 @@ export default function ChatScreen({ route, navigation }) {
         </KeyboardAvoidingView>
 
         {/* MODAL EDITARE */}
-        <Modal visible={editingMessage !== null} transparent animationType="slide">
+        <Modal visible={editingMessage !== null} transparent animationType="slide" onRequestClose={() => setEditingMessage(null)}>
           <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>
               <View style={styles.modalHeader}>
@@ -553,7 +554,7 @@ export default function ChatScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   gradientBg: { flex: 1, justifyContent: 'space-between' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: Platform.OS === 'android' ? 40 : 10, paddingBottom: 16, backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.border },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 10, paddingBottom: 16, backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.border },
   headerBtn: { padding: 6, width: 40, alignItems: 'center' },
   headerCenter: { flexDirection: 'row', alignItems: 'center', flex: 1, justifyContent: 'center' },
   headerName: { color: colors.text, fontSize: 15, fontWeight: '600' },

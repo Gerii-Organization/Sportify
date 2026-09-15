@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import Animated, { useSharedValue, useAnimatedStyle, withSequence, withTiming, Easing } from 'react-native-reanimated';
-import { StyleSheet, Text, View, ScrollView, SafeAreaView, Alert, useWindowDimensions } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, Alert, useWindowDimensions } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
 import {
@@ -10,6 +11,7 @@ import {
 import { supabase } from '../lib/supabase';
 import { colors, gradients, TAB_BAR_CLEARANCE } from '../theme';
 import { RINGS, AVATARS, BADGES, TITLES, POWERUPS } from '../constants/cosmetics';
+import { SEASON_PRIZES } from '../lib/seasons';
 import { DAILY_REWARDS } from '../constants/content';
 import { FEATURED_BUNDLE, ENERGY_PACKS, IAP_ENABLED } from '../constants/storeOffers';
 import { useAuth } from '../context/AuthContext';
@@ -81,7 +83,14 @@ function buildCatalogue(profile, ownedIds = new Set()) {
     rings: RINGS.map((i) => ({ ...i, owned: owns(i), equipped: profile?.equipped_ring === i.id })),
     avatars: AVATARS.map((i) => ({ ...i, owned: owns(i), equipped: profile?.equipped_avatar === i.id })),
     badges: BADGES.map((i) => ({ ...i, owned: owns(i), equipped: profile?.equipped_badge === i.id })),
-    titles: TITLES.map((i) => ({ ...i, owned: !!profile && titles.has(i.id), equipped: profile?.equipped_title === i.id })),
+    titles: [
+      ...TITLES.map((i) => ({ ...i, owned: !!profile && titles.has(i.id), equipped: profile?.equipped_title === i.id })),
+      // Season titles cannot be bought, so they only appear once won.
+      ...SEASON_PRIZES.filter((p) => titles.has(p.title)).map((p) => ({
+        id: p.title, price: 0, desc: 'Won in a monthly season', seasonal: true,
+        owned: true, equipped: profile?.equipped_title === p.title,
+      })),
+    ],
   };
 }
 
@@ -658,7 +667,7 @@ export default function ShopScreen({ navigation }) {
           >
             <Zap color={colors.gold} size={13} fill={colors.gold} />
             <Text style={styles.energyText}>{balance.toLocaleString()}</Text>
-            <Press scale={0.85} style={styles.plus} onPress={() => jumpTo('bundles')} accessibilityLabel="Get more energy">
+            <Press hitSlop={10} scale={0.85} style={styles.plus} onPress={() => jumpTo('bundles')} accessibilityLabel="Get more energy">
               <Plus color={colors.onGold} size={14} strokeWidth={3} />
             </Press>
           </Animated.View>

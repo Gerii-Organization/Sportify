@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { 
-  StyleSheet, View, Text, SafeAreaView, TextInput, TouchableOpacity, 
+  StyleSheet, View, Text, TextInput, TouchableOpacity, 
   FlatList, KeyboardAvoidingView, Platform
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChevronLeft, Send, Hash, Users } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
@@ -197,7 +198,7 @@ export default function GroupChatScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   gradientBg: { flex: 1, justifyContent: 'space-between' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: Platform.OS === 'android' ? 40 : 10, paddingBottom: 16, backgroundColor: 'rgba(0,0,0,0.5)', borderBottomWidth: 1, borderBottomColor: colors.border },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 10, paddingBottom: 16, backgroundColor: 'rgba(0,0,0,0.5)', borderBottomWidth: 1, borderBottomColor: colors.border },
   backBtn: { padding: 6 },
   headerName: { color: colors.text, fontSize: 17, fontWeight: '700' },
   centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },

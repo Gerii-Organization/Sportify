@@ -1,8 +1,9 @@
 import { useState, useCallback } from 'react';
 import { 
-  StyleSheet, View, Text, SafeAreaView, ScrollView, TouchableOpacity, 
+  StyleSheet, View, Text, ScrollView, TouchableOpacity, 
   TextInput, Modal, Alert, KeyboardAvoidingView, Platform 
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Users, UserPlus, Search, X, Check, Clock, Plus, Bell, MessageSquare, Hash } from 'lucide-react-native';
@@ -366,10 +367,10 @@ export default function FriendsScreen() {
         
         {type === 'received' ? (
           <View style={styles.requestActions}>
-            <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} style={styles.actionBtnReject} onPress={() => removeRequest(item.friendship_id)}>
+            <TouchableOpacity hitSlop={{ top: 6, bottom: 6, left: 2, right: 2 }} accessibilityLabel="Close" activeOpacity={0.7} style={styles.actionBtnReject} onPress={() => removeRequest(item.friendship_id)}>
               <X color={colors.text} size={18} />
             </TouchableOpacity>
-            <TouchableOpacity activeOpacity={0.7} accessibilityLabel="Confirm" style={styles.actionBtnAccept} onPress={() => acceptRequest(item.friendship_id)}>
+            <TouchableOpacity hitSlop={{ top: 6, bottom: 6, left: 2, right: 2 }} activeOpacity={0.7} accessibilityLabel="Confirm" style={styles.actionBtnAccept} onPress={() => acceptRequest(item.friendship_id)}>
               <Check color={colors.onAccent} size={18} />
             </TouchableOpacity>
           </View>
@@ -379,7 +380,7 @@ export default function FriendsScreen() {
               <Clock color={colors.textSecondary} size={14} />
               <Text style={styles.pendingText}>Pending</Text>
             </View>
-            <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} style={styles.actionBtnReject} onPress={() => removeRequest(item.friendship_id)}>
+            <TouchableOpacity hitSlop={{ top: 6, bottom: 6, left: 2, right: 2 }} accessibilityLabel="Close" activeOpacity={0.7} style={styles.actionBtnReject} onPress={() => removeRequest(item.friendship_id)}>
               <X color={colors.danger} size={18} />
             </TouchableOpacity>
           </View>
@@ -526,7 +527,7 @@ export default function FriendsScreen() {
       </View>
 
       {/* Start a chat — friends you have never messaged. */}
-      <Modal visible={startChatModalVisible} animationType="slide" transparent>
+      <Modal visible={startChatModalVisible} animationType="slide" transparent onRequestClose={() => setStartChatModalVisible(false)}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
@@ -803,7 +804,7 @@ const styles = StyleSheet.create({
   sectionTabOn: { backgroundColor: colors.surfaceHigh },
   sectionTabText: { color: colors.textMuted, fontSize: 13, fontWeight: '600' },
   sectionTabTextOn: { color: colors.text },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: Platform.OS === 'android' ? 40 : 20 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: 20 },
   headerTitle: { color: colors.text, fontSize: 26, fontWeight: '800' },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   titleBadge: {

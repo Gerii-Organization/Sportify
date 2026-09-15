@@ -1,12 +1,14 @@
 import { useState, useCallback, useMemo } from 'react';
-import { View, Text, ScrollView, SafeAreaView, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, StyleSheet } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ChevronLeft, ChevronRight, Flame, Snowflake, Award, RotateCcw } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, Flame, Snowflake, Award, RotateCcw, Medal } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors, gradients, spacing } from '../theme';
 import { deviceTimeZone } from '../lib/date';
 import { useAuth } from '../context/AuthContext';
 import { unwrap } from '../lib/query';
+import { milestoneTrack, describeReward } from '../lib/milestones';
 import useLoad from '../lib/useLoad';
 import AmbientGlow from '../components/AmbientGlow';
 import ErrorState from '../components/ErrorState';
@@ -64,6 +66,21 @@ export default function StreakScreen({ navigation }) {
   // restore something you had no way of knowing existed.
   const lost = profile?.previous_streak ?? 0;
   const restorable = lost > current;
+
+  // Separate from the calendar: flipping months should not refetch the rewards,
+  // and a failure here only hides the milestones instead of blanking the month.
+  const loadMilestones = useCallback(async () => {
+    const [rewards, claims] = await Promise.all([
+      unwrap(supabase.from('streak_milestone_rewards').select('days, energy, freezes').order('days')),
+      unwrap(supabase.from('streak_milestones').select('days')),
+    ]);
+    return { rewards, claims };
+  }, []);
+  const { data: milestoneData } = useLoad(loadMilestones);
+  const track = useMemo(
+    () => milestoneTrack(milestoneData?.rewards, milestoneData?.claims, current),
+    [milestoneData, current]
+  );
 
   return (
     <SafeAreaView style={styles.container}>
@@ -127,15 +144,55 @@ export default function StreakScreen({ navigation }) {
             <Stat icon={<Flame color={colors.accent} size={18} />} value={error ? '—' : data?.total ?? 0} label="Days trained" />
           </FadeIn>
 
-          <FadeIn index={restorable ? 3 : 2} style={styles.calendarCard}>
+          {track.list.length ? (
+            <FadeIn index={restorable ? 3 : 2} style={styles.milestoneCard}>
+              <View style={styles.milestoneHead}>
+                <Text style={styles.milestoneTitle}>Milestones</Text>
+                <Text style={styles.milestoneCount}>{track.claimedCount} of {track.list.length}</Text>
+              </View>
+
+              {track.next ? (
+                <>
+                  <Text style={styles.milestoneNext}>
+                    {track.daysToNext} day{track.daysToNext === 1 ? '' : 's'} to the {track.next.days}-day milestone
+                  </Text>
+                  <Text style={styles.milestoneReward}>{describeReward(track.next)}</Text>
+                  <View style={styles.milestoneBar}>
+                    <View style={[styles.milestoneFill, { width: `${Math.round(track.ratio * 100)}%` }]} />
+                  </View>
+                </>
+              ) : (
+                <Text style={styles.milestoneNext}>Every milestone reached. The streak is all yours now.</Text>
+              )}
+
+              {/* Lit by the claim, not by the current streak: a milestone once
+                  earned stays earned after a reset. */}
+              <View style={styles.medals}>
+                {track.list.map((milestone) => (
+                  <View
+                    key={milestone.days}
+                    style={styles.medal}
+                    accessibilityLabel={`${milestone.days}-day milestone, ${milestone.claimed ? 'reached' : 'not reached yet'}`}
+                  >
+                    <View style={[styles.medalDisc, milestone.claimed && styles.medalDiscOn]}>
+                      <Medal color={milestone.claimed ? colors.onGold : colors.textFaint} size={16} />
+                    </View>
+                    <Text style={[styles.medalDays, milestone.claimed && styles.medalDaysOn]}>{milestone.days}</Text>
+                  </View>
+                ))}
+              </View>
+            </FadeIn>
+          ) : null}
+
+          <FadeIn index={restorable ? 4 : 3} style={styles.calendarCard}>
             <View style={styles.monthBar}>
-              <Press scale={0.9} onPress={() => setOffset((o) => o - 1)} style={styles.arrow} accessibilityLabel="Previous month">
+              <Press hitSlop={6} scale={0.9} onPress={() => setOffset((o) => o - 1)} style={styles.arrow} accessibilityLabel="Previous month">
                 <ChevronLeft color={colors.textSecondary} size={18} />
               </Press>
               <Text style={styles.monthLabel}>
                 {month.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}
               </Text>
-              <Press
+              <Press hitSlop={6}
                 scale={0.9}
                 onPress={() => setOffset((o) => Math.min(o + 1, 0))}
                 disabled={offset >= 0}
@@ -203,7 +260,7 @@ export default function StreakScreen({ navigation }) {
             )}
           </FadeIn>
 
-          <FadeIn index={restorable ? 4 : 3}>
+          <FadeIn index={restorable ? 5 : 4}>
             <Text style={styles.footnote}>
               Finish any workout to count the day. If you miss one, a streak freeze keeps your streak going.
             </Text>
@@ -292,6 +349,27 @@ const styles = StyleSheet.create({
   statDivider: { width: 1, backgroundColor: colors.border, marginVertical: 6 },
   statValue: { color: colors.text, fontSize: 26, fontWeight: '800', letterSpacing: -0.6, fontVariant: ['tabular-nums'] },
   statLabel: { color: colors.textMuted, fontSize: 11, fontWeight: '600', letterSpacing: 0.6, textTransform: 'uppercase' },
+
+  milestoneCard: {
+    backgroundColor: colors.card, borderRadius: 26, padding: spacing.lg, marginBottom: spacing.md,
+    borderWidth: 1, borderColor: colors.goldBorder,
+  },
+  milestoneHead: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8 },
+  milestoneTitle: { color: colors.text, fontSize: 16, fontWeight: '700', letterSpacing: -0.2 },
+  milestoneCount: { color: colors.textMuted, fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  milestoneNext: { color: colors.textSecondary, fontSize: 14, fontWeight: '600', lineHeight: 20 },
+  milestoneReward: { color: colors.gold, fontSize: 13, fontWeight: '700', marginTop: 2 },
+  milestoneBar: { height: 6, borderRadius: 3, backgroundColor: colors.surfaceHigh, overflow: 'hidden', marginTop: 12 },
+  milestoneFill: { height: '100%', borderRadius: 3, backgroundColor: colors.gold },
+  medals: { flexDirection: 'row', justifyContent: 'space-between', marginTop: spacing.lg },
+  medal: { alignItems: 'center', gap: 6 },
+  medalDisc: {
+    width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.surfaceHigh,
+  },
+  medalDiscOn: { backgroundColor: colors.gold },
+  medalDays: { color: colors.textFaint, fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  medalDaysOn: { color: colors.gold },
 
   calendarCard: { backgroundColor: colors.card, borderRadius: 26, padding: spacing.lg, marginBottom: spacing.md },
   monthBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.md },

@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { View, Text, SafeAreaView, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, gradients, spacing } from '../theme';
 import AmbientGlow from '../components/AmbientGlow';

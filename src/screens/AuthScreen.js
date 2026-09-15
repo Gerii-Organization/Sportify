@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { 
   View, Text, TextInput, TouchableOpacity, StyleSheet, 
   Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView 
@@ -17,11 +17,23 @@ import { Image } from 'react-native';
 import { GOALS } from '../constants/content';
 import { SIGNUP_STEPS, WEEKLY_OPTIONS } from '../constants/onboarding';
 import SplitPicker from '../components/SplitPicker';
+import { useT } from '../i18n';
+import { normaliseCode, REDEEM_ERRORS } from '../lib/invites';
+import { getSetting, setSetting } from '../lib/settings';
 
 
-export default function AuthScreen({ navigation }) {
+export default function AuthScreen({ navigation, route }) {
+  const { t } = useT();
   const { units, setUnits } = useAuth();
-  const [isRegistering, setIsRegistering] = useState(false);
+  // Opened from an invite link: straight to sign-up, code filled in.
+  const [isRegistering, setIsRegistering] = useState(!!route?.params?.inviteCode);
+  const [inviteCode, setInviteCode] = useState(route?.params?.inviteCode || '');
+  useEffect(() => {
+    if (inviteCode) return;
+    getSetting('pendingInvite').then((code) => { if (code) setInviteCode(code); });
+    // Once, on open: the stored code only fills an empty box.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [loading, setLoading] = useState(false);
   /** Position in the sign-up flow. Login is one screen and ignores this. */
   const [step, setStep] = useState(0);
@@ -122,6 +134,16 @@ export default function AuthScreen({ navigation }) {
             workouts_per_week: parseInt(workouts),
           });
 
+          // Redeemed after the profile exists, and never blocking: a bad code
+          // should not stand between someone and the account they just made.
+          if (inviteCode) {
+            const { data: redeemed } = await supabase.rpc('redeem_invite', { p_code: inviteCode });
+            setSetting('pendingInvite', null);
+            if (redeemed && !redeemed.ok && REDEEM_ERRORS[redeemed.reason]) {
+              Alert.alert('Invite code not applied', REDEEM_ERRORS[redeemed.reason]);
+            }
+          }
+
           // signUp already returns an active session when email confirmation is
           // off, so send the user straight in instead of making them retype
           // the credentials they just chose.
@@ -168,15 +190,16 @@ export default function AuthScreen({ navigation }) {
                 <View style={[styles.progressFill, { width: `${((step + 1) / SIGNUP_STEPS.length) * 100}%` }]} />
               </View>
 
-              <Text style={styles.title}>{SIGNUP_STEPS[step].title}</Text>
-              <Text style={styles.note}>{SIGNUP_STEPS[step].note}</Text>
+              <Text style={styles.title}>{t(SIGNUP_STEPS[step].title)}</Text>
+              <Text style={styles.note}>{t(SIGNUP_STEPS[step].note)}</Text>
 
               <View style={styles.form}>
                 {step === 0 && (
                   <>
-                    <CustomInput label="Email" value={email} onChange={setEmail} placeholder="you@example.com" autoCap="none" keyboard="email-address" />
-                    <CustomInput label="Password" value={password} onChange={setPassword} placeholder="At least 6 characters" secure />
-                    <CustomInput label="Confirm password" value={confirmPassword} onChange={setConfirmPassword} placeholder="Type it again" secure />
+                    <CustomInput label={t('Email')} value={email} onChange={setEmail} placeholder="you@example.com" autoCap="none" keyboard="email-address" />
+                    <CustomInput label={t('Password')} value={password} onChange={setPassword} placeholder={t('At least 6 characters')} secure />
+                    <CustomInput label={t('Confirm password')} value={confirmPassword} onChange={setConfirmPassword} placeholder={t('Type it again')} secure />
+                    <CustomInput label={t('Invite code (optional)')} value={inviteCode} onChange={(text) => setInviteCode(normaliseCode(text))} placeholder={t('From a friend')} autoCap="characters" />
                   </>
                 )}
 
@@ -222,9 +245,9 @@ export default function AuthScreen({ navigation }) {
                       </Text>
                     </TouchableOpacity>
 
-                    <CustomInput label="First name" value={firstName} onChange={setFirstName} placeholder="Victor" />
-                    <CustomInput label="Age" value={age} onChange={setAge} placeholder="25" keyboard="numeric" />
-                    <Text style={styles.label}>Sex</Text>
+                    <CustomInput label={t('First name')} value={firstName} onChange={setFirstName} placeholder="Victor" />
+                    <CustomInput label={t('Age')} value={age} onChange={setAge} placeholder="25" keyboard="numeric" />
+                    <Text style={styles.label}>{t('Sex')}</Text>
                     <View style={styles.pickRow}>
                       {[['M', 'Male'], ['F', 'Female']].map(([value, label]) => (
                         <TouchableOpacity
@@ -303,7 +326,7 @@ export default function AuthScreen({ navigation }) {
                   </View>
                 )}
 
-                {stepError ? <Text style={styles.error}>{stepError}</Text> : null}
+                {stepError ? <Text style={styles.error}>{t(stepError)}</Text> : null}
 
                 <TouchableOpacity activeOpacity={0.7} style={styles.mainButton} onPress={goNext} disabled={loading}>
                   {loading
@@ -314,23 +337,23 @@ export default function AuthScreen({ navigation }) {
                 </TouchableOpacity>
 
                 <TouchableOpacity activeOpacity={0.7} style={styles.switchButton} onPress={toggleAuthMode}>
-                  <Text style={styles.switchText}>Already have an account? Log in</Text>
+                  <Text style={styles.switchText}>{t('Already have an account? Log in')}</Text>
                 </TouchableOpacity>
               </View>
             </>
           ) : (
             <>
-              <Text style={styles.title}>Welcome back</Text>
+              <Text style={styles.title}>{t('Welcome back')}</Text>
               <View style={styles.form}>
-                <CustomInput label="Email" value={email} onChange={setEmail} placeholder="you@example.com" autoCap="none" keyboard="email-address" />
-                <CustomInput label="Password" value={password} onChange={setPassword} placeholder="******" secure />
+                <CustomInput label={t('Email')} value={email} onChange={setEmail} placeholder="you@example.com" autoCap="none" keyboard="email-address" />
+                <CustomInput label={t('Password')} value={password} onChange={setPassword} placeholder="******" secure />
 
                 <TouchableOpacity activeOpacity={0.7} style={styles.mainButton} onPress={handleAuth} disabled={loading}>
-                  {loading ? <ActivityIndicator color={colors.onAccent} /> : <Text style={styles.mainButtonText}>Log in</Text>}
+                  {loading ? <ActivityIndicator color={colors.onAccent} /> : <Text style={styles.mainButtonText}>{t('Log in')}</Text>}
                 </TouchableOpacity>
 
                 <TouchableOpacity activeOpacity={0.7} style={styles.switchButton} onPress={toggleAuthMode}>
-                  <Text style={styles.switchText}>Don't have an account? Sign up for free</Text>
+                  <Text style={styles.switchText}>{t("Don't have an account? Sign up for free")}</Text>
                 </TouchableOpacity>
               </View>
             </>

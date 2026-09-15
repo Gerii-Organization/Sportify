@@ -16,6 +16,8 @@ const KEYS = {
   streakReminders: 'settings.streakReminders',
   units: 'settings.units',
   restSeconds: 'settings.restSeconds',
+  pendingInvite: 'invites.pending',
+  language: 'settings.language',
 };
 
 const DEFAULTS = {
@@ -29,6 +31,10 @@ const DEFAULTS = {
   // adjustable, and still the right default for someone who has not thought
   // about it. A number overrides it everywhere.
   restSeconds: null,
+  // An invite code from a link, held until the account it was meant for exists.
+  pendingInvite: null,
+  // 'auto' follows the phone's language; 'en' or 'ro' overrides it.
+  language: 'auto',
 };
 
 export async function getSetting(name) {

@@ -1,9 +1,10 @@
 import { useState, useCallback, useMemo } from 'react';
-import { View, Text, ScrollView, SafeAreaView, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, StyleSheet } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
   ChevronLeft, ChevronRight, Dumbbell, Flame, Weight, Clock,
-  History, Trophy, Lock,
+  History, Trophy, Lock, Ruler,
 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors, gradients, spacing } from '../theme';
@@ -19,6 +20,8 @@ import AmbientGlow from '../components/AmbientGlow';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import WeeklyGoal from '../components/WeeklyGoal';
+import MuscleMap from '../components/MuscleMap';
+import { setsByMuscle, neglected } from '../lib/muscleLoad';
 import { SkeletonStats } from '../components/Skeleton';
 
 /** Shape of the screen's data before anything loads, and after a failure. */
@@ -118,6 +121,8 @@ export default function StatsScreen({ navigation, embedded = false }) {
 
   const summary = useMemo(() => summarise(data.sessions), [data]);
   const muscles = useMemo(() => muscleSplit(data.sessions), [data]);
+  const muscleCounts = useMemo(() => setsByMuscle(data.sessions), [data]);
+  const skipped = neglected(muscleCounts);
   const nutrition = useMemo(() => summariseMeals(data.meals), [data]);
 
   const peakSteps = Math.max(...data.steps.map((s) => s.value), 5000);
@@ -248,7 +253,19 @@ export default function StatsScreen({ navigation, embedded = false }) {
 
             {muscles.length > 0 && (
               <FadeIn index={6} style={styles.card}>
-                <Text style={styles.cardTitle}>Muscle focus</Text>
+                <Text style={styles.cardTitle}>{timeframe === 'week' ? 'Muscles this week' : 'Muscle focus'}</Text>
+                {/* The body only on the week view: its shading is in weekly
+                    sets, and over all time every muscle would read as maxed. */}
+                {timeframe === 'week' ? (
+                  <View style={styles.mapWrap}>
+                    <MuscleMap counts={muscleCounts} />
+                    {skipped.length ? (
+                      <Text style={[styles.muscleNote, styles.mapNote]}>
+                        Least trained so far: {skipped.slice(0, 3).join(', ').toLowerCase()}.
+                      </Text>
+                    ) : null}
+                  </View>
+                ) : null}
                 {muscles.map((muscle) => (
                   <View key={muscle.name} style={styles.muscleRow}>
                     <Text style={styles.muscleName}>{muscle.name}</Text>
@@ -259,7 +276,7 @@ export default function StatsScreen({ navigation, embedded = false }) {
                   </View>
                 ))}
                 <Text style={styles.muscleNote}>
-                  The share of planned sets you completed.
+                  Share of your working sets, by muscle group.
                 </Text>
               </FadeIn>
             )}
@@ -296,6 +313,12 @@ export default function StatsScreen({ navigation, embedded = false }) {
                 title="Personal records"
                 subtitle="Your best lifts over time"
                 onPress={() => navigation.navigate('RecordsScreen')}
+              />
+              <Link
+                icon={<Ruler color={colors.water} size={20} />}
+                title="Body & photos"
+                subtitle="Measurements and progress photos"
+                onPress={() => navigation.navigate('BodyScreen')}
               />
             </FadeIn>
           </ScrollView>
@@ -543,6 +566,8 @@ const styles = StyleSheet.create({
   weightSlot: { flex: 1, height: '100%', justifyContent: 'flex-end' },
   weightBar: { width: '100%', borderRadius: 3, minHeight: 4 },
 
+  mapWrap: { marginTop: spacing.md, marginBottom: spacing.lg },
+  mapNote: { textAlign: 'center', marginTop: spacing.sm },
   muscleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
   muscleName: { color: colors.text, fontSize: 13, fontWeight: '600', width: 78 },
   muscleTrack: { flex: 1, height: 8, borderRadius: 4, backgroundColor: colors.surfaceHigh, overflow: 'hidden' },

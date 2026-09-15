@@ -8,6 +8,7 @@ import { House, UtensilsCrossed, Dumbbell, Users, Store } from 'lucide-react-nat
 import { AuthProvider } from './src/context/AuthContext';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import ActiveWorkoutBar from './src/components/ActiveWorkoutBar';
+import InviteLinkHandler from './src/components/InviteLinkHandler';
 import { navigationRef } from './src/lib/navigationRef';
 import { initCrashReporting } from './src/lib/crash';
 import { colors } from './src/theme';
@@ -30,7 +31,11 @@ import RecordsScreen from './src/screens/RecordsScreen';
 import AchievementsScreen from './src/screens/AchievementsScreen';
 import ChatScreen from './src/screens/ChatScreen';
 import GroupChatScreen from './src/screens/GroupChatScreen';
+import IntervalTimerScreen from './src/screens/IntervalTimerScreen';
+import BodyScreen from './src/screens/BodyScreen';
+import ChallengesScreen from './src/screens/ChallengesScreen';
 import { ConfirmProvider } from './src/components/ConfirmDialog';
+import { LanguageProvider, useT } from './src/i18n';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -70,9 +75,13 @@ const STACK_SCREENS = [
   { name: 'ProgressScreen', component: ProgressScreen, presentation: 'card' },
   { name: 'ChatScreen', component: ChatScreen, presentation: 'card' },
   { name: 'GroupChatScreen', component: GroupChatScreen, presentation: 'card' },
+  { name: 'IntervalTimerScreen', component: IntervalTimerScreen, presentation: 'card' },
+  { name: 'BodyScreen', component: BodyScreen, presentation: 'card' },
+  { name: 'ChallengesScreen', component: ChallengesScreen, presentation: 'card' },
 ];
 
 function MainTabs() {
+  const { t } = useT();
   return (
     <Tab.Navigator
       screenOptions={{
@@ -93,7 +102,7 @@ function MainTabs() {
           name={name}
           component={component}
           options={{
-            tabBarLabel: label,
+            tabBarLabel: t(label),
             tabBarIcon: ({ color }) => <Icon color={color} size={22} />,
           }}
         />
@@ -111,6 +120,7 @@ export default function App() {
     // error thrown while a provider is initialising, which is exactly when the
     // white screen everyone complains about happens.
     <ErrorBoundary where="app">
+      <LanguageProvider>
       <AuthProvider>
         <ConfirmProvider>
         <NavigationContainer ref={navigationRef}>
@@ -126,10 +136,12 @@ export default function App() {
               ))}
             </Stack.Navigator>
             <ActiveWorkoutBar />
+            <InviteLinkHandler />
           </View>
         </NavigationContainer>
         </ConfirmProvider>
       </AuthProvider>
+      </LanguageProvider>
     </ErrorBoundary>
   );
 }

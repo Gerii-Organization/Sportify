@@ -50,6 +50,9 @@ export default function Button({
       scale={0.975}
       style={style}
       accessibilityRole="button"
+      // Explicit, because while loading the label is replaced by a spinner and
+      // VoiceOver would otherwise announce an unnamed button.
+      accessibilityLabel={label}
       accessibilityState={{ disabled: inactive, busy: loading }}
     >
         {variant === 'primary' ? (

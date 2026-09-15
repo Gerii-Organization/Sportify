@@ -2,6 +2,7 @@
   "expo": {
     "name": "Sportify",
     "slug": "Sportify",
+    "scheme": "sportify",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -16,7 +17,7 @@
       "bundleIdentifier": "com.vick1337.Sportify",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSHealthShareUsageDescription": "Sportify reads your sleep and step data from Apple Health so your dashboard shows real figures instead of asking you to type them in.",
+        "NSHealthShareUsageDescription": "Sportify reads your sleep, steps, heart rate and active energy from Apple Health, so your dashboard shows real figures and a finished workout shows the calories you actually burned.",
         "NSHealthUpdateUsageDescription": "Sportify saves the workouts you finish here to Apple Health, so they count towards your activity rings alongside everything else you do.",
         "NSCameraUsageDescription": "Sportify uses the camera to photograph a meal so it can estimate the calories and macros for you.",
         "NSPhotoLibraryUsageDescription": "Sportify lets you pick a photo of a meal from your library, and set a cover image on your own workouts.",
@@ -81,7 +82,8 @@
           }
         }
       ],
-      "./plugins/withoutPushEntitlement"
+      "./plugins/withoutPushEntitlement",
+      "expo-sharing"
     ],
     "updates": {
       "url": "https://u.expo.dev/8cdb528c-17bb-428e-90d2-61ab83c4c0b8",

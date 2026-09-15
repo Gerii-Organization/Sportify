@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import Svg, { Circle, G } from 'react-native-svg';
 import Animated, {
-  useSharedValue, useAnimatedProps, withTiming, withDelay, Easing,
+  useSharedValue, useAnimatedProps, withTiming, withDelay, Easing, useReducedMotion,
 } from 'react-native-reanimated';
 import { DURATION } from '../lib/motion';
 
@@ -33,9 +33,12 @@ export default function ProgressArc({
   size = 52,
   strokeWidth = 4,
   delay = 0,
-  animate = true,
+  animate: animateProp = true,
   children,
 }) {
+  // Reduce Motion draws the ring at its value instead of filling it.
+  const reduceMotion = useReducedMotion();
+  const animate = animateProp && !reduceMotion;
   const target = Math.min(Math.max(progress || 0, 0), 1);
 
   const radius = (size - strokeWidth) / 2;

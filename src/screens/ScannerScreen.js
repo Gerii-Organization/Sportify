@@ -2,7 +2,7 @@ import { useState, useRef } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, Dimensions, Alert, Modal, FlatList, TextInput, ScrollView } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { BlurView } from 'expo-blur';
-import { X, Zap, ZapOff, Image as ImageIcon, RefreshCcw, Scan, Clock, Plus } from 'lucide-react-native';
+import { X, Zap, ZapOff, Image as ImageIcon, RefreshCcw, Scan, Clock, Plus, Star, Check } from 'lucide-react-native';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '../lib/supabase';
@@ -12,6 +12,16 @@ import EmptyState from '../components/EmptyState';
 import { lookupBarcode } from '../lib/foodDatabase';
 
 const { width } = Dimensions.get('window');
+
+/**
+ * The meals sheet. Recent first: most days you eat what you ate this week, and
+ * finding it again should not mean scrolling past every repeat of it.
+ */
+const MEAL_TABS = [
+  { key: 'recent', label: 'Recent' },
+  { key: 'favorites', label: 'Favourites' },
+  { key: 'all', label: 'History' },
+];
 
 /** What the user is meant to do in each mode, shown inside the frame. */
 const MODE_HINTS = {
@@ -34,6 +44,10 @@ export default function ScannerScreen() {
 
   const [isHistoryVisible, setIsHistoryVisible] = useState(false);
   const [historyList, setHistoryList] = useState([]);
+  const [historyTab, setHistoryTab] = useState('recent');
+  const [favorites, setFavorites] = useState([]);
+  /** Lower-cased name of the food just logged again, for a moment of "done". */
+  const [justLogged, setJustLogged] = useState(null);
 
   const [isManualModalVisible, setIsManualModalVisible] = useState(false);
   const [manualInput, setManualInput] = useState('');
@@ -127,7 +141,8 @@ export default function ScannerScreen() {
           .from('scanned_foods')
           .select('*')
           .eq('user_id', user.id)
-          .order('scanned_at', { ascending: false });
+          .order('scanned_at', { ascending: false })
+          .limit(200);
 
         if (error) throw error;
         setHistoryList(data || []);
@@ -137,9 +152,91 @@ export default function ScannerScreen() {
     }
   };
 
+  const fetchFavorites = async () => {
+    const { data, error } = await supabase
+      .from('favorite_foods')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (!error) setFavorites(data || []);
+  };
+
   const openHistory = () => {
     setIsHistoryVisible(true);
     fetchHistory();
+    fetchFavorites();
+  };
+
+  const nameKey = (name) => String(name || '').trim().toLowerCase();
+
+  // One row per food, newest first: the history with the repeats folded away.
+  const recentMeals = (() => {
+    const seen = new Set();
+    return historyList.filter((item) => {
+      const key = nameKey(item.food_name);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 25);
+  })();
+
+  const favoriteFor = (name) => favorites.find((fav) => nameKey(fav.food_name) === nameKey(name));
+
+  const macroLine = (item) =>
+    `P ${Math.round(item.protein || 0)}g · C ${Math.round(item.carbs || 0)}g · F ${Math.round(item.fats || 0)}g`;
+
+  /** The numbers a meal carries, for a new scan row or a favourite. */
+  const mealNumbers = (item) => ({
+    food_name: item.food_name,
+    calories: Math.round(Number(item.calories) || 0),
+    protein: Number(item.protein) || 0,
+    carbs: Number(item.carbs) || 0,
+    fats: Number(item.fats) || 0,
+    emoji: item.emoji || null,
+  });
+
+  /**
+   * Stars or un-stars a food by name. Removal is optimistic and put back on
+   * failure; adding waits for the row, because the id is what un-starring needs.
+   */
+  const toggleFavorite = async (item) => {
+    const existing = favoriteFor(item.food_name);
+    if (existing) {
+      setFavorites((list) => list.filter((fav) => fav.id !== existing.id));
+      const { error } = await supabase.from('favorite_foods').delete().eq('id', existing.id);
+      if (error) {
+        setFavorites((list) => [existing, ...list]);
+        Alert.alert('Could not update favourites', 'Try again in a moment.');
+      }
+      return;
+    }
+
+    const { data, error } = await supabase.from('favorite_foods').insert(mealNumbers(item)).select().single();
+    if (error) {
+      Alert.alert('Could not update favourites', 'Try again in a moment.');
+      return;
+    }
+    setFavorites((list) => [data, ...list]);
+  };
+
+  /** Logs a meal again as a new entry for now: the same numbers, no scan. */
+  const logAgain = async (item) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const { data, error } = await supabase
+      .from('scanned_foods')
+      .insert({ user_id: user.id, ...mealNumbers(item) })
+      .select()
+      .single();
+    if (error) {
+      Alert.alert('Could not log this meal', 'Try again in a moment.');
+      return;
+    }
+
+    setHistoryList((list) => [data, ...list]);
+    const key = nameKey(item.food_name);
+    setJustLogged(key);
+    setTimeout(() => setJustLogged((current) => (current === key ? null : current)), 1600);
   };
 
   /**
@@ -368,7 +465,7 @@ export default function ScannerScreen() {
 
       <View style={StyleSheet.absoluteFillObject}>
         <View style={styles.header}>
-          <TouchableOpacity activeOpacity={0.7} style={styles.iconButton} onPress={openHistory} accessibilityLabel="History">
+          <TouchableOpacity activeOpacity={0.7} style={styles.iconButton} onPress={openHistory} accessibilityLabel="Meals">
             <Clock color={colors.accent} size={22} />
           </TouchableOpacity>
 
@@ -491,7 +588,7 @@ export default function ScannerScreen() {
           </TouchableOpacity>
         </View>
 
-        <Modal visible={!!expandedItem} transparent animationType="fade">
+        <Modal visible={!!expandedItem} transparent animationType="fade" onRequestClose={() => setExpandedItem(null)}>
           <View style={styles.modalOverlayCenter}>
             <View style={styles.expandedModalContent}>
               <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} style={styles.closeExpandedBtn} onPress={() => setExpandedItem(null)}>
@@ -540,7 +637,7 @@ export default function ScannerScreen() {
           </View>
         </Modal>
 
-        <Modal visible={isManualModalVisible} transparent animationType="fade">
+        <Modal visible={isManualModalVisible} transparent animationType="fade" onRequestClose={() => setIsManualModalVisible(false)}>
           <View style={styles.modalOverlayCenter}>
             <View style={styles.manualModal}>
               <Text style={styles.manualTitle}>Add ingredient</Text>
@@ -564,37 +661,84 @@ export default function ScannerScreen() {
           </View>
         </Modal>
 
-        <Modal visible={isHistoryVisible} animationType="slide" transparent>
+        <Modal visible={isHistoryVisible} animationType="slide" transparent onRequestClose={() => setIsHistoryVisible(false)}>
           <View style={styles.modalOverlayFull}>
             <View style={styles.historyContainer}>
               <View style={styles.historyHeader}>
-                <Text style={styles.historyTitle}>Scan History</Text>
+                <Text style={styles.historyTitle}>Meals</Text>
                 <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} onPress={() => setIsHistoryVisible(false)}>
                   <X color={colors.accent} size={28} />
                 </TouchableOpacity>
               </View>
+
+              <View style={styles.mealTabs}>
+                {MEAL_TABS.map((tab) => (
+                  <TouchableOpacity
+                    key={tab.key}
+                    activeOpacity={0.7}
+                    onPress={() => setHistoryTab(tab.key)}
+                    style={[styles.mealTab, historyTab === tab.key && styles.mealTabActive]}
+                    accessibilityState={{ selected: historyTab === tab.key }}
+                  >
+                    <Text style={[styles.mealTabText, historyTab === tab.key && styles.mealTabTextActive]}>{tab.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
               <FlatList
-                data={historyList}
-                keyExtractor={item => item.id.toString()}
-                renderItem={({item}) => (
-                  <View style={styles.historyItem}>
-                    <View style={styles.historyItemLeft}>
-                      <Text style={styles.historyEmoji}>🍽️</Text>
-                      <View>
-                        <Text style={styles.historyItemName}>{item.food_name}</Text>
-                        <Text style={styles.historyItemDate}>{new Date(item.scanned_at).toLocaleString()}</Text>
+                data={historyTab === 'recent' ? recentMeals : historyTab === 'favorites' ? favorites : historyList}
+                keyExtractor={(item) => `${historyTab}-${item.id}`}
+                renderItem={({ item }) => {
+                  const starred = !!favoriteFor(item.food_name);
+                  const logged = justLogged === nameKey(item.food_name);
+                  return (
+                    <View style={styles.historyItem}>
+                      <View style={[styles.historyItemLeft, styles.mealLeft]}>
+                        <Text style={styles.historyEmoji}>{item.emoji || '🍽️'}</Text>
+                        <View style={styles.mealText}>
+                          <Text style={styles.historyItemName} numberOfLines={1}>{item.food_name}</Text>
+                          <Text style={styles.historyItemDate} numberOfLines={1}>
+                            {historyTab === 'all' ? new Date(item.scanned_at).toLocaleString() : macroLine(item)}
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={styles.mealRight}>
+                        <Text style={styles.historyItemCals}>{item.calories} kcal</Text>
+                        <View style={styles.mealActions}>
+                          <TouchableOpacity
+                            hitSlop={8}
+                            onPress={() => toggleFavorite(item)}
+                            accessibilityLabel={starred ? `Remove ${item.food_name} from favourites` : `Add ${item.food_name} to favourites`}
+                          >
+                            <Star color={starred ? colors.gold : colors.textMuted} fill={starred ? colors.gold : 'transparent'} size={18} />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            hitSlop={8}
+                            onPress={() => logAgain(item)}
+                            disabled={logged}
+                            style={[styles.logBtn, logged && styles.logBtnDone]}
+                            accessibilityLabel={logged ? `${item.food_name} logged` : `Log ${item.food_name} again`}
+                          >
+                            {logged ? <Check color={colors.onAccent} size={14} /> : <Plus color={colors.onAccent} size={14} />}
+                          </TouchableOpacity>
+                        </View>
                       </View>
                     </View>
-                    <Text style={styles.historyItemCals}>{item.calories} kcal</Text>
-                  </View>
-                )}
-                ListEmptyComponent={
+                  );
+                }}
+                ListEmptyComponent={historyTab === 'favorites' ? (
+                  <EmptyState
+                    icon={<Star color={colors.textFaint} size={44} />}
+                    title="No favourites yet"
+                    message="Star a meal you eat often and it stays here, one tap from logging."
+                  />
+                ) : (
                   <EmptyState
                     icon={<Clock color={colors.textFaint} size={44} />}
                     title="Nothing logged yet"
-                    message="Scan a meal to see its calories and macros."
+                    message="Scan a meal and it shows up here, ready to log again."
                   />
-                }
+                )}
                 showsVerticalScrollIndicator={false}
               />
             </View>
@@ -1044,6 +1188,27 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600'
   },
+  mealTabs: {
+    flexDirection: 'row',
+    backgroundColor: colors.surface,
+    borderRadius: 14,
+    padding: 4,
+    marginBottom: 16,
+  },
+  mealTab: { flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 10 },
+  mealTabActive: { backgroundColor: colors.surfaceHigh },
+  mealTabText: { color: colors.textMuted, fontSize: 13, fontWeight: '600' },
+  mealTabTextActive: { color: colors.text },
+  mealLeft: { flex: 1, marginRight: 12 },
+  mealText: { flex: 1 },
+  mealRight: { alignItems: 'flex-end', gap: 8 },
+  mealActions: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  logBtn: {
+    width: 26, height: 26, borderRadius: 13,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.accent,
+  },
+  logBtnDone: { backgroundColor: colors.success },
   emptyText: {
     color: colors.textMuted,
     textAlign: 'center',

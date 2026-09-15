@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
-import { StyleSheet, View, Text, SafeAreaView, ScrollView, Alert, Share } from 'react-native';
+import { StyleSheet, View, Text, ScrollView, Alert, Share } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
 import {

@@ -1,12 +1,13 @@
 import { useCallback, useState } from 'react';
-import { View, Text, ScrollView, SafeAreaView, StyleSheet, Alert, Share, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, Alert, Share, ActivityIndicator } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   ChevronLeft, ChevronRight, Camera, Pencil, Share2, Flame, Dumbbell, Clock, Trophy,
-  Users, UserPlus, TrendingUp, CalendarDays, Sparkles, Award,
-} from 'lucide-react-native';
+  Users, UserPlus, TrendingUp, CalendarDays, Sparkles, Award, Ruler, Gift, Swords } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
+import { inviteMessage, INVITE_BONUS } from '../lib/invites';
 import { unwrap } from '../lib/query';
 import { colors, gradients } from '../theme';
 import { useAuth } from '../context/AuthContext';
@@ -240,6 +241,21 @@ export default function ProfileScreen({ navigation }) {
   // closest to, so a new account still sees four goals rather than a blank row.
   const showcase = [...unlocked, ...locked].slice(0, 4);
   const nextUp = locked[0] || null;
+
+  /** The code comes from the server, so a profile loaded before invites existed still has one. */
+  const inviteFriends = async () => {
+    const { data: stats } = await supabase.rpc('get_invite_stats');
+    const code = stats?.code || authProfile?.invite_code;
+    if (!code) {
+      Alert.alert('Invites are not ready yet', 'Try again in a moment.');
+      return;
+    }
+    try {
+      await Share.share({ title: 'Join me on Sportify', message: inviteMessage(code, profile?.first_name) });
+    } catch {
+      // Dismissing the share sheet is not an error.
+    }
+  };
 
   const shareProfile = async () => {
     const parts = [`Level ${level.level} ${tier.name}`];
@@ -539,6 +555,24 @@ export default function ProfileScreen({ navigation }) {
                 label="Progress"
                 note="Charts, history and records"
                 onPress={() => navigation.navigate('ProgressScreen')}
+              />
+              <LinkRow
+                icon={Swords}
+                label="Challenges"
+                note="Race friends for a few days, winner takes energy"
+                onPress={() => navigation.navigate('ChallengesScreen')}
+              />
+              <LinkRow
+                icon={Gift}
+                label="Invite friends"
+                note={`You both get ${INVITE_BONUS} energy after their first workout`}
+                onPress={inviteFriends}
+              />
+              <LinkRow
+                icon={Ruler}
+                label="Body & photos"
+                note="Measurements and private progress photos"
+                onPress={() => navigation.navigate('BodyScreen')}
               />
               <LinkRow
                 icon={Sparkles}

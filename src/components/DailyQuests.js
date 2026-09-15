@@ -4,6 +4,7 @@ import { CheckCircle2, Circle, Droplets, Dumbbell, Footprints, Trash2 } from 'lu
 import { colors, spacing } from '../theme';
 import ProgressArc from './ProgressArc';
 import Press from './Press';
+import { useT, t as tNow } from '../i18n';
 
 /**
  * Today's quests: one ring, rows underneath.
@@ -36,6 +37,7 @@ export default function DailyQuests({
 }) {
   const [expanded, setExpanded] = useState(false);
 
+  const { t } = useT();
   const done = quests.filter((q) => q.done && !q.setup).length;
   const total = quests.filter((q) => !q.setup).length;
   const remaining = total - done;
@@ -60,7 +62,7 @@ export default function DailyQuests({
         </View>
 
         <View style={{ flex: 1 }}>
-          <Text style={styles.title}>Today's quests</Text>
+          <Text style={styles.title}>{t("Today's quests")}</Text>
           <Text style={styles.subtitle}>{summaryFor(total, remaining)}</Text>
         </View>
       </View>
@@ -81,9 +83,9 @@ export default function DailyQuests({
             scale={0.98}
             onPress={() => setExpanded(true)}
             style={styles.more}
-            accessibilityLabel={`Show ${hidden} more quests`}
+            accessibilityLabel={t('Show {count} more quests', { count: hidden })}
           >
-            <Text style={styles.moreText}>{hidden} more</Text>
+            <Text style={styles.moreText}>{t('{count} more', { count: hidden })}</Text>
           </Press>
         )}
       </View>
@@ -116,7 +118,7 @@ function QuestRow({ quest, isEditMode, onPress, onDelete }) {
         </Text>
 
         {quest.setup ? (
-          <Text style={styles.setupHint}>Set up</Text>
+          <Text style={styles.setupHint}>{tNow('Set up')}</Text>
         ) : quest.detail ? (
           <Text style={styles.rowDetail}>{quest.detail}</Text>
         ) : null}
@@ -144,9 +146,9 @@ function QuestRow({ quest, isEditMode, onPress, onDelete }) {
  * on the most-looked-at screen.
  */
 function summaryFor(total, remaining) {
-  if (total === 0) return 'Nothing set up yet';
-  if (remaining === 0) return 'All done today';
-  return `${remaining} left today`;
+  if (total === 0) return tNow('Nothing set up yet');
+  if (remaining === 0) return tNow('All done today');
+  return tNow('{count} left today', { count: remaining });
 }
 
 const styles = StyleSheet.create({

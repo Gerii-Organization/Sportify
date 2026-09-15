@@ -19,8 +19,12 @@ import { supabase } from './supabase';
  *
  * Files first, because the RPC ends by removing the auth row — after that the
  * session is invalid and the Storage API would refuse.
+ *
+ * `avatars` joined this list late: profile photos (20260912_profile_photo)
+ * live in a public bucket under the same `<user id>/` folder, and until they
+ * were listed here a deleted account's face stayed readable at its old URL.
  */
-const BUCKETS = ['workout_covers', 'chat_images'];
+const BUCKETS = ['workout_covers', 'chat_images', 'avatars', 'progress_photos'];
 
 export async function deleteAccount(userId) {
   if (!userId) throw new Error('Not signed in.');

@@ -3,6 +3,7 @@ import { Moon, Check, Flame, Target, ArrowRight } from 'lucide-react-native';
 import { colors, spacing } from '../theme';
 import { WeekStrip } from './WeeklyGoal';
 import Press from './Press';
+import { useT } from '../i18n';
 
 /**
  * One answer to "what should I do today".
@@ -29,11 +30,13 @@ const TONES = {
   steady: { color: colors.accent,   Icon: Target },
 };
 
-export default function TodayCard({ advice, onAct, week, onEditSplit }) {
+export default function TodayCard({ advice, onAct, week, onEditSplit, onPlanWeek }) {
+  const { t } = useT();
   if (!advice) return null;
 
   const { color, Icon } = TONES[advice.tone] || TONES.steady;
-  const actionable = !!advice.muscle && !!onAct;
+  // A planned routine starts on tap; otherwise the muscle opens Browse.
+  const actionable = (!!advice.routine || !!advice.muscle) && !!onAct;
 
   const body = (
     // One flat surface, top and bottom. The gradient wash made the advice look
@@ -61,19 +64,30 @@ export default function TodayCard({ advice, onAct, week, onEditSplit }) {
     <View style={styles.weekBlock}>
       <View style={styles.weekHead}>
         <Text style={styles.weekCount}>
-          {week.doneDays.length} of {week.target} this week
+          {t('{done} of {target} this week', { done: week.doneDays.length, target: week.target })}
         </Text>
-        {onEditSplit ? (
-          <Text style={styles.weekLink}>{week.splitName || 'Set a split'}</Text>
+        {onEditSplit || onPlanWeek ? (
+          <View style={styles.weekLinks}>
+            {onEditSplit ? (
+              <Press scale={0.96} onPress={onEditSplit} hitSlop={8} accessibilityLabel={t('Edit your training split')}>
+                <Text style={styles.weekLink}>{week.splitName || t('Set a split')}</Text>
+              </Press>
+            ) : null}
+            {onPlanWeek ? (
+              <Press scale={0.96} onPress={onPlanWeek} hitSlop={8} accessibilityLabel={t('Plan your week')}>
+                <Text style={styles.weekLink}>{week.planned ? t('Edit plan') : t('Plan week')}</Text>
+              </Press>
+            ) : null}
+          </View>
         ) : (
           <Text style={styles.weekNote}>
             {week.doneDays.length >= week.target
-              ? 'Target met'
-              : `${week.target - week.doneDays.length} to go`}
+              ? t('Target met')
+              : t('{count} to go', { count: week.target - week.doneDays.length })}
           </Text>
         )}
       </View>
-      <WeekStrip doneDays={week.doneDays} weekKeys={week.weekKeys} />
+      <WeekStrip doneDays={week.doneDays} weekKeys={week.weekKeys} plannedDays={week.plannedDays} />
     </View>
   ) : null;
 
@@ -84,8 +98,10 @@ export default function TodayCard({ advice, onAct, week, onEditSplit }) {
       {actionable ? (
         <Press
           scale={0.99}
-          onPress={() => onAct(advice.muscle)}
-          accessibilityLabel={`Find a ${advice.muscle.toLowerCase()} workout`}
+          onPress={() => onAct(advice)}
+          accessibilityLabel={advice.routine
+            ? t('Start {name}', { name: advice.routine.name || t('your routine') })
+            : t('Find a {muscle} workout', { muscle: t(advice.muscle).toLowerCase() })}
         >
           {body}
         </Press>
@@ -93,20 +109,10 @@ export default function TodayCard({ advice, onAct, week, onEditSplit }) {
         body
       )}
 
-      {/* The bottom half opens the split. It had no action before and was
-          documented as going nowhere; now the two halves read as a pair —
-          what to do today, and the plan it comes from. */}
-      {onEditSplit && strip ? (
-        <Press
-          scale={0.99}
-          onPress={onEditSplit}
-          accessibilityLabel="Edit your training split"
-        >
-          {strip}
-        </Press>
-      ) : (
-        strip
-      )}
+      {/* The bottom half carries two links now — the split (the order of
+          days) and the week plan (which weekday gets which routine) — so the
+          strip itself is no longer one big button. */}
+      {strip}
     </View>
   );
 }
@@ -127,6 +133,7 @@ const styles = StyleSheet.create({
   weekCount: { color: colors.textSecondary, fontSize: 12, fontWeight: '700' },
   weekNote: { color: colors.textFaint, fontSize: 11, fontWeight: '600' },
   weekLink: { color: colors.accent, fontSize: 11, fontWeight: '700' },
+  weekLinks: { flexDirection: 'row', alignItems: 'baseline', gap: 14 },
   card: {
     flexDirection: 'row',
     alignItems: 'center',

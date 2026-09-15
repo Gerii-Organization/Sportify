@@ -76,25 +76,6 @@ export default function MacroRings({ totals, targets }) {
   );
 }
 
-/**
- * Targets derived from the same profile that drives the calorie goal, so the
- * two can never disagree.
- *
- *   protein  2 g per kg of bodyweight — the common strength-training figure
- *   fats     25% of calories, at 9 kcal per gram
- *   carbs    whatever calories are left, at 4 kcal per gram
- */
-export function macroTargets(profile, calorieTarget) {
-  const weight = parseFloat(profile?.weight) || 70;
-
-  const protein = Math.round(weight * 2);
-  const fats = Math.round((calorieTarget * 0.25) / 9);
-  const remaining = calorieTarget - protein * 4 - fats * 9;
-  const carbs = Math.max(0, Math.round(remaining / 4));
-
-  return { protein, carbs, fats };
-}
-
 const styles = StyleSheet.create({
   card: {
     flexDirection: 'row',

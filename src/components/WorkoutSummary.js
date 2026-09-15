@@ -1,21 +1,28 @@
-import { useEffect, useState } from 'react';
-import { Modal, View, Text, TextInput, ScrollView, SafeAreaView, StyleSheet } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Modal, View, Text, TextInput, ScrollView, StyleSheet, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   useSharedValue, useAnimatedStyle, withSpring, withTiming, withDelay, withRepeat,
   cancelAnimation, Easing,
 } from 'react-native-reanimated';
 import {
-  Check, Clock, Dumbbell, Layers, Flame, Zap, Star, Snowflake, CloudOff, Trophy, MessageSquare,
+  Check, Clock, Dumbbell, Layers, Flame, Zap, Star, Snowflake, CloudOff, Trophy, MessageSquare, Share2, Medal, Gift,
 } from 'lucide-react-native';
 import { colors, gradients } from '../theme';
 import { formatStopwatch } from '../lib/date';
 import { formatWeight } from '../lib/units';
 import { AchievementIcon } from '../lib/achievements';
+import { describeReward } from '../lib/milestones';
+import { BURN_NOTES } from '../lib/energy';
+import { useT, t as tNow } from '../i18n';
 import { ENTER_SPRING } from '../lib/motion';
 import AmbientGlow from './AmbientGlow';
 import FadeIn from './FadeIn';
 import Button from './Button';
+import WorkoutShareCard, { SHARE_CARD_SIZE } from './WorkoutShareCard';
+import { shareViewAsImage } from '../lib/shareImage';
+import { useAuth } from '../context/AuthContext';
 
 /**
  * The screen at the end of a workout.
@@ -44,6 +51,29 @@ export default function WorkoutSummary({
   onContinue,
 }) {
   const s = stats || {};
+  const { t } = useT();
+  const { profile } = useAuth();
+  const cardRef = useRef(null);
+  const [sharing, setSharing] = useState(false);
+
+  // Captured at story resolution (1080 × 1920) whatever size the preview is
+  // drawn at, so the shared image is sharp on the phone that receives it.
+  const share = async () => {
+    if (sharing) return;
+    setSharing(true);
+    const result = await shareViewAsImage(cardRef, {
+      dialogTitle: t('Share your workout'),
+      width: SHARE_CARD_SIZE.width * 4,
+      height: SHARE_CARD_SIZE.height * 4,
+    });
+    setSharing(false);
+
+    if (result.reason === 'unavailable') {
+      Alert.alert(t('Sharing is not available'), t('Update the app to share your workout as an image.'));
+    } else if (result.reason === 'failed') {
+      Alert.alert(t('Could not share'), t('The image could not be created. Try again.'));
+    }
+  };
 
   // The note saves on blur, and a tap on Continue does not always blur first.
   const finish = () => {
@@ -67,19 +97,19 @@ export default function WorkoutSummary({
 
             <FadeIn index={2}>
               <View style={styles.grid}>
-                <StatTile icon={Clock} label="Duration" value={formatStopwatch(s.time || 0)} />
-                <StatTile icon={Dumbbell} label="Volume" value={formatWeight(s.volume || 0, units, { step: 1 })} />
+                <StatTile icon={Clock} label={t('Duration')} value={formatStopwatch(s.time || 0)} />
+                <StatTile icon={Dumbbell} label={t('Volume')} value={formatWeight(s.volume || 0, units, { step: 1 })} />
                 <StatTile
                   icon={Layers}
-                  label="Sets"
+                  label={t('Sets')}
                   value={String(s.sets || 0)}
-                  note={`${s.exercises || 0} exercise${s.exercises === 1 ? '' : 's'}`}
+                  note={t('{count} exercise', { count: s.exercises || 0 })}
                 />
                 <StatTile
                   icon={Flame}
-                  label="Est. burn"
+                  label={s.kcalSource && s.kcalSource !== 'estimate' ? t('Burn') : t('Est. burn')}
                   value={s.kcal ? `${s.kcal} kcal` : '—'}
-                  note="Estimated"
+                  note={t(BURN_NOTES[s.kcalSource] || BURN_NOTES.estimate)}
                 />
               </View>
             </FadeIn>
@@ -95,16 +125,16 @@ export default function WorkoutSummary({
                     <CloudOff color={colors.textMuted} size={19} />
                   </View>
                   <View style={styles.flex}>
-                    <Text style={styles.cardTitle}>Saved on this phone</Text>
+                    <Text style={styles.cardTitle}>{t('Saved on this phone')}</Text>
                     <Text style={styles.cardBody}>
-                      You are offline. This workout will sync automatically, and your rewards will show up then.
+                      {t('You are offline. This workout will sync automatically, and your rewards will show up then.')}
                     </Text>
                   </View>
                 </View>
               ) : (
                 <View style={styles.rewards}>
-                  <RewardTile icon={Star} tone={colors.xp} value={s.xpGained} label="XP earned" />
-                  <RewardTile icon={Zap} tone={colors.gold} value={s.energyGained} label="Energy earned" delay={140} />
+                  <RewardTile icon={Star} tone={colors.xp} value={s.xpGained} label={t('XP earned')} />
+                  <RewardTile icon={Zap} tone={colors.gold} value={s.energyGained} label={t('Energy earned')} delay={140} />
                 </View>
               )}
             </FadeIn>
@@ -123,11 +153,50 @@ export default function WorkoutSummary({
                   <View style={styles.flex}>
                     <View style={styles.streakLine}>
                       <Text style={styles.streakNumber}>{s.newStreak}</Text>
-                      <Text style={styles.streakUnit}>day streak</Text>
+                      <Text style={styles.streakUnit}>{t('day streak')}</Text>
                     </View>
-                    <Text style={styles.cardBody}>Keep it going tomorrow.</Text>
+                    <Text style={styles.cardBody}>{t('Keep it going tomorrow.')}</Text>
                   </View>
                 </LinearGradient>
+              </FadeIn>
+            ) : null}
+
+            {/* A milestone is rarer than a streak day, so it gets the reward
+                colour and its own card rather than a line in the streak one. */}
+            {(s.milestones || []).map((milestone) => (
+              <FadeIn key={`milestone-${milestone.days}`} index={4}>
+                <LinearGradient
+                  colors={['rgba(222, 184, 102, 0.22)', 'rgba(222, 184, 102, 0.04)']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={[styles.card, styles.row, styles.milestoneCard]}
+                >
+                  <View style={[styles.disc, styles.milestoneDisc]}>
+                    <Medal color={colors.gold} size={20} />
+                  </View>
+                  <View style={styles.flex}>
+                    <Text style={styles.cardTitle}>{t('{days}-day milestone', { days: milestone.days })}</Text>
+                    <Text style={styles.cardBody}>{describeReward(milestone) || t('Unlocked')}</Text>
+                  </View>
+                </LinearGradient>
+              </FadeIn>
+            ))}
+
+            {s.inviteBonus ? (
+              <FadeIn index={4}>
+                <View style={[styles.card, styles.row, styles.milestoneCard]}>
+                  <View style={[styles.disc, styles.milestoneDisc]}>
+                    <Gift color={colors.gold} size={19} />
+                  </View>
+                  <View style={styles.flex}>
+                    <Text style={styles.cardTitle}>{t('Invite bonus')}</Text>
+                    <Text style={styles.cardBody}>
+                      {s.inviteBonus.inviterName
+                        ? t('+{energy} energy for your first workout, and {name} gets the same.', { energy: s.inviteBonus.energy, name: s.inviteBonus.inviterName })
+                        : t('+{energy} energy for your first workout.', { energy: s.inviteBonus.energy })}
+                    </Text>
+                  </View>
+                </View>
               </FadeIn>
             ) : null}
 
@@ -138,8 +207,8 @@ export default function WorkoutSummary({
                     <Snowflake color={colors.water} size={19} />
                   </View>
                   <View style={styles.flex}>
-                    <Text style={styles.cardTitle}>Streak Freeze used</Text>
-                    <Text style={styles.cardBody}>You missed a day, and a freeze kept your streak going.</Text>
+                    <Text style={styles.cardTitle}>{t('Streak Freeze used')}</Text>
+                    <Text style={styles.cardBody}>{t('You missed a day, and a freeze kept your streak going.')}</Text>
                   </View>
                 </View>
               </FadeIn>
@@ -155,7 +224,7 @@ export default function WorkoutSummary({
                       <Trophy color={colors.gold} fill={colors.gold} size={17} />
                     </View>
                     <Text style={[styles.cardTitle, styles.flex]}>
-                      {s.records.length === 1 ? 'New personal record' : 'New personal records'}
+                      {s.records.length === 1 ? t('New personal record') : t('New personal records')}
                     </Text>
                     <View style={styles.countPill}>
                       <Text style={styles.countText}>{s.records.length}</Text>
@@ -177,7 +246,7 @@ export default function WorkoutSummary({
               <FadeIn index={6}>
                 <View style={[styles.card, styles.accentCard]}>
                   <Text style={[styles.cardTitle, styles.cardTitleSpaced]}>
-                    {s.achievements.length === 1 ? 'Achievement unlocked' : 'Achievements unlocked'}
+                    {s.achievements.length === 1 ? t('Achievement unlocked') : t('Achievements unlocked')}
                   </Text>
                   {s.achievements.map((achievement) => (
                     <View key={achievement.code} style={styles.listRow}>
@@ -194,13 +263,40 @@ export default function WorkoutSummary({
               </FadeIn>
             ) : null}
 
+            <FadeIn index={6}>
+              <View style={styles.card}>
+                <View style={styles.sectionHead}>
+                  <Share2 color={colors.textMuted} size={16} />
+                  <Text style={[styles.cardTitle, styles.flex]}>{t('Share your workout')}</Text>
+                </View>
+                {/* The preview is the image: the same view is captured, so
+                    nothing about the shared picture is a surprise. */}
+                <View style={styles.sharePreview}>
+                  <WorkoutShareCard
+                    ref={cardRef}
+                    stats={s}
+                    workoutName={workoutName}
+                    units={units}
+                    firstName={profile?.first_name}
+                  />
+                </View>
+                <Button
+                  label={t('Share image')}
+                  variant="secondary"
+                  icon={<Share2 color={colors.text} size={18} />}
+                  onPress={share}
+                  loading={sharing}
+                />
+              </View>
+            </FadeIn>
+
             {canNote ? (
               <FadeIn index={7}>
                 <View style={styles.card}>
                   <View style={styles.sectionHead}>
                     <MessageSquare color={colors.textMuted} size={16} />
-                    <Text style={[styles.cardTitle, styles.flex]}>How did it go?</Text>
-                    <Text style={styles.optional}>Optional</Text>
+                    <Text style={[styles.cardTitle, styles.flex]}>{t('How did it go?')}</Text>
+                    <Text style={styles.optional}>{t('Optional')}</Text>
                   </View>
                   {/* Saved on blur rather than behind a button: a note nobody
                       remembered to save is the same as no note. */}
@@ -209,7 +305,7 @@ export default function WorkoutSummary({
                     value={note}
                     onChangeText={onChangeNote}
                     onBlur={onSaveNote}
-                    placeholder="Add a note about this workout"
+                    placeholder={t('Add a note about this workout')}
                     placeholderTextColor={colors.textFaint}
                     selectionColor={colors.accent}
                     multiline
@@ -226,7 +322,7 @@ export default function WorkoutSummary({
               style={styles.footerFade}
               pointerEvents="none"
             />
-            <Button label="Continue" onPress={finish} />
+            <Button label={t('Continue')} onPress={finish} />
           </View>
         </SafeAreaView>
       </View>
@@ -281,8 +377,8 @@ function Hero({ name, message }) {
       </View>
 
       <FadeIn index={1} style={styles.heroCopy}>
-        <Text style={styles.eyebrow}>WORKOUT COMPLETE</Text>
-        <Text style={styles.title} numberOfLines={2}>{name || 'Workout'}</Text>
+        <Text style={styles.eyebrow}>{tNow('WORKOUT COMPLETE')}</Text>
+        <Text style={styles.title} numberOfLines={2}>{name || tNow('Workout')}</Text>
         {message ? <Text style={styles.message}>{message}</Text> : null}
       </FadeIn>
     </View>
@@ -429,6 +525,8 @@ const styles = StyleSheet.create({
   streakUnit: { color: colors.streak, fontSize: 15, fontWeight: '700' },
 
   waterCard: { borderColor: 'rgba(143, 184, 217, 0.35)' },
+  milestoneCard: { borderColor: colors.goldBorder },
+  milestoneDisc: { backgroundColor: colors.goldSoft },
   goldCard: { borderColor: 'rgba(222, 184, 102, 0.35)' },
   accentCard: { borderColor: colors.accentBorder },
   countPill: { backgroundColor: colors.goldSoft, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 2 },
@@ -436,6 +534,7 @@ const styles = StyleSheet.create({
   recordValue: { color: colors.gold, fontSize: 14, fontWeight: '700', fontVariant: ['tabular-nums'] },
 
   optional: { color: colors.textFaint, fontSize: 12 },
+  sharePreview: { alignItems: 'center', marginTop: 12, marginBottom: 14 },
   note: {
     backgroundColor: colors.surface, color: colors.text,
     borderRadius: 14, padding: 14, fontSize: 15, minHeight: 84,

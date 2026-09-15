@@ -1,5 +1,6 @@
 import { MUSCLES } from '../constants/exercises';
 import { nextInCycle, weekOutlook } from './split';
+import { t } from '../i18n/runtime';
 
 /**
  * What to do today, from what you actually did this week.
@@ -83,10 +84,10 @@ export function trainingAdvice({ sessions, target, today, trainedDays, split, we
   if (trainedToday) {
     return {
       tone: 'done',
-      headline: 'Done for today',
+      headline: t('Done for today'),
       detail: run > 1
-        ? `${run} days in a row. Tomorrow is optional.`
-        : 'Logged. Enjoy the rest of your day.',
+        ? t('{count} days in a row. Tomorrow is optional.', { count: run })
+        : t('Logged. Enjoy the rest of your day.'),
       muscle: null,
     };
   }
@@ -96,8 +97,8 @@ export function trainingAdvice({ sessions, target, today, trainedDays, split, we
   if (run >= 4) {
     return {
       tone: 'rest',
-      headline: 'A rest day is worth taking',
-      detail: `You have trained ${run} days straight. Recovery is when you get stronger.`,
+      headline: t('A rest day is worth taking'),
+      detail: t('You have trained {count} days straight. Recovery is when you get stronger.', { count: run }),
       muscle: null,
     };
   }
@@ -106,7 +107,8 @@ export function trainingAdvice({ sessions, target, today, trainedDays, split, we
   if (split?.length) {
     const { day, lastWasOffPlan } = nextInCycle(split, sessions);
     const week = weekOutlook({ doneDays: days, target, weekKeys, today });
-    const groups = (day.muscles || []).join(', ').toLowerCase();
+    const groups = (day.muscles || []).map((m) => t(m)).join(', ').toLowerCase();
+    const dayName = t('{label} day', { label: t(day.label) });
 
     // The target cannot be reached any more. Saying "3 to go" here would be a
     // statement about something that cannot happen, and an app that repeats an
@@ -114,8 +116,8 @@ export function trainingAdvice({ sessions, target, today, trainedDays, split, we
     if (!week.reachable) {
       return {
         tone: 'steady',
-        headline: `${day.label} day`,
-        detail: `${week.daysLeft} day${week.daysLeft === 1 ? '' : 's'} left and ${week.left} short of ${week.target}. Getting some in still beats none.`,
+        headline: dayName,
+        detail: t('{count} day left and {left} short of {target}. Getting some in still beats none.', { count: week.daysLeft, left: week.left, target: week.target }),
         muscle: day.muscles?.[0] || null,
         splitDay: day,
       };
@@ -124,8 +126,8 @@ export function trainingAdvice({ sessions, target, today, trainedDays, split, we
     if (week.left === 0) {
       return {
         tone: 'done',
-        headline: 'Target met',
-        detail: `${week.done} of ${week.target} done. ${day.label} is next if you want it.`,
+        headline: t('Target met'),
+        detail: t('{done} of {target} done. {label} is next if you want it.', { done: week.done, target: week.target, label: t(day.label) }),
         muscle: day.muscles?.[0] || null,
         splitDay: day,
       };
@@ -136,8 +138,8 @@ export function trainingAdvice({ sessions, target, today, trainedDays, split, we
     if (lastWasOffPlan) {
       return {
         tone: 'push',
-        headline: `${day.label} day`,
-        detail: `Your last session was off-plan. ${day.label} is still next — ${groups}.`,
+        headline: dayName,
+        detail: t('Your last session was off-plan. {label} is still next — {groups}.', { label: t(day.label), groups }),
         muscle: day.muscles?.[0] || null,
         splitDay: day,
       };
@@ -145,8 +147,8 @@ export function trainingAdvice({ sessions, target, today, trainedDays, split, we
 
     return {
       tone: 'steady',
-      headline: `${day.label} day`,
-      detail: groups ? `Today's block: ${groups}.` : 'Next in your split.',
+      headline: dayName,
+      detail: groups ? t("Today's block: {groups}.", { groups }) : t('Next in your split.'),
       muscle: day.muscles?.[0] || null,
       splitDay: day,
     };
@@ -161,10 +163,10 @@ export function trainingAdvice({ sessions, target, today, trainedDays, split, we
   if (total === 0) {
     return {
       tone: 'push',
-      headline: 'Nothing logged this week',
+      headline: t('Nothing logged this week'),
       detail: target
-        ? `Your target is ${target} session${target === 1 ? '' : 's'}. One today puts you on it.`
-        : 'One session is all it takes to start a streak.',
+        ? t('Your target is {count} session. One today puts you on it.', { count: target })
+        : t('One session is all it takes to start a streak.'),
       muscle: null,
     };
   }
@@ -177,10 +179,10 @@ export function trainingAdvice({ sessions, target, today, trainedDays, split, we
 
   return {
     tone: behind ? 'push' : 'steady',
-    headline: `Train ${neglected.muscle.toLowerCase()} today`,
+    headline: t('Train {muscle} today', { muscle: t(neglected.muscle).toLowerCase() }),
     detail: neglected.sets === 0
-      ? `No ${neglected.muscle.toLowerCase()} work this week at all.`
-      : `Only ${neglected.sets} set${neglected.sets === 1 ? '' : 's'} this week — your lightest group.`,
+      ? t('No {muscle} work this week at all.', { muscle: t(neglected.muscle).toLowerCase() })
+      : t('Only {count} set this week — your lightest group.', { count: neglected.sets }),
     muscle: neglected.muscle,
   };
 }

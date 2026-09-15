@@ -60,7 +60,7 @@ export default function WeeklyGoal({ target, doneDays, weekKeys }) {
  * overview, and the merged advice card on the workouts screen. One copy means
  * the "future days are fainter" rule cannot drift between them.
  */
-export function WeekStrip({ doneDays, weekKeys }) {
+export function WeekStrip({ doneDays, weekKeys, plannedDays = [] }) {
   const today = todayKey();
 
   return (
@@ -71,10 +71,13 @@ export function WeekStrip({ doneDays, weekKeys }) {
         // Saturday on a Tuesday does not read as a day you missed. YYYY-MM-DD
         // sorts lexicographically, so a string compare is the whole test.
         const future = key > today;
+        // A planned day not yet trained is a ring: there is something on it,
+        // but nothing has happened yet.
+        const planned = !trained && plannedDays.includes(key);
 
         return (
           <View key={key} style={styles.day}>
-            <View style={[styles.dot, trained && styles.dotOn, !trained && future && styles.dotFuture]} />
+            <View style={[styles.dot, trained && styles.dotOn, !trained && future && styles.dotFuture, planned && styles.dotPlanned]} />
             <Text style={[styles.letter, trained && styles.letterOn]}>{LETTERS[i]}</Text>
           </View>
         );
@@ -99,6 +102,7 @@ const styles = StyleSheet.create({
   dot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.surfaceHigh },
   dotOn: { backgroundColor: colors.accent },
   dotFuture: { backgroundColor: colors.surface },
+  dotPlanned: { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: colors.accent },
   letter: { color: colors.textFaint, fontSize: 11, fontWeight: '600' },
   letterOn: { color: colors.accent },
 });

@@ -1,7 +1,17 @@
 import { View, Text, Modal, ScrollView, TouchableOpacity, Dimensions, Alert, Linking, StyleSheet } from 'react-native';
-import { Bell, Timer, Flame, Droplets, Ruler, Shield, HelpCircle, Scale, TrendingUp, LogIn, ChevronRight } from 'lucide-react-native';
+import { Bell, Timer, Flame, Droplets, Ruler, Shield, HelpCircle, Scale, TrendingUp, LogIn, ChevronRight, Download, Languages } from 'lucide-react-native';
 import { colors } from '../../theme';
 import { labelForRestChoice } from '../../lib/rest';
+import { useT } from '../../i18n';
+
+const SCORING_TEXT =
+  'XP: 50 per workout, +20 when you lift over 1000 kg, 30 for hitting your water goal.\n\n' +
+  'Energy: 5 per minute trained, up to 500 a session. Spend it in the Shop.\n\n' +
+  'Streak: train on consecutive days. Miss one and it resets, unless a streak freeze covers it.';
+
+/** Tapping Language steps through these and wraps. Native names, never translated. */
+const LANGUAGE_CYCLE = ['auto', 'en', 'ro'];
+const LANGUAGE_NAMES = { en: 'English', ro: 'Română' };
 import { PRIVACY_URL, LINKS_CONFIGURED } from '../../constants/links';
 
 const { width } = Dimensions.get('window');
@@ -42,14 +52,17 @@ export default function SettingsDrawer({
   onOpenWeight,
   onOpenWater,
   onDeleteAccount,
+  onExportData,
   onSignOut,
   onSignIn,
   onOpenProgress,
 }) {
+  const { t, language, preference, setPreference } = useT();
+  const nextLanguage = LANGUAGE_CYCLE[(LANGUAGE_CYCLE.indexOf(preference) + 1) % LANGUAGE_CYCLE.length];
   return (
-        <Modal visible={visible} transparent animationType="fade">
+        <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
           <View style={styles.menuOverlaySide}>
-            <TouchableOpacity activeOpacity={0.7} style={styles.menuCloseArea} onPress={onClose} />
+            <TouchableOpacity activeOpacity={0.7} style={styles.menuCloseArea} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close menu" />
             <View style={styles.sideMenuContent}>
 
               {/* The whole profile block is tappable, not just the avatar. */}
@@ -64,7 +77,7 @@ export default function SettingsDrawer({
               >
                 {renderAvatar(56, 30)}
                 <View style={{ marginLeft: 16, flex: 1 }}>
-                  <Text style={styles.sidebarName}>{isLoggedIn ? (userProfile?.first_name || 'User') : 'Guest'}</Text>
+                  <Text style={styles.sidebarName}>{isLoggedIn ? (userProfile?.first_name || t('User')) : t('Guest')}</Text>
 
                   {isLoggedIn && userProfile?.equipped_title && (
                      <Text style={{color: colors.accent, fontSize: 13, fontWeight: '600', marginBottom: 6}}>{userProfile.equipped_title}</Text>
@@ -75,10 +88,10 @@ export default function SettingsDrawer({
                       <View style={styles.sidebarXpBarBg}>
                         <View style={[styles.sidebarXpBarFill, { width: xpPercentage }]} />
                       </View>
-                      <Text style={styles.sidebarXpText}>Lvl {level} • {levelXp}/100 XP</Text>
+                      <Text style={styles.sidebarXpText}>{t('Lvl {level} • {xp}/100 XP', { level, xp: levelXp })}</Text>
                     </View>
                   ) : (
-                    <Text style={[styles.viewProfileSidebar, { color: colors.textSecondary }]}>Not logged in</Text>
+                    <Text style={[styles.viewProfileSidebar, { color: colors.textSecondary }]}>{t('Not logged in')}</Text>
                   )}
                 </View>
                 {isLoggedIn && <ChevronRight color={colors.textFaint} size={24} />}
@@ -86,51 +99,51 @@ export default function SettingsDrawer({
 
               <View style={styles.menuDivider} />
               <ScrollView style={{ flex: 1 }}>
-                <Text style={styles.menuGroupTitle}>Your data</Text>
+                <Text style={styles.menuGroupTitle}>{t('Your data')}</Text>
                 {/* Analytics, history and records now live behind the Progress
                     tab. Keeping the three menu rows as well would give each of
                     them two entry points with different presentations — a pushed
                     card from here, an inline panel from the tab bar. */}
                 <MenuOption
                   icon={<TrendingUp color={colors.textMuted} size={20}/>}
-                  label="Progress"
-                  value="Stats, history, records"
+                  label={t('Progress')}
+                  value={t('Stats, history, records')}
                   onPress={() => { onClose(); onOpenProgress(); }}
                   disabled={!isLoggedIn}
                 />
                 <MenuOption
                   icon={<Scale color={colors.textMuted} size={20}/>}
-                  label="Body weight"
+                  label={t('Body weight')}
                   onPress={() => { onClose(); onOpenWeight(); }}
                   disabled={!isLoggedIn}
                 />
 
-                <Text style={styles.menuGroupTitle}>Settings</Text>
+                <Text style={styles.menuGroupTitle}>{t('Settings')}</Text>
                 <MenuOption
                   icon={<Bell color={colors.textMuted} size={20}/>}
-                  label="Rest timer alerts"
-                  value={restAlerts ? 'On' : 'Off'}
+                  label={t('Rest timer alerts')}
+                  value={restAlerts ? t('On') : t('Off')}
                   onPress={onToggleRestAlerts}
                 />
                 {/* Automatic follows the training goal. Anyone who disagrees
                     with that — and most serious lifters will — sets their own. */}
                 <MenuOption
                   icon={<Timer color={colors.textMuted} size={20}/>}
-                  label="Rest length"
-                  value={labelForRestChoice(restSeconds)}
+                  label={t('Rest length')}
+                  value={t(labelForRestChoice(restSeconds))}
                   onPress={onCycleRestLength}
                 />
                 <MenuOption
                   icon={<Flame color={colors.textMuted} size={20}/>}
-                  label="Streak reminder"
-                  value={streakReminders ? '19:00' : 'Off'}
+                  label={t('Streak reminder')}
+                  value={streakReminders ? '19:00' : t('Off')}
                   onPress={onToggleStreakReminders}
                   disabled={!isLoggedIn}
                 />
                 <MenuOption
                   icon={<Droplets color={colors.textMuted} size={20}/>}
-                  label="Water reminders"
-                  value={waterReminders ? '3 a day' : 'Off'}
+                  label={t('Water reminders')}
+                  value={waterReminders ? t('3 a day') : t('Off')}
                   onPress={onToggleWaterReminders}
                   disabled={!isLoggedIn}
                 />
@@ -138,32 +151,44 @@ export default function SettingsDrawer({
                      reversible and changes no recorded figure. */}
                 <MenuOption
                   icon={<Ruler color={colors.textMuted} size={20}/>}
-                  label="Units"
-                  value={units === 'imperial' ? 'Imperial (lb, ft)' : 'Metric (kg, cm)'}
+                  label={t('Units')}
+                  value={units === 'imperial' ? t('Imperial (lb, ft)') : t('Metric (kg, cm)')}
                   onPress={() => setUnits(units === 'imperial' ? 'metric' : 'imperial')}
+                />
+                {/* Automatic follows the phone. The value names the language in
+                    itself, so someone who switched by accident can read the way back. */}
+                <MenuOption
+                  icon={<Languages color={colors.textMuted} size={20}/>}
+                  label={t('Language')}
+                  value={preference === 'auto' ? `${t('Automatic')} (${LANGUAGE_NAMES[language]})` : LANGUAGE_NAMES[preference]}
+                  onPress={() => setPreference(nextLanguage)}
                 />
                 {/* Apple asks for the policy to be reachable inside the app, not
                      only from the store listing. */}
                 <MenuOption
                   icon={<Shield color={colors.textMuted} size={20}/>}
-                  label="Privacy policy"
+                  label={t('Privacy policy')}
                   onPress={() => {
                     if (!LINKS_CONFIGURED) {
-                      return Alert.alert('Coming soon', 'The privacy policy will be available here soon.');
+                      return Alert.alert(t('Coming soon'), t('The privacy policy will be available here soon.'));
                     }
                     Linking.openURL(PRIVACY_URL);
                   }}
                 />
+                {/* Next to the policy that promises it: a copy of everything the
+                    account holds, as JSON, through the share sheet. */}
+                {isLoggedIn ? (
+                  <MenuOption
+                    icon={<Download color={colors.textMuted} size={20}/>}
+                    label={t('Export my data')}
+                    onPress={onExportData}
+                  />
+                ) : null}
                 <MenuOption
                   icon={<HelpCircle color={colors.textMuted} size={20}/>}
-                  label="How scoring works"
+                  label={t('How scoring works')}
                   onPress={() =>
-                    Alert.alert(
-                      'How scoring works',
-                      'XP: 50 per workout, +20 when you lift over 1000 kg, 30 for hitting your water goal.\n\n' +
-                      'Energy: 5 per minute trained, up to 500 a session. Spend it in the Shop.\n\n' +
-                      'Streak: train on consecutive days. Miss one and it resets, unless a streak freeze covers it.'
-                    )
+                    Alert.alert(t('How scoring works'), t(SCORING_TEXT))
                   }
                 />
               </ScrollView>
@@ -171,7 +196,7 @@ export default function SettingsDrawer({
                 {isLoggedIn ? (
                   <>
                     <TouchableOpacity activeOpacity={0.7} style={styles.logoutButton} onPress={onSignOut}>
-                      <LogIn color={colors.danger} size={20} /><Text style={styles.logoutText}>Sign out</Text>
+                      <LogIn color={colors.danger} size={20} /><Text style={styles.logoutText}>{t('Sign out')}</Text>
                     </TouchableOpacity>
 
                     {/* Quiet and last. It has to be findable — Play requires it
@@ -181,14 +206,14 @@ export default function SettingsDrawer({
                       activeOpacity={0.7}
                       style={styles.deleteAccountBtn}
                       onPress={onDeleteAccount}
-                      accessibilityLabel="Delete my account"
+                      accessibilityLabel={t('Delete my account')}
                     >
-                      <Text style={styles.deleteAccountText}>Delete my account</Text>
+                      <Text style={styles.deleteAccountText}>{t('Delete my account')}</Text>
                     </TouchableOpacity>
                   </>
                 ) : (
                   <TouchableOpacity activeOpacity={0.7} style={styles.loginButtonWrapper} onPress={() => { onClose(); onSignIn(); }}>
-                    <Text style={styles.loginButtonText}>Log in or sign up</Text>
+                    <Text style={styles.loginButtonText}>{t('Log in or sign up')}</Text>
                   </TouchableOpacity>
                 )}
               </View>

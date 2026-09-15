@@ -1,13 +1,14 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { Fragment, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   View, Text, StyleSheet, TouchableOpacity, 
-  Modal, SafeAreaView, TextInput, ScrollView, KeyboardAvoidingView, Platform, FlatList, Alert 
+  Modal, TextInput, ScrollView, KeyboardAvoidingView, Platform, FlatList, Alert 
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { 
   ChevronLeft, Edit3, Plus, X, Play, CheckCircle2, Circle, Clock, 
   Save, Trash2, ChevronUp, ChevronDown, Info,
-  Link2, Unlink2
+  Link2, Unlink2, TrendingUp, TrendingDown, Repeat
 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors } from '../theme';
@@ -23,14 +24,18 @@ import { groupOf, restsAfter, linkWithNext, unlink } from '../lib/superset';
 import { ExerciseHistorySheet } from './RecordsScreen';
 import { queueCompletion, saveDraft, loadDraft, clearDraft } from '../lib/pendingWorkouts';
 import { nextType, patchForType, markFor, countsAsWork, describeType, tintFor } from '../lib/setTypes';
+import { normaliseRir, rirLabel, describeRir } from '../lib/effort';
+import EffortPicker from '../components/EffortPicker';
 import { fromInputWeight, toDisplayWeight, weightLabel } from '../lib/units';
 import { listAllExercises, addCustom } from '../lib/customExercises';
-import { saveWorkoutToHealth } from '../lib/health';
+import { saveWorkoutToHealth, readWorkoutEnergy } from '../lib/health';
+import { averageHeartRate, pickBurn } from '../lib/energy';
 import { track, EVENTS } from '../lib/analytics';
 import Button from '../components/Button';
 import WorkoutSummary from '../components/WorkoutSummary';
 import { useConfirm } from '../components/ConfirmDialog';
 import { estimateKcal } from '../lib/workoutStats';
+import { suggestNext } from '../lib/progression';
 import { deviceTimeZone } from '../lib/date';
 
 
@@ -42,6 +47,47 @@ import { deviceTimeZone } from '../lib/date';
  */
 const cueOf = (name) =>
   EXERCISES.find((e) => e.name.toLowerCase() === (name || '').toLowerCase()) || null;
+
+/**
+ * What to put on the bar for this exercise today, from last session.
+ *
+ * Shown above the sets rather than folded into "Prev": the Prev column says
+ * what happened, this says what to do about it, and mixing the two made you
+ * work out the second from the first mid-workout. One tap fills the sets that
+ * are still to do; completed ones are never touched.
+ */
+const HINT_VERB = { increase: 'Go up to', repeat: 'Stay at', deload: 'Drop to', reps: 'Aim for' };
+
+function ProgressHint({ suggestion, applied, unitLabel, onApply }) {
+  const Icon = suggestion.kind === 'deload' ? TrendingDown : suggestion.kind === 'repeat' ? Repeat : TrendingUp;
+  // Going up is progress you earned, so it takes the reward colour. The rest
+  // are instructions and stay in the action colour.
+  const tint = suggestion.kind === 'increase' ? colors.gold : suggestion.kind === 'deload' ? colors.textMuted : colors.accent;
+  const target = suggestion.weight
+    ? `${suggestion.weight} ${unitLabel} × ${suggestion.reps}`
+    : `${suggestion.reps} reps`;
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.75}
+      style={[styles.hint, applied && styles.hintApplied]}
+      onPress={applied ? undefined : onApply}
+      disabled={applied}
+      accessibilityLabel={`${HINT_VERB[suggestion.kind]} ${target}. ${suggestion.reason}.${applied ? ' Applied.' : ' Tap to fill your remaining sets.'}`}
+    >
+      <View style={[styles.hintIcon, { backgroundColor: `${tint}22` }]}>
+        <Icon color={tint} size={15} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.hintTitle}>
+          {HINT_VERB[suggestion.kind]} <Text style={styles.hintTarget}>{target}</Text>
+        </Text>
+        <Text style={styles.hintReason} numberOfLines={1}>{suggestion.reason}</Text>
+      </View>
+      <Text style={[styles.hintAction, applied && styles.hintActionDone]}>{applied ? 'Applied' : 'Use'}</Text>
+    </TouchableOpacity>
+  );
+}
 
 export default function WorkoutDetailScreen({ route, navigation }) {
   const { user, profile, refreshProfile, units } = useAuth();
@@ -110,6 +156,10 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
   /** Exercise whose progression sheet is open, by name. */
   const [historyFor, setHistoryFor] = useState(null);
+  /** Last session's working sets per exercise, in kg, keyed by lower-cased name. */
+  const [lastSets, setLastSets] = useState({});
+  /** The set whose "reps left?" question is open: `{ exerciseId, setId }` or null. */
+  const [effortPrompt, setEffortPrompt] = useState(null);
   /** Timestamp the current rest period ends, or null when not resting. */
   const [restEndsAt, setRestEndsAt] = useState(null);
   /** Id of the pending local notification, so it can be cancelled. */
@@ -147,6 +197,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       if (cancelled || error || !data?.length) return;
 
       const byName = new Map(data.map((row) => [row.exercise_name.toLowerCase(), row]));
+      setLastSets(Object.fromEntries(data.map((row) => [row.exercise_name.toLowerCase(), row.sets || []])));
 
       setCurrentWorkout((w) => ({
         ...w,
@@ -295,6 +346,17 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     setCurrentWorkout({ ...currentWorkout, exercises: updatedExercises });
   };
 
+  const rateSet = (exerciseId, setId, rir) => {
+    setCurrentWorkout((w) => ({
+      ...w,
+      exercises: w.exercises.map((ex) => (ex.id !== exerciseId ? ex : {
+        ...ex,
+        sets: ex.sets.map((set) => (set.id === setId ? { ...set, rir } : set)),
+      })),
+    }));
+    setEffortPrompt(null);
+  };
+
   const updateSetData = (exerciseId, setId, field, value) => {
     const updatedExercises = currentWorkout.exercises.map(ex => {
       if (ex.id === exerciseId) return { ...ex, sets: ex.sets.map(s => s.id === setId ? { ...s, [field]: value } : s) };
@@ -371,13 +433,20 @@ export default function WorkoutDetailScreen({ route, navigation }) {
           if (set.id !== setId) return set;
           // Only when ticking ON — un-ticking a set is a correction, not a
           // finished set, so it should not start a rest period.
-          if (!set.completed) startedResting = true;
-          return { ...set, completed: !set.completed };
+          if (!set.completed) {
+            startedResting = true;
+            return { ...set, completed: true };
+          }
+          const { rir: _cleared, ...rest } = set;
+          return { ...rest, completed: false };
         }),
       };
     });
 
     setCurrentWorkout({ ...currentWorkout, exercises: updatedExercises });
+    // The question follows the most recent set: ticking the next one replaces
+    // it, so an unanswered prompt never piles up down the list.
+    setEffortPrompt(startedResting ? { exerciseId, setId } : null);
 
     // Inside a superset you go straight to the next movement. Starting the
     // timer after the A exercise would be the app telling you to do the
@@ -457,7 +526,12 @@ export default function WorkoutDetailScreen({ route, navigation }) {
           // The one place a typed weight becomes a stored one. Everything past
           // here — the volume, the records, the session snapshot, the queue —
           // is kilograms, whatever the box on screen said.
-          .map((set) => ({ weight: fromInputWeight(set.weight, units) ?? 0, reps: Number(set.reps) })),
+          .map((set) => {
+            // Stored only when rated, so an unrated set reads exactly as sets
+            // logged before ratings existed.
+            const rir = normaliseRir(set.rir);
+            return { weight: fromInputWeight(set.weight, units) ?? 0, reps: Number(set.reps), ...(rir === null ? null : { rir }) };
+          }),
       }))
       .filter((ex) => ex.sets.length > 0);
 
@@ -532,6 +606,8 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     // cannot claim a record it did not earn.
     let newRecords = [];
     let newAchievements = [];
+    let newMilestones = [];
+    let inviteBonus = null;
 
     if (user && !queued) {
       const completedSets = performed.flatMap((ex) =>
@@ -547,6 +623,18 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       // counts towards the thresholds.
       const { data: unlocked } = await supabase.rpc('check_achievements');
       newAchievements = unlocked || [];
+
+      // Only a day that grew the streak can cross a milestone. The server reads
+      // the streak it just wrote, so the payout does not depend on this client.
+      if (isFirstWorkoutToday) {
+        const { data: milestones } = await supabase.rpc('claim_streak_milestones');
+        newMilestones = milestones?.claimed || [];
+      }
+
+      // An invite pays out on this account's first real workout. The server
+      // decides whether this is it, so asking after every session is harmless.
+      const { data: referral } = await supabase.rpc('claim_referral_reward');
+      if (referral?.ok) inviteBonus = { energy: referral.energy, inviterName: referral.inviter_name };
     }
 
     setWorkoutStats({
@@ -557,6 +645,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       // On screen only, and labelled as an estimate. Never written to Health —
       // see the note on saveWorkoutToHealth below.
       kcal: estimateKcal({ duration: `${elapsedMinutes} min`, exercises: performed }, profile?.weight),
+      kcalSource: 'estimate',
       message: randomMsg,
       xpGained: finalXP,
       energyGained: finalEnergy,
@@ -565,6 +654,8 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       freezeUsed,
       records: newRecords,
       achievements: newAchievements,
+      milestones: newMilestones,
+      inviteBonus,
       queued,
     });
 
@@ -584,6 +675,24 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     // Duration only. An energy figure would have to be invented — the app has
     // no heart rate — and a guess written into Apple Health is indistinguishable
     // from a measurement once it is in there.
+    // The estimate shows at once; if Health measured this session (a watch, or
+    // heart-rate samples), the figure is replaced when the read comes back.
+    // Not awaited, like the write below: the summary must not wait on HealthKit.
+    const sessionEnd = Date.now();
+    const sessionStart = sessionEnd - timer * 1000;
+    readWorkoutEnergy({ start: sessionStart, end: sessionEnd }).then(({ activeKcal, heartRates }) => {
+      const burn = pickBurn({
+        activeKcal,
+        avgHeartRate: averageHeartRate(heartRates, { start: sessionStart, end: sessionEnd }),
+        minutes: elapsedMinutes,
+        profile,
+        estimateKcal: null,
+      });
+      if (burn.source !== 'estimate' && burn.kcal) {
+        setWorkoutStats((current) => ({ ...current, kcal: burn.kcal, kcalSource: burn.source }));
+      }
+    }).catch(() => {});
+
     saveWorkoutToHealth({
       minutes: elapsedMinutes,
       startedAt: Date.now() - timer * 1000,
@@ -626,6 +735,46 @@ export default function WorkoutDetailScreen({ route, navigation }) {
         ],
       });
     }, 300);
+  };
+
+  /** The progression hint for one exercise, or null when last session has nothing to say. */
+  const suggestionFor = (exercise) => {
+    const last = lastSets[(exercise.name || '').toLowerCase()];
+    if (!last?.length) return null;
+
+    const work = (exercise.sets || []).filter(countsAsWork);
+    if (!work.length) return null;
+
+    const meta = cueOf(exercise.name);
+    return suggestNext({
+      lastSets: last,
+      // The plan's own rep count is the target: the highest reps written on
+      // a working set, which is what the lifter set out to reach.
+      targetReps: Math.max(...work.map((set) => Number(set.reps) || 0)) || null,
+      unit: units,
+      lowerBody: (meta?.muscle || exercise.muscle) === 'Legs',
+      dumbbell: !!meta?.isDb,
+    });
+  };
+
+  const remainingWork = (exercise) => (exercise.sets || []).filter((set) => !set.completed && countsAsWork(set));
+
+  const isSuggestionApplied = (exercise, suggestion) => remainingWork(exercise).every((set) =>
+    Number(set.reps) === suggestion.reps && (!suggestion.weight || Number(set.weight) === suggestion.weight)
+  );
+
+  const applySuggestion = (exerciseId, suggestion) => {
+    setCurrentWorkout((w) => ({
+      ...w,
+      exercises: w.exercises.map((ex) => (ex.id !== exerciseId ? ex : {
+        ...ex,
+        sets: ex.sets.map((set) => (set.completed || !countsAsWork(set) ? set : {
+          ...set,
+          weight: suggestion.weight ? String(suggestion.weight) : set.weight,
+          reps: String(suggestion.reps),
+        })),
+      })),
+    }));
   };
 
   const handleBackPress = () => {
@@ -782,6 +931,18 @@ export default function WorkoutDetailScreen({ route, navigation }) {
                 </View>
               )}
 
+              {mode !== 'editing' && remainingWork(exercise).length > 0 ? (() => {
+                const suggestion = suggestionFor(exercise);
+                return suggestion ? (
+                  <ProgressHint
+                    suggestion={suggestion}
+                    applied={isSuggestionApplied(exercise, suggestion)}
+                    unitLabel={weightLabel(units)}
+                    onApply={() => applySuggestion(exercise.id, suggestion)}
+                  />
+                ) : null;
+              })() : null}
+
               <View style={styles.tableHeader}>
                 <Text style={[styles.tableHeaderText, { flex: 0.5 }]}>Set</Text>
                 <Text style={[styles.tableHeaderText, { flex: 1 }]}>Prev</Text>
@@ -792,7 +953,8 @@ export default function WorkoutDetailScreen({ route, navigation }) {
               </View>
 
               {exercise.sets.map((set, setIndex) => (
-                <View key={set.id} style={[styles.setRow, set.completed && styles.setRowCompleted]}>
+                <Fragment key={set.id}>
+                <View style={[styles.setRow, set.completed && styles.setRowCompleted]}>
                   {/* Tap the number to mark a warm-up.
                       A ramp-up set of 40kg is not a working set, and counting
                       it drags the session volume down and can hand you a
@@ -833,9 +995,20 @@ export default function WorkoutDetailScreen({ route, navigation }) {
                       activeOpacity={0.7}
                       style={styles.checkboxContainer}
                       onPress={() => toggleSetCompletion(exercise.id, set.id)}
-                      accessibilityLabel={set.completed ? `Set ${setIndex + 1}, done. Tap to undo.` : `Mark set ${setIndex + 1} done`}
+                      // Long-press re-opens the rating on a set already done.
+                      onLongPress={set.completed ? () => setEffortPrompt({ exerciseId: exercise.id, setId: set.id }) : undefined}
+                      accessibilityLabel={set.completed
+                        ? `Set ${setIndex + 1}, done, ${describeRir(set.rir)}. Tap to undo, hold to rate.`
+                        : `Mark set ${setIndex + 1} done`}
                     >
-                      {set.completed ? <CheckCircle2 color={colors.accent} size={26} /> : <Circle color={colors.textFaint} size={26} />}
+                      <View>
+                        {set.completed ? <CheckCircle2 color={colors.accent} size={26} /> : <Circle color={colors.textFaint} size={26} />}
+                        {set.completed && rirLabel(set.rir) ? (
+                          <View style={styles.rirBadge} pointerEvents="none">
+                            <Text style={styles.rirBadgeText}>{rirLabel(set.rir)}</Text>
+                          </View>
+                        ) : null}
+                      </View>
                     </TouchableOpacity>
                   )}
                   {mode === 'editing' && (
@@ -844,6 +1017,14 @@ export default function WorkoutDetailScreen({ route, navigation }) {
                     </TouchableOpacity>
                   )}
                 </View>
+                {mode === 'started' && set.completed && effortPrompt?.setId === set.id ? (
+                  <EffortPicker
+                    value={set.rir}
+                    onPick={(rir) => rateSet(exercise.id, set.id, rir)}
+                    onDismiss={() => setEffortPrompt(null)}
+                  />
+                ) : null}
+                </Fragment>
               ))}
 
               {mode === 'editing' && (
@@ -910,7 +1091,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
           onContinue={closeSummaryAndExit}
         />
 
-        <Modal visible={isExerciseSelectorVisible} animationType="slide" transparent>
+        <Modal visible={isExerciseSelectorVisible} animationType="slide" transparent onRequestClose={() => setIsExerciseSelectorVisible(false)}>
           <View style={styles.modalOverlay}>
             <View style={[styles.glassMenu, { height: '80%', padding: 20 }]}>
               <View style={styles.modalHeader}>
@@ -1035,7 +1216,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   gradientBg: { flex: 1 },
-  detailHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingTop: Platform.OS === 'android' ? 40 : 15, borderBottomWidth: 1, borderBottomColor: colors.border },
+  detailHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingTop: 15, borderBottomWidth: 1, borderBottomColor: colors.border },
   detailTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
   timerHeader: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(155, 157, 214, 0.1)', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24 },
   timerText: { color: colors.accent, fontSize: 17, fontWeight: '700', marginLeft: 10 },
@@ -1062,6 +1243,12 @@ const styles = StyleSheet.create({
   setText: { color: colors.text, textAlign: 'center' },
   setInput: { flex: 1, backgroundColor: colors.surfaceHigh, color: colors.text, borderRadius: 10, padding: 10, marginHorizontal: 6, textAlign: 'center', fontSize: 15, fontWeight: '600' },
   checkboxContainer: { flex: 0.6, alignItems: 'center', justifyContent: 'center' },
+  rirBadge: {
+    position: 'absolute', top: -6, right: -10, minWidth: 18, height: 16, paddingHorizontal: 4,
+    borderRadius: 8, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.surfaceHigh, borderWidth: 1, borderColor: colors.accent,
+  },
+  rirBadgeText: { color: colors.accent, fontSize: 9, fontWeight: '800' },
   addSetBtn: { marginTop: 16, alignItems: 'center', paddingVertical: 6 },
   addSetText: { color: colors.textSecondary, fontSize: 15, fontWeight: '600' },
   addExerciseBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(155, 157, 214, 0.1)', padding: 16, borderRadius: 18, marginBottom: 26, borderWidth: 1, borderColor: colors.accent + 'AA' },
@@ -1086,6 +1273,18 @@ const styles = StyleSheet.create({
   cuePanel: { backgroundColor: colors.surface, borderRadius: 14, padding: 14, marginBottom: 16, gap: 8 },
   cuePanelText: { color: colors.text, fontSize: 14, lineHeight: 20 },
   cuePanelWatch: { color: colors.textMuted, fontSize: 13, lineHeight: 18 },
+  hint: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border,
+    borderRadius: 14, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 14,
+  },
+  hintApplied: { opacity: 0.65 },
+  hintIcon: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  hintTitle: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
+  hintTarget: { color: colors.text, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  hintReason: { color: colors.textMuted, fontSize: 12, marginTop: 1 },
+  hintAction: { color: colors.accent, fontSize: 13, fontWeight: '700' },
+  hintActionDone: { color: colors.textMuted },
   cueBox: { backgroundColor: colors.surface, borderRadius: 14, padding: 14, marginTop: 12, gap: 8 },
   cueText: { color: colors.text, fontSize: 14, lineHeight: 20 },
   cueWatch: { color: colors.textMuted, fontSize: 13, lineHeight: 18 },

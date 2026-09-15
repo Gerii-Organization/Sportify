@@ -1,10 +1,11 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, ScrollView, SafeAreaView, TextInput, Alert,
+  View, Text, StyleSheet, FlatList, ScrollView, TextInput, Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
-import { Plus, Dumbbell, Layout, ChevronDown, Bookmark, Compass, Pencil, Search, X, Check, Trash2, Copy, Globe } from 'lucide-react-native';
+import { Plus, Dumbbell, Layout, ChevronDown, Bookmark, Compass, Pencil, Search, X, Check, Trash2, Copy, Globe, Timer } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors, radius, spacing } from '../theme';
 import { gradients } from '../theme';
@@ -23,6 +24,8 @@ import FadeIn from '../components/FadeIn';
 import WorkoutCard from '../components/WorkoutCard';
 import TodayCard from '../components/TodayCard';
 import SplitSheet from '../components/SplitSheet';
+import ScheduleSheet from '../components/ScheduleSheet';
+import { planFor, applyPlan, normaliseSchedule, isEmptySchedule } from '../lib/schedule';
 import BottomSheet from '../components/BottomSheet';
 import { sortWorkouts, popularId, musclesOf } from '../lib/workoutStats';
 import { weeklyTarget } from '../lib/split';
@@ -45,7 +48,7 @@ const SORTS = {
 };
 
 export default function TrainingScreen({ navigation }) {
-  const { user, profile } = useAuth();
+  const { user, profile, patchProfile } = useAuth();
   const confirmAction = useConfirm();
   const { refreshControl } = useRefresh(() => fetchMyWorkouts());
   const [myWorkouts, setMyWorkouts] = useState([]);
@@ -98,6 +101,13 @@ export default function TrainingScreen({ navigation }) {
   useEffect(() => {
     setSplit(profile?.split || null);
   }, [profile?.split]);
+
+  /** The week plan: a routine id or null per weekday — see lib/schedule.js. */
+  const [schedule, setSchedule] = useState(profile?.training_schedule || null);
+  const [scheduleSheetVisible, setScheduleSheetVisible] = useState(false);
+  useEffect(() => {
+    setSchedule(profile?.training_schedule || null);
+  }, [profile?.training_schedule]);
 
   // Browse brings its own search box; a second one above it would be noise.
   useEffect(() => {
@@ -515,15 +525,19 @@ export default function TrainingScreen({ navigation }) {
   const weekTarget = weeklyTarget(split, profile?.workouts_per_week);
 
   const advice = useMemo(
-    () => trainingAdvice({
-      sessions: weekSessions,
-      target: weekTarget,
-      today: todayKey(),
-      trainedDays,
-      split,
-      weekKeys: currentWeekKeys(),
-    }),
-    [weekSessions, weekTarget, trainedDays, split]
+    () => applyPlan(
+      trainingAdvice({
+        sessions: weekSessions,
+        target: weekTarget,
+        today: todayKey(),
+        trainedDays,
+        split,
+        weekKeys: currentWeekKeys(),
+      }),
+      planFor(schedule, myWorkouts),
+      { trainedToday: trainedDays.includes(todayKey()) }
+    ),
+    [weekSessions, weekTarget, trainedDays, split, schedule, myWorkouts]
   );
 
   const baseRows = view === 'mine' ? myWorkouts : view === 'saved' ? savedWorkouts : publicWorkouts;
@@ -570,8 +584,14 @@ export default function TrainingScreen({ navigation }) {
   };
 
   /** Jumps to Browse already filtered to what the advice suggested. */
-  const actOnAdvice = (muscle) => {
-    setBrowseMuscle(muscle);
+  const actOnAdvice = (item) => {
+    // A planned routine opens ready to start; anything else goes looking for
+    // a workout for the muscle that is due.
+    if (item?.routine) {
+      openWorkoutDetail(item.routine);
+      return;
+    }
+    setBrowseMuscle(item?.muscle);
     setView('browse');
   };
 
@@ -601,14 +621,14 @@ export default function TrainingScreen({ navigation }) {
                 scale={0.9}
                 style={styles.tool}
                 onPress={toggleSearch}
-                hitSlop={4}
+                hitSlop={{ top: 6, bottom: 6, left: 2, right: 2 }}
                 accessibilityLabel={searchOpen ? 'Close search' : 'Search your routines'}
                 accessibilityState={{ expanded: searchOpen }}
               >
                 <Search color={searchOpen ? colors.accent : colors.textSecondary} size={18} />
               </Press>
 
-              <Press
+              <Press hitSlop={{ top: 6, bottom: 6, left: 2, right: 2 }}
                 scale={0.9}
                 style={[styles.tool, view === 'saved' && styles.toolOn]}
                 onPress={() => setView(view === 'saved' ? 'mine' : 'saved')}
@@ -622,7 +642,7 @@ export default function TrainingScreen({ navigation }) {
                 />
               </Press>
 
-              <Press
+              <Press hitSlop={{ top: 6, bottom: 6, left: 2, right: 2 }}
                 scale={0.9}
                 style={[styles.tool, view === 'browse' && styles.toolOn]}
                 onPress={() => setView(view === 'browse' ? 'mine' : 'browse')}
@@ -635,9 +655,20 @@ export default function TrainingScreen({ navigation }) {
                 />
               </Press>
 
+              {/* Circuits: EMOM, AMRAP, Tabata. A tool, not a view, so it sits
+                  with the actions after the divider. */}
               <View style={styles.toolDivider} />
 
-              <Press
+              <Press hitSlop={{ top: 6, bottom: 6, left: 2, right: 2 }}
+                scale={0.9}
+                style={styles.tool}
+                onPress={() => navigation.navigate('IntervalTimerScreen')}
+                accessibilityLabel="Interval timer"
+              >
+                <Timer color={colors.textSecondary} size={18} />
+              </Press>
+
+              <Press hitSlop={{ top: 6, bottom: 6, left: 2, right: 2 }}
                 scale={0.9}
                 style={styles.tool}
                 onPress={() => { setView('mine'); setEditMode(true); }}
@@ -646,7 +677,7 @@ export default function TrainingScreen({ navigation }) {
                 <Pencil color={colors.textSecondary} size={17} />
               </Press>
 
-              <Press
+              <Press hitSlop={{ top: 6, bottom: 6, left: 2, right: 2 }}
                 scale={0.9}
                 style={[styles.tool, styles.toolPrimary]}
                 onPress={() => setMainMenuVisible(true)}
@@ -671,8 +702,11 @@ export default function TrainingScreen({ navigation }) {
             doneDays: trainedDays,
             weekKeys: currentWeekKeys(),
             splitName: split?.length ? `${split.length}-day split` : null,
+            planned: !isEmptySchedule(schedule),
+            plannedDays: currentWeekKeys().filter((_, i) => normaliseSchedule(schedule)[i]),
           }}
           onEditSplit={() => setSplitSheetVisible(true)}
+          onPlanWeek={() => setScheduleSheetVisible(true)}
         />
         )}
 
@@ -897,6 +931,20 @@ export default function TrainingScreen({ navigation }) {
             );
           })}
         </BottomSheet>
+        <ScheduleSheet
+          visible={scheduleSheetVisible}
+          onClose={() => setScheduleSheetVisible(false)}
+          profile={profile}
+          routines={myWorkouts}
+          split={split}
+          sessionsPerWeek={weekTarget || profile?.workouts_per_week}
+          schedule={schedule}
+          onSaved={(value) => {
+            setSchedule(value);
+            patchProfile?.({ training_schedule: value });
+          }}
+        />
+
         <SplitSheet
           visible={splitSheetVisible}
           onClose={() => setSplitSheetVisible(false)}

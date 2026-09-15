@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect } from 'react';
 import {
-  FlatList, StyleSheet, SafeAreaView, Alert,
+  FlatList, StyleSheet, Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Users } from 'lucide-react-native';

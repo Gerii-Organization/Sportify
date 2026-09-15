@@ -180,3 +180,63 @@ export async function saveWorkoutToHealth({ minutes, startedAt }) {
     }
   });
 }
+
+/**
+ * What Apple Health measured during a workout: active energy (usually from an
+ * Apple Watch) and heart-rate samples, for lib/energy.js to choose from.
+ *
+ * Reading only. The workout written by saveWorkoutToHealth still carries no
+ * energy figure: if a watch recorded one, Health already has it, and writing
+ * it again would count the session twice in the Fitness app.
+ *
+ * Resolves `{ activeKcal, heartRates }` with nulls/empties for anything
+ * unavailable — wrong platform, module missing, permission refused.
+ */
+export async function readWorkoutEnergy({ start, end }) {
+  const empty = { activeKcal: null, heartRates: [] };
+  if (Platform.OS !== 'ios') return empty;
+
+  let AppleHealthKit;
+  try {
+    // eslint-disable-next-line global-require
+    const mod = require('react-native-health');
+    AppleHealthKit = mod?.default ?? mod;
+  } catch {
+    return empty;
+  }
+  if (!AppleHealthKit?.initHealthKit || !AppleHealthKit?.Constants) return empty;
+
+  const { Permissions } = AppleHealthKit.Constants;
+  const permissions = {
+    permissions: {
+      read: [Permissions.SleepAnalysis, Permissions.ActiveEnergyBurned, Permissions.HeartRate].filter(Boolean),
+      write: [Permissions.Workout].filter(Boolean),
+    },
+  };
+  const range = { startDate: new Date(start).toISOString(), endDate: new Date(end).toISOString() };
+
+  const query = (method, options) => new Promise((resolve) => {
+    if (typeof AppleHealthKit[method] !== 'function') return resolve([]);
+    try {
+      AppleHealthKit[method](options, (error, results) => resolve(error ? [] : results || []));
+    } catch {
+      resolve([]);
+    }
+  });
+
+  return new Promise((resolve) => {
+    try {
+      AppleHealthKit.initHealthKit(permissions, async (initError) => {
+        if (initError) return resolve(empty);
+        const [energy, heart] = await Promise.all([
+          query('getActiveEnergyBurned', range),
+          query('getHeartRateSamples', { ...range, ascending: true, limit: 2000 }),
+        ]);
+        const kcal = energy.map((s) => Number(s.value)).filter((v) => Number.isFinite(v) && v >= 0);
+        resolve({ activeKcal: kcal.length ? kcal.reduce((a, b) => a + b, 0) : null, heartRates: heart });
+      });
+    } catch {
+      resolve(empty);
+    }
+  });
+}

@@ -1,11 +1,14 @@
-import { useState, useCallback } from 'react';
-import { StyleSheet, View, Text, SafeAreaView, ScrollView, TouchableOpacity, Platform } from 'react-native';
+import { useState, useCallback, useRef } from 'react';
+import { StyleSheet, View, Text, ScrollView, TouchableOpacity } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import { Users, Trophy, ChevronLeft, Flame } from 'lucide-react-native';
+import { Users, Trophy, ChevronLeft, Flame, Shield, Dumbbell } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors } from '../theme';
 import { levelFromXp } from '../lib/level';
+import { deviceTimeZone } from '../lib/date';
+import { seasonName, seasonTimeLeft, rankLine } from '../lib/seasons';
 import { gradients } from '../theme';
 import { useAuth } from '../context/AuthContext';
 import Avatar from '../components/Avatar';
@@ -32,12 +35,21 @@ export default function LeaderboardScreen({ embedded = false }) {
   const [myId, setMyId] = useState(null);
   const [leaderboardData, setLeaderboardData] = useState([]);
   const [error, setError] = useState(null);
+  /** The signed-in user's groups, and the one the Groups board is showing. */
+  const [groups, setGroups] = useState([]);
+  const [groupId, setGroupId] = useState(null);
+  // Read by fetchData, which is created fresh each render but called from a
+  // focus effect that does not re-run when the chip changes.
+  const groupIdRef = useRef(null);
+  /** Global board: this month's season, or all-time XP. */
+  const [globalScope, setGlobalScope] = useState('season');
+  const [season, setSeason] = useState(null);
   const navigation = useNavigation();
 
   useFocusEffect(
     useCallback(() => {
       fetchData();
-    }, [activeTab, user?.id])
+    }, [activeTab, user?.id, globalScope])
   );
 
   const fetchData = async () => {
@@ -55,6 +67,8 @@ export default function LeaderboardScreen({ embedded = false }) {
 
       if (activeTab === 'friends') {
         await fetchFriendsLeaderboard(user.id);
+      } else if (activeTab === 'groups') {
+        await fetchGroupLeaderboard(user.id);
       } else {
         await fetchGlobalLeaderboard();
       }
@@ -92,7 +106,63 @@ export default function LeaderboardScreen({ embedded = false }) {
     setLeaderboardData(pData || []);
   };
 
+  /**
+   * One group's week: sessions and minutes since Monday, most first.
+   *
+   * Weekly rather than lifetime XP, because inside a group of five a lifetime
+   * board is settled by who joined first. The counts come from
+   * get_group_leaderboard — other people's sessions are private under RLS, and
+   * the function only answers for a group you are in.
+   */
+  const fetchGroupLeaderboard = async (userId, preferredId = groupIdRef.current) => {
+    const memberships = await unwrap(supabase.from('group_members').select('group_id').eq('user_id', userId));
+    const ids = (memberships || []).map((m) => m.group_id);
+    const mine = ids.length
+      ? (await unwrap(supabase.from('groups').select('id, name').in('id', ids).order('created_at', { ascending: false }))) || []
+      : [];
+    setGroups(mine);
+
+    const chosen = mine.some((g) => g.id === preferredId) ? preferredId : mine[0]?.id || null;
+    groupIdRef.current = chosen;
+    setGroupId(chosen);
+    if (!chosen) {
+      setLeaderboardData([]);
+      return;
+    }
+
+    const board = await unwrap(supabase.rpc('get_group_leaderboard', { p_group_id: chosen, p_tz: deviceTimeZone() }));
+    setLeaderboardData(board || []);
+  };
+
+  const selectGroup = async (id) => {
+    if (!user || id === groupIdRef.current) return;
+    groupIdRef.current = id;
+    setGroupId(id);
+    setLoading(true);
+    setError(null);
+    try {
+      await fetchGroupLeaderboard(user.id, id);
+    } catch (e) {
+      setError(e?.message || 'Something went wrong.');
+      setLeaderboardData([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const fetchGlobalLeaderboard = async () => {
+    // Seasons need an account to rank; guests see all-time XP.
+    if (user && globalScope === 'season') {
+      // Pays out last month's podium the first time anyone looks. Idempotent.
+      await supabase.rpc('settle_last_season');
+      const [mine, board] = await Promise.all([
+        unwrap(supabase.rpc('get_my_season')),
+        unwrap(supabase.rpc('get_season_leaderboard', { p_scope: 'global' })),
+      ]);
+      setSeason(mine);
+      setLeaderboardData(board || []);
+      return;
+    }
     const data = await unwrap(supabase.from('public_profiles')
       .select('*')
       .order('xp', { ascending: false })
@@ -129,15 +199,37 @@ export default function LeaderboardScreen({ embedded = false }) {
           <Text style={styles.userTitle}>{item.equipped_title || 'Novice'} • Lvl {level}</Text>
         </View>
 
-        <View style={styles.userStats}>
-          <View style={styles.statChip}>
-            <Flame color={colors.streak} size={14} fill={colors.streak} />
-            <Text style={styles.statChipText}>{item.current_streak || 0}</Text>
+        {activeTab === 'global' && globalScope === 'season' && user ? (
+          <View style={styles.userStats}>
+            <View style={styles.statChipWeek}>
+              <Text style={styles.statChipTextWeek}>{item.season_points || 0} pts</Text>
+            </View>
+            <View style={styles.statChip}>
+              <Flame color={colors.streak} size={14} fill={colors.streak} />
+              <Text style={styles.statChipText}>{item.current_streak || 0}</Text>
+            </View>
           </View>
-          <View style={styles.statChipXP}>
-            <Text style={styles.statChipTextXP}>{item.xp || 0} XP</Text>
+        ) : activeTab === 'groups' ? (
+          <View style={styles.userStats}>
+            <View style={styles.statChipWeek}>
+              <Dumbbell color={colors.accent} size={14} />
+              <Text style={styles.statChipTextWeek}>{item.workouts_week || 0}</Text>
+            </View>
+            <View style={styles.statChipXP}>
+              <Text style={styles.statChipTextXP}>{item.minutes_week || 0} min</Text>
+            </View>
           </View>
-        </View>
+        ) : (
+          <View style={styles.userStats}>
+            <View style={styles.statChip}>
+              <Flame color={colors.streak} size={14} fill={colors.streak} />
+              <Text style={styles.statChipText}>{item.current_streak || 0}</Text>
+            </View>
+            <View style={styles.statChipXP}>
+              <Text style={styles.statChipTextXP}>{item.xp || 0} XP</Text>
+            </View>
+          </View>
+        )}
       </TouchableOpacity>
     );
   };
@@ -152,18 +244,87 @@ export default function LeaderboardScreen({ embedded = false }) {
               onPress={() => setActiveTab('friends')}
             >
               <Users color={activeTab === 'friends' ? colors.onAccent : colors.textFaint} size={18} />
-              <Text style={[styles.toggleText, activeTab === 'friends' && styles.toggleTextActive]}>Friends Top</Text>
+              <Text style={[styles.toggleText, activeTab === 'friends' && styles.toggleTextActive]}>Friends</Text>
             </TouchableOpacity>
+
+            {/* Groups are membership, so there is nothing to show a guest. */}
+            {user ? (
+              <TouchableOpacity activeOpacity={0.7}
+                style={[styles.toggleBtn, activeTab === 'groups' && styles.toggleBtnActive]}
+                onPress={() => setActiveTab('groups')}
+              >
+                <Shield color={activeTab === 'groups' ? colors.onAccent : colors.textFaint} size={18} />
+                <Text style={[styles.toggleText, activeTab === 'groups' && styles.toggleTextActive]}>Groups</Text>
+              </TouchableOpacity>
+            ) : null}
             
             <TouchableOpacity activeOpacity={0.7} 
               style={[styles.toggleBtn, activeTab === 'global' && styles.toggleBtnActive]}
               onPress={() => setActiveTab('global')}
             >
               <Trophy color={activeTab === 'global' ? colors.onAccent : colors.textFaint} size={18} />
-              <Text style={[styles.toggleText, activeTab === 'global' && styles.toggleTextActive]}>Global Top</Text>
+              <Text style={[styles.toggleText, activeTab === 'global' && styles.toggleTextActive]}>Global</Text>
             </TouchableOpacity>
           </View>
         </View>
+
+        {activeTab === 'global' && user ? (
+          <View style={styles.seasonWrap}>
+            <View style={styles.scopeRow}>
+              {[['season', 'This season'], ['all', 'All time']].map(([key, label]) => (
+                <TouchableOpacity
+                  key={key}
+                  activeOpacity={0.7}
+                  onPress={() => setGlobalScope(key)}
+                  style={[styles.scopeChip, globalScope === key && styles.scopeChipOn]}
+                  accessibilityState={{ selected: globalScope === key }}
+                >
+                  <Text style={[styles.scopeText, globalScope === key && styles.scopeTextOn]}>{label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {globalScope === 'season' && season?.ok ? (
+              <View style={styles.seasonCard}>
+                <View style={styles.seasonHead}>
+                  <Text style={styles.seasonName}>{seasonName(season.season)} season</Text>
+                  <Text style={styles.seasonLeft}>{seasonTimeLeft(season.ends_at)}</Text>
+                </View>
+                <Text style={styles.seasonMine}>
+                  {rankLine(season.rank)} · {season.points || 0} pts
+                </Text>
+                <Text style={styles.seasonNote}>
+                  10 pts a day you train, +1 per 10 minutes. Top 3 win a title and energy.
+                </Text>
+                {season.podium?.length ? (
+                  <Text style={styles.seasonPodium} numberOfLines={2}>
+                    Last season: {season.podium.map((p) => `${p.rank}. ${p.user_id === myId ? 'You' : p.first_name || 'Athlete'}`).join('  ')}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
+        {activeTab === 'groups' && groups.length > 0 ? (
+          <View style={styles.groupBar}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.groupChips}>
+              {groups.map((group) => (
+                <TouchableOpacity
+                  key={group.id}
+                  activeOpacity={0.7}
+                  onPress={() => selectGroup(group.id)}
+                  style={[styles.groupChip, group.id === groupId && styles.groupChipActive]}
+                  accessibilityState={{ selected: group.id === groupId }}
+                >
+                  <Text style={[styles.groupChipText, group.id === groupId && styles.groupChipTextActive]} numberOfLines={1}>
+                    {group.name || 'Group'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <Text style={styles.groupNote}>Workouts this week · resets Monday</Text>
+          </View>
+        ) : null}
 
         {error ? (
           <ErrorState message={error} onRetry={fetchData} />
@@ -175,10 +336,12 @@ export default function LeaderboardScreen({ embedded = false }) {
             {leaderboardData.length === 0 ? (
               <EmptyState
                 icon={<Users color={colors.textFaint} size={44} />}
-                title={activeTab === 'friends' ? 'No one to rank yet' : 'Nobody on the board'}
+                title={activeTab === 'friends' ? 'No one to rank yet' : activeTab === 'groups' ? 'No groups yet' : 'Nobody on the board'}
                 message={activeTab === 'friends'
                   ? 'Add friends to see how you compare.'
-                  : 'The global board fills up as people train.'}
+                  : activeTab === 'groups'
+                    ? 'Start a group chat with a few friends and see who trains most each week.'
+                    : 'The global board fills up as people train.'}
               />
             ) : (
               leaderboardData.map((user, index) => renderUserItem(user, index))
@@ -214,7 +377,7 @@ export default function LeaderboardScreen({ embedded = false }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   gradientBg: { flex: 1 },
-  navHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: Platform.OS === 'android' ? 40 : 20, paddingBottom: 16 },
+  navHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 20, paddingBottom: 16 },
   backBtn: { padding: 6 },
   headerTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
   
@@ -247,5 +410,28 @@ const styles = StyleSheet.create({
   statChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(224, 161, 122, 0.12)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, marginBottom: 6 },
   statChipText: { color: colors.streak, fontWeight: '600', fontSize: 13, marginLeft: 6 },
   statChipXP: { backgroundColor: colors.surfaceHigh, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 },
+  statChipWeek: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(155, 157, 214, 0.12)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, marginBottom: 6 },
+  statChipTextWeek: { color: colors.accent, fontWeight: '600', fontSize: 13, marginLeft: 6 },
+
+  groupBar: { marginBottom: 12 },
+  seasonWrap: { paddingHorizontal: 20, marginBottom: 12, gap: 10 },
+  scopeRow: { flexDirection: 'row', gap: 8 },
+  scopeChip: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 999, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  scopeChipOn: { backgroundColor: colors.surfaceHigh, borderColor: colors.accent },
+  scopeText: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
+  scopeTextOn: { color: colors.text },
+  seasonCard: { backgroundColor: colors.card, borderRadius: 20, padding: 14, borderWidth: 1, borderColor: colors.goldBorder },
+  seasonHead: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
+  seasonName: { color: colors.text, fontSize: 15, fontWeight: '700' },
+  seasonLeft: { color: colors.gold, fontSize: 12, fontWeight: '700' },
+  seasonMine: { color: colors.textSecondary, fontSize: 13, fontWeight: '600', marginTop: 4 },
+  seasonNote: { color: colors.textMuted, fontSize: 12, lineHeight: 17, marginTop: 6 },
+  seasonPodium: { color: colors.textMuted, fontSize: 12, marginTop: 6 },
+  groupChips: { paddingHorizontal: 20, gap: 8 },
+  groupChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, maxWidth: 180 },
+  groupChipActive: { backgroundColor: colors.surfaceHigh, borderColor: colors.accent },
+  groupChipText: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
+  groupChipTextActive: { color: colors.text },
+  groupNote: { color: colors.textMuted, fontSize: 12, marginTop: 8, paddingHorizontal: 20 },
   statChipTextXP: { color: colors.text, fontWeight: '600', fontSize: 13 },
 });

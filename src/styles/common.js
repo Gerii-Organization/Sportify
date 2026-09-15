@@ -1,4 +1,4 @@
-import { StyleSheet, Platform } from 'react-native';
+import { StyleSheet } from 'react-native';
 import { colors, radius, spacing, TAB_BAR_CLEARANCE } from '../theme';
 
 /**
@@ -69,5 +69,5 @@ export default StyleSheet.create({
   primaryButtonText: { color: colors.onAccent, fontWeight: '600', fontSize: 15 },
 
   /** Header padding differs per platform because Android has no safe area inset here. */
-  headerTop: { paddingTop: Platform.OS === 'android' ? 40 : 20 },
+  headerTop: { paddingTop: 20 },
 });

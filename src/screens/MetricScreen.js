@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
-import { View, Text, ScrollView, SafeAreaView, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, StyleSheet } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChevronLeft, Flame, Clock, Droplets, Moon, Plus } from 'lucide-react-native';
 import { colors, gradients, spacing } from '../theme';
@@ -16,6 +17,7 @@ import ProgressArc from '../components/ProgressArc';
 import WaterSheet from '../components/WaterSheet';
 import WaterGlass from '../components/WaterGlass';
 import { SkeletonMetric } from '../components/Skeleton';
+import { calorieTarget as calorieTargetFor } from '../lib/nutrition';
 
 /**
  * Detail for one daily metric.
@@ -33,7 +35,7 @@ export default function MetricScreen({ route, navigation }) {
   const config = METRICS[metric];
   const { user, profile } = useAuth();
 
-  const calorieTarget = calorieGoal(profile);
+  const calorieTarget = calorieTargetFor(profile);
   const [waterSheetVisible, setWaterSheetVisible] = useState(false);
 
   const load = useCallback(async () => {
@@ -222,25 +224,6 @@ export default function MetricScreen({ route, navigation }) {
       </LinearGradient>
     </SafeAreaView>
   );
-}
-
-/** Same Mifflin-St Jeor calculation the dashboard uses for its calorie target. */
-function calorieGoal(profile) {
-  const weight = parseFloat(profile?.weight) || 70;
-  const height = parseFloat(profile?.height) || 170;
-  const age = parseInt(profile?.age, 10) || 25;
-  const workouts = parseInt(profile?.workouts_per_week, 10) || 3;
-
-  let bmr = 10 * weight + 6.25 * height - 5 * age;
-  bmr += profile?.sex === 'F' ? -161 : 5;
-
-  const multiplier = workouts >= 6 ? 1.725 : workouts >= 3 ? 1.55 : workouts >= 1 ? 1.375 : 1.2;
-  let tdee = bmr * multiplier;
-
-  if (profile?.goal === 'lose_weight') tdee -= 500;
-  else if (profile?.goal === 'build_muscle' || profile?.goal === 'gain_strength') tdee += 300;
-
-  return Math.max(1200, Math.round(tdee));
 }
 
 const formatGoal = (goal, unit) => `${goal}${unit ? ` ${unit}` : ''}`;

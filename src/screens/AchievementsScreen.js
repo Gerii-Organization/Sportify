@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
-import { View, Text, ScrollView, SafeAreaView, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, StyleSheet } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChevronLeft, Lock } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
@@ -9,6 +10,7 @@ import { useAuth } from '../context/AuthContext';
 import useLoad from '../lib/useLoad';
 import { unwrap } from '../lib/query';
 import { AchievementIcon } from '../lib/achievements';
+import { groupByFamily, tierTotals, TIERS, TIER_LABELS, TIER_COLORS } from '../lib/achievementTiers';
 import Press from '../components/Press';
 import FadeIn from '../components/FadeIn';
 import AmbientGlow from '../components/AmbientGlow';
@@ -16,7 +18,8 @@ import ErrorState from '../components/ErrorState';
 import { SkeletonAchievements } from '../components/Skeleton';
 
 /**
- * All twelve achievements, with how close the locked ones are.
+ * Every achievement, as ladders of Bronze, Silver and Gold, with how close the
+ * next step is (tiers: roadmap G4, lib/achievementTiers.js).
  *
  * They previously appeared only as a horizontal strip inside the profile modal,
  * showing locked or unlocked and nothing else. A grey circle is not a goal; the
@@ -41,8 +44,8 @@ export default function AchievementsScreen({ navigation, embedded = false }) {
 
   const { data, loading, error, reload, refreshControl } = useLoad(load, []);
   const achievements = data || [];
-
-  const unlocked = achievements.filter((a) => a.unlocked_at).length;
+  const families = groupByFamily(achievements);
+  const { unlocked, total } = tierTotals(achievements);
 
   const content = (
     <>
@@ -57,53 +60,68 @@ export default function AchievementsScreen({ navigation, embedded = false }) {
           refreshControl={refreshControl}
         >
           <FadeIn style={styles.summary}>
-            <Text style={styles.summaryValue}>{unlocked} of {achievements.length}</Text>
-            <Text style={styles.summaryLabel}>unlocked</Text>
+            <Text style={styles.summaryValue}>{unlocked} of {total}</Text>
+            <Text style={styles.summaryLabel}>tiers unlocked</Text>
             <View style={styles.summaryTrack}>
-              <View
-                style={[
-                  styles.summaryFill,
-                  { width: `${achievements.length ? (unlocked / achievements.length) * 100 : 0}%` },
-                ]}
-              />
+              <View style={[styles.summaryFill, { width: `${total ? (unlocked / total) * 100 : 0}%` }]} />
             </View>
           </FadeIn>
 
-          {achievements.map((a, i) => {
-            const done = !!a.unlocked_at;
-            const current = Number(a.current) || 0;
-            const target = Number(a.threshold) || 1;
-            const pct = Math.min(current / target, 1);
+          {families.map((f, i) => {
+            const { top, earned, next } = f;
+            const tint = earned?.tier ? TIER_COLORS[earned.tier] : colors.energy;
+            const tiered = f.tiers.some((t) => t.tier);
 
             return (
-              <FadeIn key={a.code} index={Math.min(i + 1, 6)}>
-                <View style={[styles.row, done && styles.rowDone]}>
-                  <View style={[styles.glyph, done && styles.glyphDone]}>
-                    {done ? (
-                      <AchievementIcon name={a.icon} size={22} color={colors.energy} />
+              <FadeIn key={f.family} index={Math.min(i + 1, 6)}>
+                <View style={[styles.row, earned && styles.rowDone]}>
+                  <View style={[styles.glyph, earned && { backgroundColor: `${tint}24` }]}>
+                    {earned ? (
+                      <AchievementIcon name={top.icon} size={22} color={tint} />
                     ) : (
                       <Lock color={colors.textFaint} size={18} />
                     )}
                   </View>
 
                   <View style={{ flex: 1 }}>
-                    <Text style={[styles.name, done && styles.nameDone]}>{a.name}</Text>
-                    <Text style={styles.description}>{a.description}</Text>
+                    <View style={styles.titleLine}>
+                      <Text style={[styles.name, earned && styles.nameDone]} numberOfLines={1}>{top.name}</Text>
+                      {tiered ? (
+                        <View style={styles.pips} accessibilityLabel={`${f.tiers.filter((t) => t.unlocked_at).length} of ${f.tiers.length} tiers`}>
+                          {TIERS.filter((tier) => f.tiers.some((t) => t.tier === tier)).map((tier) => {
+                            const got = f.tiers.some((t) => t.tier === tier && t.unlocked_at);
+                            return (
+                              <View
+                                key={tier}
+                                style={[styles.pip, got ? { backgroundColor: TIER_COLORS[tier] } : { borderColor: TIER_COLORS[tier] }]}
+                              />
+                            );
+                          })}
+                        </View>
+                      ) : null}
+                    </View>
+                    <Text style={styles.description}>{(earned || top).description}</Text>
 
-                    {done ? (
-                      <Text style={styles.earned}>
-                        Earned {formatRelativeDate(a.unlocked_at).toLowerCase()}
+                    {earned ? (
+                      <Text style={[styles.earned, { color: tint }]}>
+                        {earned.tier ? `${TIER_LABELS[earned.tier]} · ` : ''}earned {formatRelativeDate(earned.unlocked_at).toLowerCase()}
                       </Text>
-                    ) : (
+                    ) : null}
+
+                    {next ? (
                       <>
                         <View style={styles.track}>
-                          <View style={[styles.fill, { width: `${pct * 100}%` }]} />
+                          <View style={[styles.fill, { width: `${f.progress * 100}%` }]} />
                         </View>
                         <Text style={styles.progress}>
-                          {formatMetric(current, a.metric)} of {formatMetric(target, a.metric)}
+                          {formatMetric(f.current, next.metric)} of {formatMetric(Number(next.threshold) || 0, next.metric)}
+                          {next.tier ? ` for ${TIER_LABELS[next.tier]}` : ''}
+                          {earned ? ` · ${next.name}` : ''}
                         </Text>
                       </>
-                    )}
+                    ) : tiered ? (
+                      <Text style={styles.progress}>Every tier earned</Text>
+                    ) : null}
                   </View>
                 </View>
               </FadeIn>
@@ -167,10 +185,13 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center',
   },
   glyphDone: { backgroundColor: 'rgba(222, 184, 102, 0.14)' },
-  name: { color: colors.textSecondary, fontSize: 15, fontWeight: '700' },
+  titleLine: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  pips: { flexDirection: 'row', gap: 4, marginLeft: 'auto' },
+  pip: { width: 9, height: 9, borderRadius: 5, borderWidth: 1.5, borderColor: 'transparent' },
+  name: { flexShrink: 1, color: colors.textSecondary, fontSize: 15, fontWeight: '700' },
   nameDone: { color: colors.text },
   description: { color: colors.textMuted, fontSize: 12, marginTop: 2, marginBottom: 8, lineHeight: 17 },
-  earned: { color: colors.energy, fontSize: 12, fontWeight: '600' },
+  earned: { color: colors.energy, fontSize: 12, fontWeight: '600', marginBottom: 6 },
   track: { height: 6, borderRadius: 3, backgroundColor: colors.surfaceHigh, overflow: 'hidden' },
   fill: { height: '100%', borderRadius: 3, backgroundColor: colors.accent },
   progress: { color: colors.textFaint, fontSize: 11, fontWeight: '600', marginTop: 5, fontVariant: ['tabular-nums'] },

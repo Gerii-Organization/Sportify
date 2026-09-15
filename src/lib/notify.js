@@ -23,6 +23,8 @@
  * two copies meant a fix to one silently left the other broken.
  */
 
+import { Platform } from 'react-native';
+
 let notifications = null;
 let loadAttempted = false;
 let configured = false;
@@ -84,6 +86,8 @@ function configure(Notifications) {
     Notifications.setNotificationHandler({
       handleNotification: async () => ({
         shouldShowAlert: true,
+        shouldShowBanner: true,
+        shouldShowList: true,
         shouldPlaySound: true,
         shouldSetBadge: false,
       }),
@@ -92,6 +96,32 @@ function configure(Notifications) {
   } catch {
     // A handler that fails to register only affects presentation while the app
     // is foregrounded; the notification itself still schedules.
+  }
+}
+
+/**
+ * Android only. Since Android 8 every notification belongs to a channel, and it
+ * is the channel — not the notification — that decides whether it sounds and
+ * drops down over the current app. Without one, expo-notifications files
+ * everything under a generic fallback channel the user sees as
+ * "Miscellaneous", at default importance: a rest timer that ends silently in
+ * the shade. iOS has no channels, so this returns straight away there.
+ */
+const ANDROID_CHANNEL = 'reminders';
+let channelReady = false;
+
+async function ensureChannel(Notifications) {
+  if (Platform.OS !== 'android' || channelReady) return;
+  try {
+    await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL, {
+      name: 'Reminders and rest timer',
+      importance: Notifications.AndroidImportance.HIGH,
+      sound: 'default',
+      vibrationPattern: [0, 250, 250, 250],
+    });
+    channelReady = true;
+  } catch {
+    // Scheduling still works on the fallback channel, only less prominently.
   }
 }
 
@@ -133,13 +163,15 @@ export async function schedule({ title, body, at, seconds }) {
 
     // The string literals are the values of Notifications.SchedulableTriggerInputTypes;
     // used directly so the trigger can be built without the enum in scope.
+    const channel = Platform.OS === 'android' ? { channelId: ANDROID_CHANNEL } : null;
     let trigger;
-    if (at instanceof Date) trigger = { type: 'date', date: at };
-    else if (typeof seconds === 'number') trigger = { type: 'timeInterval', seconds, repeats: false };
+    if (at instanceof Date) trigger = { type: 'date', date: at, ...channel };
+    else if (typeof seconds === 'number') trigger = { type: 'timeInterval', seconds, repeats: false, ...channel };
     else return null;
 
     configure(Notifications);
     if (!(await ensurePermission(Notifications))) return null;
+    await ensureChannel(Notifications);
 
     return await Notifications.scheduleNotificationAsync({
       content: { title, body, sound: true },

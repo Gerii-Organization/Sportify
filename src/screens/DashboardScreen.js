@@ -1,10 +1,10 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import {
-  StyleSheet, View, Text, ScrollView, SafeAreaView,
-  Dimensions, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Alert, Animated
+  StyleSheet, View, Text, ScrollView, Dimensions, TouchableOpacity, Platform, Alert, Animated
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
-import { Flame, Trophy, Menu, User, X, Droplets, Clock, Moon, Crown, Plus, Edit2, Check, Star, CloudOff, Trash2, TriangleAlert } from 'lucide-react-native';
+import { Flame, Trophy, Menu, User, Crown, Plus, Edit2, Check, Star, CloudOff, Trash2, TriangleAlert } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Circle, G, Polygon, Defs, Filter, FeGaussianBlur } from 'react-native-svg';
 import Reanimated, { useSharedValue, useAnimatedProps, withTiming, withDelay, Easing } from 'react-native-reanimated';
@@ -12,7 +12,6 @@ import Reanimated, { useSharedValue, useAnimatedProps, withTiming, withDelay, Ea
 const AnimatedCircle = Reanimated.createAnimatedComponent(Circle);
 const AnimatedPolygon = Reanimated.createAnimatedComponent(Polygon);
 import { supabase } from '../lib/supabase';
-import { Pedometer } from 'expo-sensors';
 import { colors, levelTiers, radius, spacing } from '../theme';
 import { getAvatar, getRing } from '../constants/cosmetics';
 import { levelInfo } from '../lib/level';
@@ -20,22 +19,26 @@ import { todayKey, formatDuration } from '../lib/date';
 import { gradients } from '../theme';
 import Avatar from '../components/Avatar';
 import { useAuth } from '../context/AuthContext';
-import MacroRings, { macroTargets } from '../components/MacroRings';
+import MacroRings from '../components/MacroRings';
+import { calorieTarget, macroTargets } from '../lib/nutrition';
 import { WATER_GOAL_ML } from '../constants/content';
 import WeightSheet from '../components/WeightSheet';
-import { getSetting, setSetting } from '../lib/settings';
-import { REST_CHOICES } from '../lib/rest';
 import { syncReminders } from '../lib/reminders';
 import { readSleepMinutes } from '../lib/health';
 import { deleteAccount } from '../lib/deleteAccount';
+import { exportMyData } from '../lib/exportData';
 import WaterSheet from '../components/WaterSheet';
 import AmbientGlow from '../components/AmbientGlow';
 import useRefresh from '../lib/useRefresh';
 import { unwrap } from '../lib/query';
 import SettingsDrawer from '../components/dashboard/SettingsDrawer';
+import SummaryArc from '../components/dashboard/SummaryArc';
+import TaskGoalSheet from '../components/dashboard/TaskGoalSheet';
+import useDeviceSettings from '../lib/useDeviceSettings';
+import useStepCounter from '../lib/useStepCounter';
 import Press from '../components/Press';
-import ProgressArc from '../components/ProgressArc';
 import DailyQuests from '../components/DailyQuests';
+import WeeklyQuests from '../components/WeeklyQuests';
 import { useConfirm } from '../components/ConfirmDialog';
 
 const { width } = Dimensions.get('window');
@@ -63,52 +66,13 @@ export default function DashboardScreen({ navigation, route }) {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isMenuVisible, setMenuVisible] = useState(false);
   const [isWeightSheetVisible, setWeightSheetVisible] = useState(false);
-  /** Device preferences. The rest timer and the daily reminders read these. */
-  const [restAlerts, setRestAlerts] = useState(true);
-  /** null = follow the training goal. */
-  const [restSeconds, setRestSeconds] = useState(null);
-  const [streakReminders, setStreakReminders] = useState(true);
-  const [waterReminders, setWaterReminders] = useState(false);
+  // Rest and reminder preferences live on the device; see lib/useDeviceSettings.
+  // The callback runs at tap time, by when refreshReminders below exists.
+  const {
+    restAlerts, restSeconds, streakReminders, waterReminders,
+    toggleRestAlerts, cycleRestLength, toggleStreakReminders, toggleWaterReminders,
+  } = useDeviceSettings({ onRemindersChanged: () => refreshReminders() });
 
-  useEffect(() => {
-    getSetting('restAlerts').then(setRestAlerts);
-    getSetting('restSeconds').then(setRestSeconds);
-    getSetting('streakReminders').then(setStreakReminders);
-    getSetting('waterReminders').then(setWaterReminders);
-  }, []);
-
-  const toggleRestAlerts = async () => {
-    const next = !restAlerts;
-    setRestAlerts(next);
-    await setSetting('restAlerts', next);
-  };
-
-  /** Steps through the offered lengths and wraps back to Automatic. */
-  const cycleRestLength = async () => {
-    const index = REST_CHOICES.findIndex((c) => c === restSeconds);
-    const next = REST_CHOICES[(index + 1) % REST_CHOICES.length];
-    setRestSeconds(next);
-    await setSetting('restSeconds', next);
-  };
-
-  /**
-   * Both reminder toggles resync immediately rather than waiting for the next
-   * launch. Switching one off has to cancel what is already pending, or the
-   * notification you just declined still arrives this evening.
-   */
-  const toggleStreakReminders = async () => {
-    const next = !streakReminders;
-    setStreakReminders(next);
-    await setSetting('streakReminders', next);
-    refreshReminders();
-  };
-
-  const toggleWaterReminders = async () => {
-    const next = !waterReminders;
-    setWaterReminders(next);
-    await setSetting('waterReminders', next);
-    refreshReminders();
-  };
   const [isWaterModalVisible, setWaterModalVisible] = useState(false);
   const [isAddTaskModalVisible, setAddTaskModalVisible] = useState(false);
 
@@ -222,12 +186,9 @@ export default function DashboardScreen({ navigation, route }) {
 
   const [tasks, setTasks] = useState([]);
   const [isEditMode, setIsEditMode] = useState(false);
-  const [isCustomExpanded, setIsCustomExpanded] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskGoal, setNewTaskGoal] = useState('');
   const [taskType, setTaskType] = useState('manual');
-  const [isPedometerAvailable, setIsPedometerAvailable] = useState(null);
-  const [deviceSteps, setDeviceSteps] = useState(0);
 
   const [xpToast, setXpToast] = useState(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -259,7 +220,6 @@ export default function DashboardScreen({ navigation, route }) {
   };
 
 
-
   const saveSleepToSupabase = async (totalSleepMinutes) => {
     if (!user) return;
 
@@ -281,57 +241,8 @@ export default function DashboardScreen({ navigation, route }) {
     }
   }, [route.params?.newActivityMinutes, navigation]);
 
-  /**
-   * One upsert instead of select-then-update-or-insert.
-   *
-   * The old shape read the row, decided, then wrote — and the pedometer fires
-   * often, so two of those could interleave: both find no row, both insert, and
-   * the second hits `daily_steps_user_id_record_date_key`. That error landed in
-   * an empty catch, so the step count silently stopped saving for the rest of
-   * the day. The unique constraint is what makes the single statement possible.
-   */
-  const saveStepsToSupabase = async (steps) => {
-    if (!user) return;
-
-    const { error } = await supabase.from('daily_steps').upsert(
-      { user_id: user.id, record_date: todayKey(), step_count: steps },
-      { onConflict: 'user_id,record_date' }
-    );
-
-    if (error) console.warn(`[Sportify] Could not save steps: ${error.message}`);
-  };
-
-  useEffect(() => {
-    let subscription;
-    const subscribePedometer = async () => {
-      try {
-        const available = await Pedometer.isAvailableAsync();
-        setIsPedometerAvailable(available);
-        if (!available) return;
-
-        const end = new Date();
-        const start = new Date();
-        start.setHours(0, 0, 0, 0);
-
-        const result = await Pedometer.getStepCountAsync(start, end);
-        const initialSteps = result?.steps || 0;
-        setDeviceSteps(initialSteps);
-        setDailyStats(prev => ({ ...prev, steps: initialSteps }));
-        saveStepsToSupabase(initialSteps);
-
-        subscription = Pedometer.watchStepCount(stepResult => {
-          setDeviceSteps(prev => {
-            const updated = Math.max(prev, stepResult.steps);
-            setDailyStats(p => ({ ...p, steps: updated }));
-            saveStepsToSupabase(updated);
-            return updated;
-          });
-        });
-      } catch (e) { setIsPedometerAvailable(false); }
-    };
-    subscribePedometer();
-    return () => { if (subscription) subscription.remove(); };
-  }, []);
+  // Live steps from the motion sensor, saved as they change — lib/useStepCounter.
+  useStepCounter(user, (steps) => setDailyStats((prev) => ({ ...prev, steps })));
 
   /**
    * Last night's sleep from Apple Health.
@@ -371,30 +282,9 @@ export default function DashboardScreen({ navigation, route }) {
     fetchProfileAndStats();
   }, [user?.id]));
 
-  const getRecommendedCalories = () => {
-    if (!userProfile) return 2000;
-    const weight = parseFloat(userProfile.weight) || 70;
-    const height = parseFloat(userProfile.height) || 170;
-    const age = parseInt(userProfile.age) || 25;
-    const sex = userProfile.sex === 'F' ? 'F' : 'M';
-    const goal = userProfile.goal || 'maintain';
-    const workouts = parseInt(userProfile.workouts_per_week) || 3;
-
-    let bmr = (10 * weight) + (6.25 * height) - (5 * age);
-    bmr = sex === 'M' ? bmr + 5 : bmr - 161;
-
-    let multiplier = 1.2;
-    if (workouts >= 6) multiplier = 1.725;
-    else if (workouts >= 3) multiplier = 1.55;
-    else if (workouts >= 1) multiplier = 1.375;
-
-    let tdee = bmr * multiplier;
-
-    if (goal === 'lose_weight') tdee -= 500;
-    else if (goal === 'build_muscle' || goal === 'gain_strength') tdee += 300;
-
-    return Math.max(1200, Math.round(tdee));
-  };
+  // Shared with MetricScreen through lib/nutrition, so the ring and the
+  // history cannot disagree about the same day's target.
+  const getRecommendedCalories = () => calorieTarget(userProfile);
 
   const fetchProfileAndStats = async () => {
     if (user) {
@@ -541,7 +431,7 @@ export default function DashboardScreen({ navigation, route }) {
   };
 
   const resetAndCloseModal = () => {
-    setAddTaskModalVisible(false); setIsCustomExpanded(false); setNewTaskTitle(''); setNewTaskGoal(''); setTaskType('manual');
+    setAddTaskModalVisible(false); setNewTaskTitle(''); setNewTaskGoal(''); setTaskType('manual');
   };
 
   const deleteTask = async (id) => {
@@ -641,7 +531,6 @@ const renderProgressShape = () => {
     // Guard against divide-by-zero when the user has no step goal set.
     const safeStepsGoal = stepsGoal > 0 ? stepsGoal : 10000;
     const progress = Math.min(dailyStats.steps / safeStepsGoal, 1);
-
 
 
     // Each ring is drawn three times: a blurred copy for the glow, a dark
@@ -940,6 +829,9 @@ const renderProgressShape = () => {
             onDelete={deleteTask}
           />
 
+          {/* The energy and XP a claim pays show up in the header straight away. */}
+          <WeeklyQuests onClaimed={() => fetchProfileAndStats()} />
+
           <Text style={styles.eyebrow}>Daily Summary</Text>
           {/* Calories leads. It is the figure with a real target, the one
               people check most, and treating all four as equal rows made the
@@ -961,7 +853,7 @@ const renderProgressShape = () => {
               one recognisable before you read anything — and it lets the number
               sit on its own without a gauge competing beside it. */}
           <View style={styles.arcRow}>
-            <Arc
+            <SummaryArc
               index={0}
               color={colors.calories}
               icon="flame"
@@ -971,7 +863,7 @@ const renderProgressShape = () => {
               progress={dailyStats.calories / getRecommendedCalories()}
               onPress={() => navigation.navigate('MetricScreen', { metric: 'calories' })}
             />
-            <Arc
+            <SummaryArc
               index={1}
               color={colors.activity}
               icon="clock"
@@ -981,7 +873,7 @@ const renderProgressShape = () => {
               progress={dailyStats.activity / 60}
               onPress={() => navigation.navigate('MetricScreen', { metric: 'activity' })}
             />
-            <Arc
+            <SummaryArc
               index={2}
               color={colors.water}
               icon="drop"
@@ -991,7 +883,7 @@ const renderProgressShape = () => {
               progress={dailyStats.water / WATER_GOAL_ML}
               onPress={() => navigation.navigate('MetricScreen', { metric: 'water' })}
             />
-            <Arc
+            <SummaryArc
               index={3}
               color={colors.sleep}
               icon="moon"
@@ -1012,37 +904,16 @@ const renderProgressShape = () => {
         </ScrollView>
       </LinearGradient>
 
-      <Modal visible={isAddTaskModalVisible} transparent animationType="slide">
-        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{flex: 1}}>
-          <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={resetAndCloseModal}>
-            <TouchableOpacity activeOpacity={1} style={styles.modalContentTasks}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>{taskType === 'gym' ? 'Set Gym Goal' : taskType === 'water' ? 'Set Water Goal' : 'New Custom Task'}</Text>
-                <TouchableOpacity activeOpacity={0.7} onPress={resetAndCloseModal} style={styles.closeBtnContainer} accessibilityLabel="Close">
-                  <X color={colors.textMuted} size={24} />
-                </TouchableOpacity>
-              </View>
-              <ScrollView bounces={false} showsVerticalScrollIndicator={false}>
-
-                {taskType === 'manual' && (
-                  <View style={styles.expandedContent}>
-                    <TextInput style={styles.modalInput} placeholder="E.g. Morning Yoga" placeholderTextColor={colors.textFaint} value={newTaskTitle} onChangeText={setNewTaskTitle} />
-                    <TouchableOpacity activeOpacity={0.7} style={styles.saveBtn} onPress={() => handleAddTask('manual')}><Text style={styles.saveBtnText}>Add Task</Text></TouchableOpacity>
-                  </View>
-                )}
-
-                {(taskType === 'gym' || taskType === 'water') && (
-                  <View style={{ width: '100%', marginTop: 10 }}>
-                    <TextInput style={styles.modalInput} placeholder={taskType === 'gym' ? "Goal: 45 min" : "Goal: 2.5 liters"} placeholderTextColor={colors.textFaint} keyboardType="numeric" value={newTaskGoal} onChangeText={(t) => setNewTaskGoal(t.replace(/[^0-9.]/g, ''))} />
-                    <TouchableOpacity activeOpacity={0.7} style={[styles.saveBtn, { backgroundColor: colors.accent }]} onPress={() => handleAddTask(taskType)}><Text style={styles.saveBtnText}>Save Goal</Text></TouchableOpacity>
-                  </View>
-                )}
-                <View style={{ height: 40 }} />
-              </ScrollView>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </KeyboardAvoidingView>
-      </Modal>
+      <TaskGoalSheet
+        visible={isAddTaskModalVisible}
+        type={taskType}
+        title={newTaskTitle}
+        goal={newTaskGoal}
+        onChangeTitle={setNewTaskTitle}
+        onChangeGoal={setNewTaskGoal}
+        onSave={handleAddTask}
+        onClose={resetAndCloseModal}
+      />
 
       <SettingsDrawer
         visible={isMenuVisible}
@@ -1068,6 +939,10 @@ const renderProgressShape = () => {
         onOpenWater={() => setWaterModalVisible(true)}
         onOpenProgress={() => navigation.navigate('ProgressScreen')}
         onDeleteAccount={confirmDeleteAccount}
+        onExportData={async () => {
+          const result = await exportMyData();
+          if (!result.ok) Alert.alert('Could not export your data', 'Check your connection and try again.');
+        }}
         onSignOut={async () => { await supabase.auth.signOut(); setMenuVisible(false); fetchProfileAndStats(); }}
         onSignIn={() => navigation.navigate('AuthScreen')}
       />
@@ -1091,77 +966,6 @@ const renderProgressShape = () => {
 
 
     </SafeAreaView>
-  );
-}
-
-
-const ARC_ICONS = { flame: Flame, clock: Clock, drop: Droplets, moon: Moon };
-
-/**
- * One gauge in the daily summary row.
- *
- * The ring fills on load, staggered across the four so the row reads left to
- * right rather than snapping into place all at once.
- *
- * `scaleMax` covers the case where a figure has a range but no target — sleep
- * runs on a 0–12 hour dial, so the ring still travels, but the centre shows the
- * icon rather than a percentage. Calling 62% of twelve hours a score would be
- * telling someone their sleep was 62% correct.
- */
-function Arc({ color, icon, value, unit, label, progress, scaleMax, raw, index = 0, onPress }) {
-  const Icon = ARC_ICONS[icon] || Flame;
-
-  const hasGoal = typeof progress === 'number';
-  const fill = hasGoal
-    ? Math.min(Math.max(progress, 0), 1)
-    : typeof scaleMax === 'number' && typeof raw === 'number'
-    ? Math.min(Math.max(raw / scaleMax, 0), 1)
-    : 0;
-
-  const shown = hasGoal ? Math.round(progress * 100) : null;
-
-  return (
-    <Press
-      scale={0.94}
-      onPress={onPress}
-      style={styles.arcCol}
-      accessibilityLabel={
-        shown !== null
-          ? `${label}: ${value} ${unit}, ${shown} percent of goal. Open details.`
-          : `${label}: ${value}. Open details.`
-      }
-    >
-      <View style={styles.arcGauge}>
-        <ProgressArc
-          progress={fill}
-          color={color}
-          size={52}
-          strokeWidth={4}
-          delay={140 + index * 90}
-        />
-        <View style={styles.arcCentre}>
-          {shown !== null ? (
-            <Text style={[styles.arcPct, shown > 100 && { color }]}>{shown}%</Text>
-          ) : (
-            <Icon color={color} size={17} />
-          )}
-        </View>
-      </View>
-
-      <Text style={styles.arcValue} numberOfLines={1} adjustsFontSizeToFit>
-        {value}{unit ? ` ${unit}` : ''}
-      </Text>
-      <Text style={styles.arcLabel}>{label}</Text>
-    </Press>
-  );
-}
-
-function ProfileStatItem({ label, value, onPress }) {
-  return (
-    <TouchableOpacity style={styles.statBox} onPress={onPress} disabled={!onPress} activeOpacity={0.7}>
-      <Text style={styles.statBoxValue}>{value}</Text>
-      <Text style={styles.statBoxLabel}>{label}</Text>
-    </TouchableOpacity>
   );
 }
 
@@ -1207,8 +1011,6 @@ const styles = StyleSheet.create({
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 16, alignItems: 'center' },
   sectionTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
   editButtonBorder: { width: 42, height: 42, justifyContent: 'center', alignItems: 'center', borderRadius: 21, backgroundColor: colors.card },
-
-
 
 
   eyebrow: {
@@ -1282,41 +1084,12 @@ const styles = StyleSheet.create({
     paddingVertical: 18,
     paddingHorizontal: 6,
   },
-  arcCol: { flex: 1, alignItems: 'center', gap: 2 },
-  arcGauge: { width: 52, height: 52, alignItems: 'center', justifyContent: 'center' },
-  arcCentre: { position: 'absolute', alignItems: 'center', justifyContent: 'center' },
-  arcPct: { color: colors.text, fontSize: 13, fontWeight: '700', letterSpacing: -0.2 },
-  arcValue: { color: colors.text, fontSize: 14, fontWeight: '700', marginTop: 6 },
-  arcLabel: { color: colors.textMuted, fontSize: 11, fontWeight: '600' },
 
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end' },
-  modalContentTasks: { backgroundColor: colors.sheet, borderTopLeftRadius: 35, borderTopRightRadius: 35, padding: 26, width: '100%', maxHeight: '85%' },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 26 },
-  closeBtnContainer: { padding: 6, backgroundColor: colors.surfaceHigh, borderRadius: 14 },
-  expandedContent: { marginTop: 20 },
-  modalInput: { backgroundColor: colors.surfaceHigh, borderRadius: 18, padding: 20, color: colors.text, fontSize: 15, marginBottom: 16 },
-  saveBtn: { backgroundColor: colors.accent, padding: 20, borderRadius: 18, alignItems: 'center' },
-  saveBtnText: { color: colors.onAccent, fontWeight: '600' },
-
-
-
-
-
-  modalTitle: { color: colors.text, fontSize: 26, fontWeight: '800', marginBottom: 26 },
 
   avatarBase: { justifyContent: 'center', alignItems: 'center', backgroundColor: colors.surface, overflow: 'hidden' },
   avatarCrown: { position: 'absolute', top: -12 },
   avatarFlameBack: { position: 'absolute', opacity: 0.3, zIndex: -1 },
   avatarGlitchOverlay: { position: 'absolute', opacity: 0.5, marginLeft: 6 },
-
-
-
-
-
-  statBox: { backgroundColor: colors.card, width: '30%', padding: 16, borderRadius: 24, alignItems: 'center' },
-  statBoxValue: { color: colors.text, fontSize: 17, fontWeight: '700' },
-  statBoxLabel: { color: colors.textMuted, fontSize: 11, marginTop: 6 },
-
 
 
 });

@@ -74,7 +74,9 @@ export const colors = {
   text: '#F0F1F8',
   textSecondary: '#C7C5D0',
   textMuted: '#8C90AA',
-  textFaint: '#6B6F8A',
+  textFaint: '#7F839D',
+  // Lifted from #6B6F8A for contrast: 4.55:1 on card, 4.98 on background (WCAG AA
+  // for small text is 4.5). The old value was 3.45 on card.
   textDisabled: '#4C5067',
 
   // --- Semantic ---------------------------------------------------------

@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import Animated, {
-  useSharedValue, useAnimatedStyle, withTiming, withDelay, withSpring,
+  useSharedValue, useAnimatedStyle, withTiming, withDelay, withSpring, useReducedMotion,
 } from 'react-native-reanimated';
 import { EASE_OUT, DURATION, ENTER_SPRING, stagger } from '../lib/motion';
 
@@ -16,15 +16,23 @@ import { EASE_OUT, DURATION, ENTER_SPRING, stagger } from '../lib/motion';
  * whole block at once.
  */
 export default function FadeIn({ children, index = 0, distance = 12, style }) {
-  const progress = useSharedValue(0);
+  // With Reduce Motion on, content is simply there: no travel, no stagger.
+  // Sliding in is decoration, and for people with vestibular sensitivity a
+  // screen where every card moves on open is the thing the setting exists for.
+  const reduceMotion = useReducedMotion();
+  const progress = useSharedValue(reduceMotion ? 1 : 0);
 
   useEffect(() => {
+    if (reduceMotion) {
+      progress.value = 1;
+      return;
+    }
     const delay = stagger(index);
     progress.value = withDelay(
       delay,
       withTiming(1, { duration: DURATION.normal, easing: EASE_OUT })
     );
-  }, [index, progress]);
+  }, [index, progress, reduceMotion]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     opacity: progress.value,
