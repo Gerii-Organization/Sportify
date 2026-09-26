@@ -194,6 +194,7 @@ export async function saveWorkoutToHealth({ minutes, startedAt }) {
  */
 export async function readWorkoutEnergy({ start, end }) {
   const empty = { activeKcal: null, heartRates: [] };
+  if (Platform.OS === 'android') return readHealthConnectEnergy({ start, end });
   if (Platform.OS !== 'ios') return empty;
 
   let AppleHealthKit;
@@ -239,4 +240,64 @@ export async function readWorkoutEnergy({ start, end }) {
       resolve(empty);
     }
   });
+}
+
+/**
+ * The Android side of readWorkoutEnergy: Health Connect.
+ *
+ * Loaded only here, only on Android. react-native-health-connect looks its
+ * native module up the moment it is imported (TurboModuleRegistry.getEnforcing,
+ * evaluated for every platform), so a top-level import would crash the iOS app
+ * and any Android build made before the package was added.
+ *
+ * Same contract as the HealthKit path: `{ activeKcal, heartRates }`, where
+ * heart rates are `{ value, startDate }` so lib/energy.js reads both platforms
+ * the same way. Anything unavailable — no Health Connect app, permission
+ * refused, old binary — resolves to nulls.
+ */
+async function readHealthConnectEnergy({ start, end }) {
+  const empty = { activeKcal: null, heartRates: [] };
+  let HC;
+  try {
+    // eslint-disable-next-line global-require
+    HC = require('react-native-health-connect');
+  } catch {
+    return empty;
+  }
+
+  try {
+    // 3 = SDK_AVAILABLE. Anything else means Health Connect is missing or
+    // needs an update, and asking for permission would only show an error.
+    if ((await HC.getSdkStatus()) !== 3) return empty;
+    if (!(await HC.initialize())) return empty;
+
+    const granted = await HC.requestPermission([
+      { accessType: 'read', recordType: 'ActiveCaloriesBurned' },
+      { accessType: 'read', recordType: 'HeartRate' },
+    ]);
+    const can = (recordType) => (granted || []).some((p) => p.recordType === recordType && p.accessType === 'read');
+
+    const timeRangeFilter = {
+      operator: 'between',
+      startTime: new Date(start).toISOString(),
+      endTime: new Date(end).toISOString(),
+    };
+
+    const [calories, heart] = await Promise.all([
+      can('ActiveCaloriesBurned') ? HC.readRecords('ActiveCaloriesBurned', { timeRangeFilter }) : { records: [] },
+      can('HeartRate') ? HC.readRecords('HeartRate', { timeRangeFilter, ascendingOrder: true }) : { records: [] },
+    ]);
+
+    const kcal = (calories?.records || [])
+      .map((r) => Number(r.energy?.inKilocalories))
+      .filter((v) => Number.isFinite(v) && v >= 0);
+
+    const heartRates = (heart?.records || []).flatMap((r) =>
+      (r.samples || []).map((sample) => ({ value: sample.beatsPerMinute, startDate: sample.time }))
+    );
+
+    return { activeKcal: kcal.length ? kcal.reduce((a, b) => a + b, 0) : null, heartRates };
+  } catch {
+    return empty;
+  }
 }

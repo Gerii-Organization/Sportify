@@ -1,6 +1,8 @@
 import { View } from 'react-native';
 import { Zap, Circle, User, Shield, Crown, Swords, Ghost, Hexagon, Triangle, BatteryCharging, Trophy, Flame, Tag, Snowflake } from 'lucide-react-native';
 import { colors } from '../theme';
+import { FRAME_ART_TYPES } from '../lib/frames';
+import Avatar from './Avatar';
 
 /**
  * What a shop item looks like.
@@ -70,6 +72,15 @@ export default function ItemPreview({ item, type, scale = 1 }) {
   }
 
   if (type === 'avatar') {
+    // Frames drawn as art are shown the way they are worn: around an avatar.
+    if (FRAME_ART_TYPES.includes(item.type)) {
+      return (
+        <View style={box}>
+          <Avatar profile={{ equipped_avatar: item.id }} size={s(34)} />
+        </View>
+      );
+    }
+
     const frame = {
       width: s(48), height: s(48), borderRadius: s(24),
       justifyContent: 'center', alignItems: 'center',

@@ -16,6 +16,8 @@
  * belong to.
  */
 
+import { birthDateError } from '../lib/birthday';
+
 const numberIn = (value, min, max) => {
   const n = parseFloat(value);
   return Number.isFinite(n) && n >= min && n <= max;
@@ -46,12 +48,13 @@ export const SIGNUP_STEPS = [
     id: 'about',
     title: 'About you',
     note: 'Used to calculate your daily calorie target.',
-    fields: ['firstName', 'age', 'sex'],
-    validate: ({ firstName, age, sex }) => {
+    fields: ['firstName', 'birthDate', 'sex'],
+    validate: ({ firstName, birthDate, sex }) => {
       if (!firstName.trim()) return 'What should we call you?';
-      // 16 rather than 13: Romania's GDPR age of consent. Below it the app
-      // would need parental consent and a Families declaration on Play.
-      if (!numberIn(age, 16, 100)) return 'You need to be 16 or older to use Sportify.';
+      // A date rather than an age, so the age stays right after the next
+      // birthday. 16 is Romania's GDPR age of consent (src/lib/birthday.js).
+      const dateProblem = birthDateError(birthDate);
+      if (dateProblem) return dateProblem;
       if (sex !== 'M' && sex !== 'F') return 'Pick one.';
       return null;
     },
@@ -75,6 +78,14 @@ export const SIGNUP_STEPS = [
     validate: ({ workouts }) => (numberIn(workouts, 1, 7) ? null : 'Pick between 1 and 7.'),
   },
   {
+    id: 'steps',
+    title: 'How many steps a day?',
+    note: 'Your daily step goal on the home screen. Pick a little above what you walk now.',
+    fields: ['stepGoal'],
+    // Starts on 10,000, so Continue works without a choice.
+    validate: ({ stepGoal }) => (numberIn(stepGoal, 1000, 50000) ? null : 'Pick a goal to continue.'),
+  },
+  {
     id: 'split',
     title: 'How do you split your training?',
     note: 'We will suggest which session is next. You can change it anytime.',
@@ -88,3 +99,7 @@ export const SIGNUP_STEPS = [
 
 /** Shown on the commitment step instead of a free-text number field. */
 export const WEEKLY_OPTIONS = [1, 2, 3, 4, 5, 6, 7];
+
+/** The steps step's choices. 10,000 is the default the app used before asking. */
+export const STEP_GOAL_OPTIONS = [5000, 7500, 10000, 12500, 15000];
+export const DEFAULT_STEP_GOAL = 10000;

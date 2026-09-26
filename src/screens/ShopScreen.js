@@ -6,25 +6,29 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   ChevronLeft, Zap, Star, Plus, Sparkles, BatteryCharging, Gem, Clock, Gift, Lock,
-  CircleCheck, Snowflake, Trophy, Flame,
+  CircleCheck, Snowflake, Trophy, Flame, CircleUserRound,
 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors, gradients, TAB_BAR_CLEARANCE } from '../theme';
 import { RINGS, AVATARS, BADGES, TITLES, POWERUPS } from '../constants/cosmetics';
 import { SEASON_PRIZES } from '../lib/seasons';
 import { DAILY_REWARDS } from '../constants/content';
-import { FEATURED_BUNDLE, ENERGY_PACKS, IAP_ENABLED } from '../constants/storeOffers';
+import { OFFERS, ENERGY_PACKS, IAP_ENABLED } from '../constants/storeOffers';
+import { FRAME_ART_TYPES } from '../lib/frames';
 import { useAuth } from '../context/AuthContext';
 import EnergyBurst from '../components/EnergyBurst';
 import BuySheet from '../components/BuySheet';
 import ItemPreview from '../components/ItemPreview';
-import GoldenApexFrame from '../components/shop/GoldenApexFrame';
+import OfferCarousel from '../components/shop/OfferCarousel';
+import FrameShowcase from '../components/shop/FrameShowcase';
+import EnergyPacks from '../components/shop/EnergyPacks';
+import ShopFooter from '../components/shop/ShopFooter';
 import { SkeletonShop } from '../components/Skeleton';
 import useRefresh from '../lib/useRefresh';
 import Press from '../components/Press';
 import FadeIn from '../components/FadeIn';
 import { todayKey } from '../lib/date';
-import { msUntilUtcMidnight, msUntilUtcMonday, formatClock, formatHoursMinutes, formatDaysHours } from '../lib/shopClock';
+import { msUntilUtcMidnight, formatClock, formatHoursMinutes } from '../lib/shopClock';
 import { rarityFor } from '../lib/rarity';
 
 const PURCHASE_ERRORS = {
@@ -34,6 +38,8 @@ const PURCHASE_ERRORS = {
   no_profile: "Your profile could not be loaded. Try signing in again.",
   price_changed: "The price just changed. Check the new price and try again.",
   unknown_item: "This item is no longer in the shop.",
+  not_for_energy: "This frame comes in a bundle and cannot be bought with energy.",
+  freezer_full: "You already hold three streak freezes, the most you can keep.",
 };
 
 /**
@@ -46,9 +52,10 @@ const PURCHASE_ERRORS = {
  */
 const CHIPS = [
   { key: 'featured', label: 'For you', icon: Sparkles },
+  { key: 'frames', label: 'Frames', icon: CircleUserRound },
   { key: 'boosters', label: 'Boosters', icon: Zap },
   { key: 'bundles', label: 'Energy', icon: BatteryCharging },
-  { key: 'prestige', label: 'Cosmetics', icon: Gem },
+  { key: 'prestige', label: 'More', icon: Gem },
 ];
 
 /** Cosmetic departments, in the order the wardrobe lists them. */
@@ -76,7 +83,9 @@ function BoosterGlyph({ item, size }) {
  * nothing, not even the free defaults — there is no profile to equip them on.
  */
 function buildCatalogue(profile, ownedIds = new Set()) {
-  const owns = (item) => !!profile && (item.price === 0 || ownedIds.has(item.id));
+  // Free defaults are everyone's; an exclusive frame is price 0 too, but only
+  // yours once its bundle has been bought.
+  const owns = (item) => !!profile && ((item.price === 0 && !item.exclusive) || ownedIds.has(item.id));
   const titles = new Set(profile?.owned_titles || ['Novice']);
 
   return {
@@ -106,10 +115,9 @@ function describeReward(reward) {
 
 /**
  * Nothing on this screen costs real money yet. Said plainly on tap, rather
- * than hiding the offers until there is a store behind them — the layout is
- * the point of having them here now.
+ * than hiding the offers until there is a store behind them.
  */
-const comingSoon = () => Alert.alert('Coming soon', 'Purchases with real money are not available yet.');
+const comingSoon = () => Alert.alert('Coming soon', 'Offers paid with real money are not open yet. Everything else in the shop can be bought with energy.');
 
 /**
  * A countdown that re-renders itself and nothing else.
@@ -166,6 +174,8 @@ export default function ShopScreen({ navigation }) {
   const [balance, setBalance] = useState(0);
   const [profileData, setProfileData] = useState(null);
   const [catalogue, setCatalogue] = useState(() => buildCatalogue(null));
+  /** Everything in the inventory, for bundles whose frame is already yours. */
+  const [ownedIds, setOwnedIds] = useState(() => new Set());
 
   const [purchaseModalVisible, setPurchaseModalVisible] = useState(false);
   const [selectedItem, setSelectedItem] = useState(null);
@@ -208,13 +218,14 @@ export default function ShopScreen({ navigation }) {
       if (!user) {
         setBalance(0);
         setProfileData(null);
+        setOwnedIds(new Set());
         setCatalogue(buildCatalogue(null));
         return;
       }
 
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select('xp, energy_points, streak_freezes, equipped_ring, equipped_avatar, equipped_badge, equipped_title, owned_titles, coin_boost_active, last_reward_date, reward_day, xp_boost_expires_at, current_streak, previous_streak')
+        .select('first_name, avatar_url, xp, energy_points, streak_freezes, equipped_ring, equipped_avatar, equipped_badge, equipped_title, owned_titles, coin_boost_active, last_reward_date, reward_day, xp_boost_expires_at, current_streak, previous_streak')
         .eq('id', user.id)
         .maybeSingle();
 
@@ -224,9 +235,11 @@ export default function ShopScreen({ navigation }) {
       const { data: inventory, error: invError } = await supabase.from('user_inventory').select('item_id').eq('user_id', user.id);
       if (invError) throw invError;
 
+      const owned = new Set(inventory.map((row) => row.item_id));
       setProfileData(profile);
       setBalance(profile.energy_points || 0);
-      setCatalogue(buildCatalogue(profile, new Set(inventory.map((row) => row.item_id))));
+      setOwnedIds(owned);
+      setCatalogue(buildCatalogue(profile, owned));
 
       // Missing until the migration runs. A shop that fails to open because a
       // rotation could not be fetched is worse than one without a rotation.
@@ -289,6 +302,11 @@ export default function ShopScreen({ navigation }) {
    * the same date, which is what makes the date check meaningful.
    */
   const handleClaimReward = async () => {
+    // The reward is paid into an account; a guest is asked to make one.
+    if (!user) {
+      navigation.navigate('AuthScreen');
+      return;
+    }
     if (claiming || rewardClaimedToday) return;
     setClaiming(true);
 
@@ -322,7 +340,18 @@ export default function ShopScreen({ navigation }) {
   };
 
   const handleAction = async (item, categoryType) => {
+    // Everything here is bought into an account; a guest has none yet.
+    if (!user) {
+      navigation.navigate('AuthScreen');
+      return;
+    }
     if (categoryType !== 'powerup' && item.equipped) return;
+
+    // An exclusive frame not yet owned is sold with its bundle, at the top.
+    if (item.exclusive && !item.owned) {
+      jumpTo('featured');
+      return;
+    }
 
     if (categoryType === 'powerup' && item.id === 'p2') {
       if (!profileData || !profileData.previous_streak || profileData.previous_streak <= profileData.current_streak) {
@@ -629,6 +658,11 @@ export default function ShopScreen({ navigation }) {
   }
 
   const cardWidth = (width - 40 - 12) / 2;
+  // Frames that can be bought with energy first, cheapest first; the bundle
+  // exclusives after them.
+  const artFrames = catalogue.avatars
+    .filter((item) => FRAME_ART_TYPES.includes(item.type))
+    .sort((a, b) => (!!a.exclusive - !!b.exclusive) || a.price - b.price);
   // Priced cosmetics only, most expensive first: the carousel is the display
   // window, the wardrobe below it is the full rail.
   const prestige = WARDROBE
@@ -711,46 +745,13 @@ export default function ShopScreen({ navigation }) {
       >
         <View onLayout={trackSection('featured')}>
           <FadeIn>
-            <LinearGradient colors={gradients.goldCard} style={styles.hero}>
-              <View style={styles.heroTop}>
-                <View style={styles.heroLabel}>
-                  <Zap color={colors.gold} size={12} fill={colors.gold} />
-                  <Text style={styles.heroLabelText}>{FEATURED_BUNDLE.label.toUpperCase()}</Text>
-                </View>
-                <View style={styles.timePill}>
-                  <Clock color={colors.textSecondary} size={12} />
-                  <Ticker ms={msUntilUtcMonday} format={(ms) => `${formatDaysHours(ms)} left`} style={styles.timePillText} />
-                </View>
-              </View>
-
-              <View style={styles.heroBody}>
-                <View style={styles.heroCopy}>
-                  <Text style={styles.heroTitle}>{FEATURED_BUNDLE.name}</Text>
-                  <View style={styles.heroPerks}>
-                    <Zap color={colors.gold} size={13} fill={colors.gold} />
-                    <Text style={styles.heroEnergy}>+{FEATURED_BUNDLE.energy.toLocaleString()} energy</Text>
-                    <View style={styles.dot} />
-                    <Text style={styles.heroFreeze}>{FEATURED_BUNDLE.freezes} streak freezes</Text>
-                  </View>
-                  <Text style={styles.heroPerk}>{FEATURED_BUNDLE.perk}</Text>
-                </View>
-
-                <View style={styles.heroArt}>
-                  <GoldenApexFrame size={108} />
-                  {IAP_ENABLED ? <Text style={styles.heroWas}>{FEATURED_BUNDLE.was}</Text> : null}
-                  <Press
-                    scale={0.94}
-                    style={styles.heroPrice}
-                    onPress={comingSoon}
-                    accessibilityLabel={IAP_ENABLED ? `${FEATURED_BUNDLE.name}, ${FEATURED_BUNDLE.price}` : `${FEATURED_BUNDLE.name}, coming soon`}
-                  >
-                    <LinearGradient colors={gradients.gold} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.heroPriceFill}>
-                      <Text style={styles.heroPriceText}>{IAP_ENABLED ? FEATURED_BUNDLE.price : 'Soon'}</Text>
-                    </LinearGradient>
-                  </Press>
-                </View>
-              </View>
-            </LinearGradient>
+            <OfferCarousel
+              offers={OFFERS}
+              profile={profileData}
+              purchasable={IAP_ENABLED}
+              ownedFrames={ownedIds}
+              onBuy={comingSoon}
+            />
 
             <SectionHead
               title="DAILY DEALS"
@@ -816,8 +817,21 @@ export default function ShopScreen({ navigation }) {
           </FadeIn>
         </View>
 
-        <View onLayout={trackSection('boosters')}>
+        <View onLayout={trackSection('frames')}>
           <FadeIn index={1}>
+            <SectionHead title="AVATAR FRAMES" note="New arrivals and exclusives, shown on you" />
+            <FrameShowcase
+              frames={artFrames}
+              profile={profileData}
+              balance={balance}
+              offerNameFor={(id) => OFFERS.find((offer) => offer.id === id)?.name}
+              onSelect={(item) => handleAction(item, 'avatar')}
+            />
+          </FadeIn>
+        </View>
+
+        <View onLayout={trackSection('boosters')}>
+          <FadeIn index={2}>
             <SectionHead
               title="BOOSTERS"
               note="One-time boosts for your XP, energy and streak"
@@ -827,60 +841,21 @@ export default function ShopScreen({ navigation }) {
         </View>
 
         <View onLayout={trackSection('bundles')}>
-          <FadeIn index={2}>
+          <FadeIn index={3}>
             <SectionHead
               title="ENERGY PACKS"
-              note="Top up your balance"
-              right={<Text style={styles.soon}>Coming soon</Text>}
+              note="Top up your balance. Bigger packs give more per euro."
+              right={IAP_ENABLED ? null : <Text style={styles.soon}>Coming soon</Text>}
             />
-            <View style={styles.packRow}>
-              {ENERGY_PACKS.map((pack) => (
-                <Press
-                  key={pack.id}
-                  scale={0.96}
-                  style={[styles.pack, pack.featured && styles.packFeatured]}
-                  onPress={comingSoon}
-                  accessibilityLabel={IAP_ENABLED ? `${pack.label}, ${pack.energy} energy, ${pack.price}` : `${pack.label}, ${pack.energy} energy, coming soon`}
-                >
-                  {pack.tag ? (
-                    <View style={[styles.packTag, pack.cool && styles.packTagCool]}>
-                      <Text style={[styles.packTagText, pack.cool && styles.packTagTextCool]}>{pack.tag.toUpperCase()}</Text>
-                    </View>
-                  ) : null}
-
-                  <Text style={styles.packLabel}>{pack.label.toUpperCase()}</Text>
-                  <View style={[styles.packOrb, pack.featured && styles.packOrbFeatured]}>
-                    <Zap
-                      color={pack.cool ? colors.accent : colors.gold}
-                      fill={pack.cool ? colors.accent : colors.gold}
-                      size={22}
-                    />
-                  </View>
-                  <View style={styles.inlineTight}>
-                    <Text style={styles.packAmount}>{pack.energy.toLocaleString()}</Text>
-                    <Zap color={colors.gold} size={13} fill={colors.gold} />
-                  </View>
-
-                  {pack.featured ? (
-                    <LinearGradient colors={gradients.gold} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[styles.packBuy, styles.packBuyGold]}>
-                      <Text style={styles.packBuyTextGold}>{IAP_ENABLED ? pack.price : 'Soon'}</Text>
-                    </LinearGradient>
-                  ) : (
-                    <View style={styles.packBuy}>
-                      <Text style={styles.packBuyText}>{IAP_ENABLED ? pack.price : 'Soon'}</Text>
-                    </View>
-                  )}
-                </Press>
-              ))}
-            </View>
+            <EnergyPacks packs={ENERGY_PACKS} purchasable={IAP_ENABLED} onBuy={comingSoon} />
           </FadeIn>
         </View>
 
         <View onLayout={trackSection('prestige')}>
-          <FadeIn index={3}>
+          <FadeIn index={4}>
             <SectionHead
-              title="COSMETICS"
-              note="Frames, rings, badges and titles"
+              title="MORE COSMETICS"
+              note="Rings, badges, titles and every frame"
               right={
                 <Press scale={0.95} onPress={() => setWardrobeOpen((open) => !open)} accessibilityLabel={wardrobeOpen ? 'Show fewer cosmetics' : 'See all cosmetics'}>
                   <Text style={styles.link}>{wardrobeOpen ? 'Show less' : 'See all'}</Text>
@@ -909,6 +884,8 @@ export default function ShopScreen({ navigation }) {
             )) : null}
           </FadeIn>
         </View>
+
+        <ShopFooter purchasable={IAP_ENABLED} />
       </ScrollView>
 
       {/* Above everything, touches passed through. Mounted only while it
@@ -930,6 +907,11 @@ export default function ShopScreen({ navigation }) {
         balance={balance}
         busy={purchasing}
         onConfirm={confirmPurchase}
+        profile={profileData}
+        onEarnEnergy={() => {
+          setPurchaseModalVisible(false);
+          navigation.navigate('MainTabs', { screen: 'Training' });
+        }}
       />
     </SafeAreaView>
   );
@@ -938,7 +920,6 @@ export default function ShopScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   inlineGap: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  inlineTight: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   textShort: { color: colors.textFaint },
   cardShort: { backgroundColor: '#151722' },
 
@@ -1002,43 +983,6 @@ const styles = StyleSheet.create({
   goldTime: { color: colors.gold, fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'] },
   link: { color: colors.gold, fontSize: 13, fontWeight: '700' },
   soon: { color: colors.textFaint, fontSize: 12, fontWeight: '600' },
-
-  // --- Featured bundle ---
-  hero: {
-    marginTop: 6, borderRadius: 22, borderWidth: 1, borderColor: colors.goldBorder,
-    padding: 16, overflow: 'hidden',
-  },
-  heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  heroLabel: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    borderWidth: 1, borderColor: colors.goldBorder, backgroundColor: colors.goldSoft,
-    borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5,
-  },
-  heroLabelText: { color: colors.gold, fontSize: 10, fontWeight: '800', letterSpacing: 1.4 },
-  timePill: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: colors.surface, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5,
-  },
-  timePillText: { color: colors.textSecondary, fontSize: 11, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  heroBody: { flexDirection: 'row', alignItems: 'center', marginTop: 12 },
-  heroCopy: { flex: 1, paddingRight: 8 },
-  heroTitle: { color: colors.text, fontSize: 20, fontWeight: '800', lineHeight: 24, letterSpacing: -0.4 },
-  heroPerks: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 8 },
-  heroEnergy: { color: colors.gold, fontSize: 13, fontWeight: '700' },
-  dot: { width: 4, height: 4, borderRadius: 2, backgroundColor: colors.textFaint },
-  heroFreeze: { color: colors.accent, fontSize: 13, fontWeight: '600' },
-  heroPerk: { color: colors.textMuted, fontSize: 11, lineHeight: 15, marginTop: 8 },
-  heroArt: { width: 120, height: 120, alignItems: 'center', justifyContent: 'center' },
-  heroWas: {
-    position: 'absolute', top: -4, right: 0,
-    color: colors.textFaint, fontSize: 12, fontWeight: '600', textDecorationLine: 'line-through',
-  },
-  heroPrice: {
-    position: 'absolute', bottom: 2, right: -6,
-    shadowColor: colors.gold, shadowOpacity: 0.35, shadowRadius: 12, shadowOffset: { width: 0, height: 4 },
-  },
-  heroPriceFill: { borderRadius: 999, paddingHorizontal: 16, paddingVertical: 8 },
-  heroPriceText: { color: colors.onGold, fontSize: 17, fontWeight: '800' },
 
   // --- Daily tribute ---
   tribute: {
@@ -1136,40 +1080,6 @@ const styles = StyleSheet.create({
   },
   pricePillShort: { backgroundColor: colors.surface },
   pricePillText: { color: colors.text, fontSize: 13, fontWeight: '700' },
-
-  // --- Energy packs ---
-  packRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 14 },
-  pack: {
-    flex: 1, alignItems: 'center', paddingVertical: 16, paddingHorizontal: 8,
-    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, borderRadius: 18,
-  },
-  // Lifted rather than recoloured: taller, gold rim, a faint warm cast.
-  packFeatured: {
-    paddingVertical: 22, borderWidth: 1.5, borderColor: colors.gold, backgroundColor: '#1F1E27',
-    shadowColor: colors.gold, shadowOpacity: 0.18, shadowRadius: 16, shadowOffset: { width: 0, height: 0 },
-  },
-  packTag: {
-    position: 'absolute', top: -9,
-    backgroundColor: colors.gold, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2,
-  },
-  packTagCool: { backgroundColor: '#3F436D' },
-  packTagText: { color: colors.onGold, fontSize: 9, fontWeight: '900', letterSpacing: 0.6 },
-  packTagTextCool: { color: colors.calories },
-  packLabel: { color: colors.textMuted, fontSize: 10, fontWeight: '800', letterSpacing: 1.2, marginTop: 4 },
-  packOrb: {
-    width: 50, height: 50, borderRadius: 25, marginVertical: 12,
-    alignItems: 'center', justifyContent: 'center',
-    backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: colors.border,
-  },
-  packOrbFeatured: { backgroundColor: colors.goldSoft, borderColor: colors.goldBorder },
-  packAmount: { color: colors.text, fontSize: 16, fontWeight: '800' },
-  packBuy: {
-    alignSelf: 'stretch', alignItems: 'center', marginTop: 12, paddingVertical: 8, borderRadius: 999,
-    backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: colors.border,
-  },
-  packBuyGold: { borderWidth: 0 },
-  packBuyText: { color: colors.text, fontSize: 13, fontWeight: '700' },
-  packBuyTextGold: { color: colors.onGold, fontSize: 13, fontWeight: '800' },
 
   // --- Prestige ---
   carousel: { marginHorizontal: -20 },

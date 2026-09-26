@@ -1,43 +1,39 @@
-import { useEffect, useRef, useState } from 'react';
-import { Modal, View, Text, TextInput, ScrollView, StyleSheet, Alert } from 'react-native';
+import { useEffect, useState } from 'react';
+import { Modal, View, Text, TextInput, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import Animated, {
-  useSharedValue, useAnimatedStyle, withSpring, withTiming, withDelay, withRepeat,
-  cancelAnimation, Easing,
-} from 'react-native-reanimated';
-import {
-  Check, Clock, Dumbbell, Layers, Flame, Zap, Star, Snowflake, CloudOff, Trophy, MessageSquare, Share2, Medal, Gift,
-} from 'lucide-react-native';
-import { colors, gradients } from '../theme';
+import Animated, { useSharedValue, useAnimatedStyle, withSpring, useReducedMotion } from 'react-native-reanimated';
+import { Check, Flame, Snowflake, CloudOff, Trophy, Share2, Medal, Gift } from 'lucide-react-native';
+import { colors } from '../theme';
 import { formatStopwatch } from '../lib/date';
 import { formatWeight } from '../lib/units';
 import { AchievementIcon } from '../lib/achievements';
 import { describeReward } from '../lib/milestones';
 import { BURN_NOTES } from '../lib/energy';
-import { useT, t as tNow } from '../i18n';
+import { useT } from '../i18n';
 import { ENTER_SPRING } from '../lib/motion';
-import AmbientGlow from './AmbientGlow';
 import FadeIn from './FadeIn';
 import Button from './Button';
-import WorkoutShareCard, { SHARE_CARD_SIZE } from './WorkoutShareCard';
-import { shareViewAsImage } from '../lib/shareImage';
-import { useAuth } from '../context/AuthContext';
+import ShareWorkoutSheet from './ShareWorkoutSheet';
 
 /**
  * The screen at the end of a workout.
  *
- * It used to be a stack of identical cards under "WORKOUT COMPLETED!" in
- * capitals, every fact given the same weight. The order now follows what
- * someone who just finished wants to know, and how much each fact matters:
+ * One surface, not a stack of cards. The previous version gave every fact its
+ * own tinted card — stats, each reward, streak, milestone, records, the share
+ * preview, the note — so an ordinary session ended on a wall of boxes, each
+ * shouting as loudly as the next. Now:
  *
- *   1. That it counted — a badge that lands, the workout's name under it.
- *   2. What they did — four numbers in a grid, read at a glance.
- *   3. What it earned — rewards counting up, because a number that arrives
- *      reads as given, where a number that is simply there reads as a label.
- *   4. Anything exceptional — streak, freeze, records, achievements — only
- *      when it happened, so an ordinary session is a short, clean screen.
- *   5. The optional note, last, where skipping it costs nothing.
+ *   1. That it counted — a check, the workout's name, one line about it.
+ *   2. What they did — four numbers on the page, split by hairlines.
+ *   3. What it earned — one line, counting up.
+ *   4. Anything exceptional — streak, milestone, records, badges — as one
+ *      list, only when something happened.
+ *   5. An optional note.
+ *
+ * Sharing is a button. The story-card preview used to sit on this screen,
+ * a second copy of the numbers above it; it now opens with the share sheet,
+ * which also sends it to a friend's chat.
  */
 export default function WorkoutSummary({
   visible,
@@ -52,28 +48,7 @@ export default function WorkoutSummary({
 }) {
   const s = stats || {};
   const { t } = useT();
-  const { profile } = useAuth();
-  const cardRef = useRef(null);
-  const [sharing, setSharing] = useState(false);
-
-  // Captured at story resolution (1080 × 1920) whatever size the preview is
-  // drawn at, so the shared image is sharp on the phone that receives it.
-  const share = async () => {
-    if (sharing) return;
-    setSharing(true);
-    const result = await shareViewAsImage(cardRef, {
-      dialogTitle: t('Share your workout'),
-      width: SHARE_CARD_SIZE.width * 4,
-      height: SHARE_CARD_SIZE.height * 4,
-    });
-    setSharing(false);
-
-    if (result.reason === 'unavailable') {
-      Alert.alert(t('Sharing is not available'), t('Update the app to share your workout as an image.'));
-    } else if (result.reason === 'failed') {
-      Alert.alert(t('Could not share'), t('The image could not be created. Try again.'));
-    }
-  };
+  const [sharingOpen, setSharingOpen] = useState(false);
 
   // The note saves on blur, and a tap on Continue does not always blur first.
   const finish = () => {
@@ -81,11 +56,51 @@ export default function WorkoutSummary({
     onContinue?.();
   };
 
+  const burnLabel = s.kcalSource && s.kcalSource !== 'estimate' ? t('Burn') : t('Est. burn');
+  const highlights = [
+    s.isFirstWorkoutToday && s.newStreak > 0
+      ? { key: 'streak', Icon: Flame, tint: colors.streak, fill: true, title: t('{count}-day streak', { count: s.newStreak }), body: t('Keep it going tomorrow.') }
+      : null,
+    ...(s.milestones || []).map((m) => ({
+      key: `milestone-${m.days}`, Icon: Medal, tint: colors.gold,
+      title: t('{days}-day milestone', { days: m.days }), body: describeReward(m) || t('Unlocked'),
+    })),
+    s.inviteBonus
+      ? {
+        key: 'invite', Icon: Gift, tint: colors.gold, title: t('Invite bonus'),
+        body: s.inviteBonus.inviterName
+          ? t('+{energy} energy for your first workout, and {name} gets the same.', { energy: s.inviteBonus.energy, name: s.inviteBonus.inviterName })
+          : t('+{energy} energy for your first workout.', { energy: s.inviteBonus.energy }),
+      }
+      : null,
+    s.freezeUsed
+      ? { key: 'freeze', Icon: Snowflake, tint: colors.water, title: t('Streak Freeze used'), body: t('You missed a day, and a freeze kept your streak going.') }
+      : null,
+    // The server decides what counts as a record (submit_sets), by estimated
+    // one-rep max, so a heavy triple can beat a lighter ten.
+    ...(s.records || []).map((r) => ({
+      key: `record-${r.exercise_name}`, Icon: Trophy, tint: colors.gold, fill: true,
+      title: r.exercise_name,
+      body: `${t('New personal record')} · ${formatWeight(r.weight_kg, units)} × ${r.reps}`,
+    })),
+    ...(s.achievements || []).map((a) => ({
+      key: `achievement-${a.code}`,
+      icon: <AchievementIcon name={a.icon} color={colors.accent} size={18} />,
+      title: a.name, body: a.description,
+    })),
+  ].filter(Boolean);
+
+  const showXp = !s.queued && Number(s.xpGained) > 0;
+  const showEnergy = !s.queued && Number(s.energyGained) > 0;
+
   return (
     <Modal visible={visible} animationType="fade" onRequestClose={finish}>
       <View style={styles.root}>
-        <LinearGradient colors={['#1C1E33', colors.background]} style={styles.wash} pointerEvents="none" />
-        <AmbientGlow tone="accent" height={460} intensity={0.55} />
+        <LinearGradient
+          colors={['rgba(155, 157, 214, 0.13)', 'rgba(17, 19, 27, 0)']}
+          style={styles.wash}
+          pointerEvents="none"
+        />
 
         <SafeAreaView style={styles.safe}>
           <ScrollView
@@ -95,167 +110,66 @@ export default function WorkoutSummary({
           >
             <Hero name={workoutName} message={s.message} />
 
+            {/* --- What they did ------------------------------------------- */}
             <FadeIn index={2}>
-              <View style={styles.grid}>
-                <StatTile icon={Clock} label={t('Duration')} value={formatStopwatch(s.time || 0)} />
-                <StatTile icon={Dumbbell} label={t('Volume')} value={formatWeight(s.volume || 0, units, { step: 1 })} />
-                <StatTile
-                  icon={Layers}
-                  label={t('Sets')}
-                  value={String(s.sets || 0)}
-                  note={t('{count} exercise', { count: s.exercises || 0 })}
-                />
-                <StatTile
-                  icon={Flame}
-                  label={s.kcalSource && s.kcalSource !== 'estimate' ? t('Burn') : t('Est. burn')}
-                  value={s.kcal ? `${s.kcal} kcal` : '—'}
-                  note={t(BURN_NOTES[s.kcalSource] || BURN_NOTES.estimate)}
-                />
+              <View style={styles.stats}>
+                <View style={styles.statsRow}>
+                  <Stat label={t('Duration')} value={formatStopwatch(s.time || 0)} />
+                  <View style={styles.vrule} />
+                  <Stat label={t('Volume')} value={formatWeight(s.volume || 0, units, { step: 1 })} />
+                </View>
+                <View style={styles.hrule} />
+                <View style={styles.statsRow}>
+                  <Stat
+                    label={t('Sets')}
+                    value={String(s.sets || 0)}
+                    note={t('{count} exercise', { count: s.exercises || 0 })}
+                  />
+                  <View style={styles.vrule} />
+                  <Stat
+                    label={burnLabel}
+                    value={s.kcal ? `${s.kcal} kcal` : '—'}
+                    note={t(BURN_NOTES[s.kcalSource] || BURN_NOTES.estimate)}
+                  />
+                </View>
               </View>
             </FadeIn>
 
-            {/* Queued, not lost, and not rewarded yet either. The rewards are
-                hidden rather than shown as zeroes: the server decides XP and
-                energy and has not seen this session. "+0 XP" would read as
-                the app punishing a workout done without signal. */}
+            {/* --- What it earned ------------------------------------------
+                Queued sessions have not been priced by the server yet, so
+                they say so instead of showing zeroes. */}
             <FadeIn index={3}>
               {s.queued ? (
-                <View style={[styles.card, styles.row]}>
-                  <View style={[styles.disc, { backgroundColor: colors.surfaceHigh }]}>
-                    <CloudOff color={colors.textMuted} size={19} />
-                  </View>
-                  <View style={styles.flex}>
-                    <Text style={styles.cardTitle}>{t('Saved on this phone')}</Text>
-                    <Text style={styles.cardBody}>
-                      {t('You are offline. This workout will sync automatically, and your rewards will show up then.')}
-                    </Text>
-                  </View>
+                <View style={styles.earned}>
+                  <CloudOff color={colors.textMuted} size={15} />
+                  <Text style={styles.queued}>
+                    {t('You are offline. This workout will sync automatically, and your rewards will show up then.')}
+                  </Text>
                 </View>
-              ) : (
-                <View style={styles.rewards}>
-                  <RewardTile icon={Star} tone={colors.xp} value={s.xpGained} label={t('XP earned')} />
-                  <RewardTile icon={Zap} tone={colors.gold} value={s.energyGained} label={t('Energy earned')} delay={140} />
+              ) : showXp || showEnergy ? (
+                <View style={styles.earned}>
+                  {showXp ? <CountUp to={s.xpGained} suffix={` ${t('XP')}`} style={[styles.earnedValue, { color: colors.xp }]} /> : null}
+                  {showXp && showEnergy ? <Text style={styles.earnedDot}>·</Text> : null}
+                  {showEnergy ? (
+                    <CountUp to={s.energyGained} delay={140} suffix={` ${t('energy')}`} style={[styles.earnedValue, { color: colors.gold }]} />
+                  ) : null}
                 </View>
-              )}
+              ) : null}
             </FadeIn>
 
-            {s.isFirstWorkoutToday ? (
+            {/* --- Anything exceptional --------------------------------------- */}
+            {highlights.length ? (
               <FadeIn index={4}>
-                <LinearGradient
-                  colors={['rgba(224, 161, 122, 0.22)', 'rgba(224, 161, 122, 0.04)']}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={[styles.card, styles.streak]}
-                >
-                  <View style={styles.streakDisc}>
-                    <Flame color={colors.streak} fill={colors.streak} size={28} />
-                  </View>
-                  <View style={styles.flex}>
-                    <View style={styles.streakLine}>
-                      <Text style={styles.streakNumber}>{s.newStreak}</Text>
-                      <Text style={styles.streakUnit}>{t('day streak')}</Text>
-                    </View>
-                    <Text style={styles.cardBody}>{t('Keep it going tomorrow.')}</Text>
-                  </View>
-                </LinearGradient>
-              </FadeIn>
-            ) : null}
-
-            {/* A milestone is rarer than a streak day, so it gets the reward
-                colour and its own card rather than a line in the streak one. */}
-            {(s.milestones || []).map((milestone) => (
-              <FadeIn key={`milestone-${milestone.days}`} index={4}>
-                <LinearGradient
-                  colors={['rgba(222, 184, 102, 0.22)', 'rgba(222, 184, 102, 0.04)']}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={[styles.card, styles.row, styles.milestoneCard]}
-                >
-                  <View style={[styles.disc, styles.milestoneDisc]}>
-                    <Medal color={colors.gold} size={20} />
-                  </View>
-                  <View style={styles.flex}>
-                    <Text style={styles.cardTitle}>{t('{days}-day milestone', { days: milestone.days })}</Text>
-                    <Text style={styles.cardBody}>{describeReward(milestone) || t('Unlocked')}</Text>
-                  </View>
-                </LinearGradient>
-              </FadeIn>
-            ))}
-
-            {s.inviteBonus ? (
-              <FadeIn index={4}>
-                <View style={[styles.card, styles.row, styles.milestoneCard]}>
-                  <View style={[styles.disc, styles.milestoneDisc]}>
-                    <Gift color={colors.gold} size={19} />
-                  </View>
-                  <View style={styles.flex}>
-                    <Text style={styles.cardTitle}>{t('Invite bonus')}</Text>
-                    <Text style={styles.cardBody}>
-                      {s.inviteBonus.inviterName
-                        ? t('+{energy} energy for your first workout, and {name} gets the same.', { energy: s.inviteBonus.energy, name: s.inviteBonus.inviterName })
-                        : t('+{energy} energy for your first workout.', { energy: s.inviteBonus.energy })}
-                    </Text>
-                  </View>
-                </View>
-              </FadeIn>
-            ) : null}
-
-            {s.freezeUsed ? (
-              <FadeIn index={4}>
-                <View style={[styles.card, styles.row, styles.waterCard]}>
-                  <View style={[styles.disc, { backgroundColor: 'rgba(143, 184, 217, 0.14)' }]}>
-                    <Snowflake color={colors.water} size={19} />
-                  </View>
-                  <View style={styles.flex}>
-                    <Text style={styles.cardTitle}>{t('Streak Freeze used')}</Text>
-                    <Text style={styles.cardBody}>{t('You missed a day, and a freeze kept your streak going.')}</Text>
-                  </View>
-                </View>
-              </FadeIn>
-            ) : null}
-
-            {/* The server decides what counts as a record (submit_sets), by
-                estimated one-rep max, so a heavy triple can beat a lighter ten. */}
-            {s.records?.length ? (
-              <FadeIn index={5}>
-                <View style={[styles.card, styles.goldCard]}>
-                  <View style={styles.sectionHead}>
-                    <View style={[styles.disc, { backgroundColor: colors.goldSoft }]}>
-                      <Trophy color={colors.gold} fill={colors.gold} size={17} />
-                    </View>
-                    <Text style={[styles.cardTitle, styles.flex]}>
-                      {s.records.length === 1 ? t('New personal record') : t('New personal records')}
-                    </Text>
-                    <View style={styles.countPill}>
-                      <Text style={styles.countText}>{s.records.length}</Text>
-                    </View>
-                  </View>
-                  {s.records.map((record) => (
-                    <View key={record.exercise_name} style={styles.listRow}>
-                      <Text style={[styles.listName, styles.flex]} numberOfLines={1}>{record.exercise_name}</Text>
-                      <Text style={styles.recordValue}>
-                        {formatWeight(record.weight_kg, units)} × {record.reps}
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              </FadeIn>
-            ) : null}
-
-            {s.achievements?.length ? (
-              <FadeIn index={6}>
-                <View style={[styles.card, styles.accentCard]}>
-                  <Text style={[styles.cardTitle, styles.cardTitleSpaced]}>
-                    {s.achievements.length === 1 ? t('Achievement unlocked') : t('Achievements unlocked')}
-                  </Text>
-                  {s.achievements.map((achievement) => (
-                    <View key={achievement.code} style={styles.listRow}>
-                      <View style={[styles.disc, { backgroundColor: colors.accentSoft }]}>
-                        <AchievementIcon name={achievement.icon} color={colors.accent} size={18} />
+                <Text style={styles.sectionLabel}>{t('Highlights')}</Text>
+                <View style={styles.group}>
+                  {highlights.map((item, i) => (
+                    <View key={item.key} style={[styles.highlight, i > 0 && styles.divider]}>
+                      <View style={styles.highlightIcon}>
+                        {item.icon || <item.Icon color={item.tint} fill={item.fill ? item.tint : 'transparent'} size={18} />}
                       </View>
                       <View style={styles.flex}>
-                        <Text style={styles.listName}>{achievement.name}</Text>
-                        <Text style={styles.cardBody}>{achievement.description}</Text>
+                        <Text style={styles.highlightTitle} numberOfLines={1}>{item.title}</Text>
+                        {item.body ? <Text style={styles.highlightBody}>{item.body}</Text> : null}
                       </View>
                     </View>
                   ))}
@@ -263,55 +177,25 @@ export default function WorkoutSummary({
               </FadeIn>
             ) : null}
 
-            <FadeIn index={6}>
-              <View style={styles.card}>
-                <View style={styles.sectionHead}>
-                  <Share2 color={colors.textMuted} size={16} />
-                  <Text style={[styles.cardTitle, styles.flex]}>{t('Share your workout')}</Text>
-                </View>
-                {/* The preview is the image: the same view is captured, so
-                    nothing about the shared picture is a surprise. */}
-                <View style={styles.sharePreview}>
-                  <WorkoutShareCard
-                    ref={cardRef}
-                    stats={s}
-                    workoutName={workoutName}
-                    units={units}
-                    firstName={profile?.first_name}
-                  />
-                </View>
-                <Button
-                  label={t('Share image')}
-                  variant="secondary"
-                  icon={<Share2 color={colors.text} size={18} />}
-                  onPress={share}
-                  loading={sharing}
-                />
-              </View>
-            </FadeIn>
-
             {canNote ? (
-              <FadeIn index={7}>
-                <View style={styles.card}>
-                  <View style={styles.sectionHead}>
-                    <MessageSquare color={colors.textMuted} size={16} />
-                    <Text style={[styles.cardTitle, styles.flex]}>{t('How did it go?')}</Text>
-                    <Text style={styles.optional}>{t('Optional')}</Text>
-                  </View>
-                  {/* Saved on blur rather than behind a button: a note nobody
-                      remembered to save is the same as no note. */}
-                  <TextInput
-                    style={styles.note}
-                    value={note}
-                    onChangeText={onChangeNote}
-                    onBlur={onSaveNote}
-                    placeholder={t('Add a note about this workout')}
-                    placeholderTextColor={colors.textFaint}
-                    selectionColor={colors.accent}
-                    multiline
-                    maxLength={280}
-                  />
+              <FadeIn index={5}>
+                <View style={styles.noteHead}>
+                  <Text style={styles.sectionLabel}>{t('How did it go?')}</Text>
+                  <Text style={styles.optional}>{t('Optional')}</Text>
                 </View>
+                {/* Saved on blur rather than behind a button: a note nobody
+                    remembered to save is the same as no note. */}
+                <TextInput
+                  style={styles.note}
+                  value={note}
+                  onChangeText={onChangeNote}
+                  onBlur={onSaveNote}
+                  placeholder={t('Add a note about this workout')}
+                  placeholderTextColor={colors.textFaint}
+                  selectionColor={colors.accent}
+                  multiline
+                  maxLength={280}
+                />
               </FadeIn>
             ) : null}
           </ScrollView>
@@ -322,98 +206,70 @@ export default function WorkoutSummary({
               style={styles.footerFade}
               pointerEvents="none"
             />
+            <Button
+              label={t('Share your workout')}
+              variant="secondary"
+              icon={<Share2 color={colors.text} size={18} />}
+              onPress={() => setSharingOpen(true)}
+            />
+            <View style={styles.footerGap} />
             <Button label={t('Continue')} onPress={finish} />
           </View>
         </SafeAreaView>
+
+        <ShareWorkoutSheet
+          visible={sharingOpen}
+          onClose={() => setSharingOpen(false)}
+          stats={s}
+          workoutName={workoutName}
+          units={units}
+        />
       </View>
     </Modal>
   );
 }
 
 /**
- * The badge. The one spring in the app allowed a little overshoot: everywhere
- * else a bounce reads as toy-like, but this is the moment that is meant to feel
- * like something landed.
+ * A check that lands once. The badge used to breathe, ringed by a halo and a
+ * pulsing circle, for as long as the screen was open — motion that asks to be
+ * looked at long after there is nothing new to see.
  */
 function Hero({ name, message }) {
-  const pop = useSharedValue(0);
-  const breathe = useSharedValue(0);
+  const { t } = useT();
+  const reduceMotion = useReducedMotion();
+  const pop = useSharedValue(reduceMotion ? 1 : 0);
 
   useEffect(() => {
-    pop.value = withSpring(1, { ...ENTER_SPRING, damping: 17 });
-    breathe.value = withDelay(
-      400,
-      withRepeat(withTiming(1, { duration: 2200, easing: Easing.inOut(Easing.quad) }), -1, true)
-    );
-    return () => {
-      cancelAnimation(pop);
-      cancelAnimation(breathe);
-    };
-  }, [pop, breathe]);
+    if (!reduceMotion) pop.value = withSpring(1, { ...ENTER_SPRING, damping: 16 });
+  }, [pop, reduceMotion]);
 
   const badge = useAnimatedStyle(() => ({
     opacity: pop.value,
-    transform: [{ scale: 0.5 + pop.value * 0.5 }],
-  }));
-  const ring = useAnimatedStyle(() => ({
-    opacity: pop.value * (0.35 + breathe.value * 0.3),
-    transform: [{ scale: 1 + breathe.value * 0.07 }],
-  }));
-  const halo = useAnimatedStyle(() => ({
-    opacity: pop.value * (0.1 + breathe.value * 0.1),
-    transform: [{ scale: 1.08 + breathe.value * 0.14 }],
+    transform: [{ scale: 0.6 + pop.value * 0.4 }],
   }));
 
   return (
     <View style={styles.hero}>
-      <View style={styles.badgeWrap}>
-        <Animated.View style={[styles.halo, halo]} />
-        <Animated.View style={[styles.ring, ring]} />
-        <Animated.View style={badge}>
-          <LinearGradient colors={gradients.accent} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.badge}>
-            <Check color={colors.onAccent} size={44} strokeWidth={3} />
-          </LinearGradient>
-        </Animated.View>
-      </View>
+      <Animated.View style={[styles.badge, badge]}>
+        <Check color={colors.accent} size={30} strokeWidth={2.5} />
+      </Animated.View>
 
       <FadeIn index={1} style={styles.heroCopy}>
-        <Text style={styles.eyebrow}>{tNow('WORKOUT COMPLETE')}</Text>
-        <Text style={styles.title} numberOfLines={2}>{name || tNow('Workout')}</Text>
+        <Text style={styles.eyebrow}>{t('Workout complete')}</Text>
+        <Text style={styles.title} numberOfLines={2}>{name || t('Workout')}</Text>
         {message ? <Text style={styles.message}>{message}</Text> : null}
       </FadeIn>
     </View>
   );
 }
 
-function StatTile({ icon: Icon, label, value, note }) {
+function Stat({ label, value, note }) {
   return (
-    <View style={styles.tile}>
-      <View style={styles.tileHead}>
-        <Icon color={colors.accent} size={14} />
-        <Text style={styles.tileLabel}>{label}</Text>
-      </View>
-      <Text style={styles.tileValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
-        {value}
-      </Text>
-      {note ? <Text style={styles.tileNote} numberOfLines={1}>{note}</Text> : null}
+    <View style={styles.stat}>
+      <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
+      {note ? <Text style={styles.statNote} numberOfLines={1}>{note}</Text> : null}
     </View>
-  );
-}
-
-function RewardTile({ icon: Icon, tone, value, label, delay = 0 }) {
-  return (
-    <LinearGradient
-      colors={[`${tone}29`, `${tone}08`]}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={[styles.reward, { borderColor: `${tone}45` }]}
-    >
-      <View style={[styles.disc, { backgroundColor: `${tone}24` }]}>
-        <Icon color={tone} fill={tone} size={17} />
-      </View>
-      <CountUp to={value} delay={delay} style={[styles.rewardValue, { color: tone }]} />
-      <Text style={styles.rewardLabel}>{label}</Text>
-    </LinearGradient>
   );
 }
 
@@ -421,7 +277,7 @@ function RewardTile({ icon: Icon, tone, value, label, delay = 0 }) {
  * Counts from zero to `to` over 900ms on an ease-out curve: fast at first, then
  * settling on the final figure, which is the one that has to be read.
  */
-function CountUp({ to, delay = 0, style }) {
+function CountUp({ to, delay = 0, suffix = '', style }) {
   const target = Math.max(0, Math.round(Number(to) || 0));
   const [shown, setShown] = useState(0);
 
@@ -435,113 +291,81 @@ function CountUp({ to, delay = 0, style }) {
     // frame costs a digit that is on screen for 16ms — not worth a native loop.
     const start = Date.now() + delay;
     const id = setInterval(() => {
-      const t = Math.min(1, Math.max(0, (Date.now() - start) / 900));
-      setShown(Math.round(target * (1 - (1 - t) ** 3)));
-      if (t >= 1) clearInterval(id);
+      const p = Math.min(1, Math.max(0, (Date.now() - start) / 900));
+      setShown(Math.round(target * (1 - (1 - p) ** 3)));
+      if (p >= 1) clearInterval(id);
     }, 16);
 
     return () => clearInterval(id);
   }, [target, delay]);
 
-  return <Text style={style}>+{shown.toLocaleString()}</Text>;
+  return <Text style={style}>+{shown.toLocaleString()}{suffix}</Text>;
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.background },
-  wash: { position: 'absolute', top: 0, left: 0, right: 0, height: 460 },
+  wash: { position: 'absolute', top: 0, left: 0, right: 0, height: 360 },
   safe: { flex: 1 },
-  scroll: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 32 },
+  scroll: { paddingHorizontal: 24, paddingTop: 28, paddingBottom: 32 },
   flex: { flex: 1 },
 
   // --- Hero ---
-  hero: { alignItems: 'center', marginTop: 8, marginBottom: 26 },
-  badgeWrap: { width: 156, height: 156, alignItems: 'center', justifyContent: 'center', marginBottom: 18 },
-  halo: { position: 'absolute', width: 156, height: 156, borderRadius: 78, backgroundColor: colors.accent },
-  ring: {
-    position: 'absolute', width: 126, height: 126, borderRadius: 63,
-    borderWidth: 1.5, borderColor: colors.accent,
-  },
+  hero: { alignItems: 'center', marginBottom: 34 },
   badge: {
-    width: 96, height: 96, borderRadius: 48, alignItems: 'center', justifyContent: 'center',
-    shadowColor: colors.accent, shadowOpacity: 0.55, shadowRadius: 24, shadowOffset: { width: 0, height: 6 },
-    elevation: 10,
+    width: 68, height: 68, borderRadius: 34, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.accentSoft, borderWidth: 1.5, borderColor: colors.accentBorder,
+    marginBottom: 20,
   },
   heroCopy: { alignItems: 'center' },
-  eyebrow: { color: colors.accent, fontSize: 12, fontWeight: '800', letterSpacing: 2.4 },
+  eyebrow: { color: colors.textMuted, fontSize: 14, fontWeight: '600' },
   title: {
     color: colors.text, fontSize: 30, fontWeight: '800', letterSpacing: -0.8,
-    lineHeight: 36, textAlign: 'center', marginTop: 8,
+    lineHeight: 36, textAlign: 'center', marginTop: 6,
   },
   message: {
     color: colors.textMuted, fontSize: 15, lineHeight: 22,
-    textAlign: 'center', marginTop: 10, paddingHorizontal: 16,
+    textAlign: 'center', marginTop: 10, paddingHorizontal: 12,
   },
 
-  // --- Stats ---
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 10 },
-  tile: {
-    flexBasis: '47%', flexGrow: 1,
-    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
-    borderRadius: 20, padding: 16,
-  },
-  tileHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  tileLabel: { color: colors.textMuted, fontSize: 11, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase' },
-  tileValue: {
-    color: colors.text, fontSize: 24, fontWeight: '800', letterSpacing: -0.6,
-    marginTop: 10, fontVariant: ['tabular-nums'],
-  },
-  tileNote: { color: colors.textFaint, fontSize: 11, marginTop: 3 },
+  // --- Stats: on the page, split by hairlines ---
+  stats: { marginBottom: 26 },
+  statsRow: { flexDirection: 'row' },
+  stat: { flex: 1, alignItems: 'center', paddingVertical: 16, paddingHorizontal: 8 },
+  statValue: { color: colors.text, fontSize: 26, fontWeight: '700', letterSpacing: -0.6, fontVariant: ['tabular-nums'] },
+  statLabel: { color: colors.textMuted, fontSize: 12, fontWeight: '600', marginTop: 4 },
+  statNote: { color: colors.textFaint, fontSize: 11, marginTop: 2 },
+  vrule: { width: StyleSheet.hairlineWidth, backgroundColor: colors.borderLight, marginVertical: 12 },
+  hrule: { height: StyleSheet.hairlineWidth, backgroundColor: colors.borderLight, marginHorizontal: 12 },
 
-  // --- Rewards ---
-  rewards: { flexDirection: 'row', gap: 10, marginBottom: 10 },
-  reward: { flex: 1, borderWidth: 1, borderRadius: 20, padding: 16 },
-  rewardValue: { fontSize: 30, fontWeight: '800', letterSpacing: -0.8, marginTop: 12, fontVariant: ['tabular-nums'] },
-  rewardLabel: { color: colors.textMuted, fontSize: 12, fontWeight: '600', marginTop: 2 },
+  // --- Earned ---
+  earned: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 30, paddingHorizontal: 8 },
+  earnedValue: { fontSize: 17, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  earnedDot: { color: colors.textFaint, fontSize: 17 },
+  queued: { flexShrink: 1, color: colors.textMuted, fontSize: 13, lineHeight: 18 },
 
-  // --- Cards ---
-  card: {
-    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
-    borderRadius: 20, padding: 16, marginBottom: 10,
+  // --- Highlights ---
+  sectionLabel: { color: colors.textMuted, fontSize: 13, fontWeight: '600', marginBottom: 10 },
+  group: {
+    backgroundColor: colors.card, borderRadius: 18, paddingHorizontal: 16,
+    borderWidth: 1, borderColor: colors.border, marginBottom: 28,
   },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  disc: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  cardTitle: { color: colors.text, fontSize: 15, fontWeight: '700', letterSpacing: -0.2 },
-  cardTitleSpaced: { marginBottom: 4 },
-  cardBody: { color: colors.textMuted, fontSize: 13, lineHeight: 18, marginTop: 3 },
-  sectionHead: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 },
-  listRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 11,
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border,
-  },
-  listName: { color: colors.text, fontSize: 14, fontWeight: '600' },
+  highlight: { flexDirection: 'row', alignItems: 'flex-start', gap: 14, paddingVertical: 14 },
+  divider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+  highlightIcon: { width: 20, alignItems: 'center', paddingTop: 1 },
+  highlightTitle: { color: colors.text, fontSize: 15, fontWeight: '600' },
+  highlightBody: { color: colors.textMuted, fontSize: 13, lineHeight: 18, marginTop: 2 },
 
-  streak: { flexDirection: 'row', alignItems: 'center', gap: 14, borderColor: 'rgba(224, 161, 122, 0.35)' },
-  streakDisc: {
-    width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: 'rgba(224, 161, 122, 0.16)',
-  },
-  streakLine: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
-  streakNumber: { color: colors.streak, fontSize: 34, fontWeight: '800', letterSpacing: -1, fontVariant: ['tabular-nums'] },
-  streakUnit: { color: colors.streak, fontSize: 15, fontWeight: '700' },
-
-  waterCard: { borderColor: 'rgba(143, 184, 217, 0.35)' },
-  milestoneCard: { borderColor: colors.goldBorder },
-  milestoneDisc: { backgroundColor: colors.goldSoft },
-  goldCard: { borderColor: 'rgba(222, 184, 102, 0.35)' },
-  accentCard: { borderColor: colors.accentBorder },
-  countPill: { backgroundColor: colors.goldSoft, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 2 },
-  countText: { color: colors.gold, fontSize: 12, fontWeight: '800' },
-  recordValue: { color: colors.gold, fontSize: 14, fontWeight: '700', fontVariant: ['tabular-nums'] },
-
+  // --- Note ---
+  noteHead: { flexDirection: 'row', justifyContent: 'space-between' },
   optional: { color: colors.textFaint, fontSize: 12 },
-  sharePreview: { alignItems: 'center', marginTop: 12, marginBottom: 14 },
   note: {
-    backgroundColor: colors.surface, color: colors.text,
-    borderRadius: 14, padding: 14, fontSize: 15, minHeight: 84,
-    textAlignVertical: 'top', marginTop: 8,
+    backgroundColor: colors.card, color: colors.text,
+    borderRadius: 14, padding: 14, fontSize: 15, minHeight: 76,
+    textAlignVertical: 'top', borderWidth: 1, borderColor: colors.border,
   },
 
   // --- Footer ---
   footer: { paddingHorizontal: 20, paddingTop: 6, paddingBottom: 12 },
   footerFade: { position: 'absolute', left: 0, right: 0, top: -36, height: 36 },
+  footerGap: { height: 10 },
 });

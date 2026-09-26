@@ -39,6 +39,17 @@ export const AVATARS = [
   { id: 'a5', name: 'Holographic',     price: 3000, type: 'holo',           color: '#00FFFF' },
   { id: 'a6', name: 'Hellfire',        price: 3500, type: 'inferno_avatar', color: '#FF4400' },
   { id: 'a7', name: 'The Void',        price: 5000, type: 'void',           color: '#333333' },
+  // Drawn as art around the avatar (src/lib/frames.js) rather than as a border.
+  { id: 'a8',  name: 'Circuit',     price: 1200, type: 'circuit', color: '#3FD0C9', isNew: true, desc: 'A live trace, six nodes lit' },
+  { id: 'a9',  name: 'Sakura',      price: 1600, type: 'sakura',  color: '#F2A7C3', isNew: true, desc: 'Cherry blossom in full bloom' },
+  { id: 'a10', name: 'Frostbite',   price: 2200, type: 'frost',   color: '#9ED6F5', isNew: true, desc: 'Ice shards and a cold glint' },
+  { id: 'a11', name: 'Laurel',      price: 2800, type: 'laurel',  color: '#DEB866', isNew: true, desc: 'The victor\'s wreath, in gold' },
+  { id: 'a12', name: 'Aurora',      price: 3800, type: 'aurora',  color: '#B38CF0', isNew: true, desc: 'Northern lights that slowly turn' },
+  // Real-money exclusives: price 0 because energy cannot buy them, and
+  // `exclusive` names the offer that includes them. Owned only when granted —
+  // the server's owns_cosmetic() checks the inventory for these.
+  { id: 'a13', name: 'Golden Apex', price: 0, type: 'apex',    color: '#DEB866', exclusive: 'starter', desc: 'Crowned, winged and gilded' },
+  { id: 'a14', name: 'Phoenix',     price: 0, type: 'phoenix', color: '#FF8A3D', exclusive: 'phoenix', desc: 'Rises in flame' },
 ];
 
 export const BADGES = [

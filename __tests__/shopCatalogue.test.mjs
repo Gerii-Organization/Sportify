@@ -10,9 +10,14 @@ import { RINGS, AVATARS, BADGES, TITLES, POWERUPS } from '../src/constants/cosme
  * every purchase of that item, forever.
  */
 
-const sql = readFileSync(new URL('../supabase/migrations/20260913_daily_shop.sql', import.meta.url), 'utf8');
-const rows = [...sql.matchAll(/\('([^']+)', '(ring|avatar|badge|title|powerup)', '([^']*)', (\d+)\)/g)]
-  .map(([, id, type, name, price]) => ({ id, type, name, price: Number(price) }));
+// Every migration that seeds shop_items, oldest first: a later row for the
+// same id replaces the earlier one, as `on conflict do update` does.
+const SEEDS = ['20260913_daily_shop.sql', '20260926_shop_frames.sql'];
+const rows = SEEDS.flatMap((file) => {
+  const sql = readFileSync(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8');
+  return [...sql.matchAll(/\('([^']+)', +'(ring|avatar|badge|title|powerup)', +'([^']*)', +(\d+)(?:, +(true|false))?\)/g)]
+    .map(([, id, type, name, price, iapOnly]) => ({ id, type, name, price: Number(price), iapOnly: iapOnly === 'true' }));
+});
 const seeded = new Map(rows.map((row) => [row.id, row]));
 
 const catalogue = [
@@ -23,9 +28,11 @@ const catalogue = [
   ...POWERUPS.map((item) => ({ ...item, type: 'powerup' })),
 ];
 
-test('the seed parses into one row per item', () => {
-  assert.ok(rows.length > 0, 'no rows found in the seed');
-  assert.equal(seeded.size, rows.length, 'duplicate ids in the seed');
+test('the seeds parse into rows', () => {
+  assert.ok(rows.length > 0, 'no rows found in the seeds');
+  for (const file of SEEDS) {
+    assert.ok(rows.length, `${file} seeds nothing`);
+  }
 });
 
 test('every item in the app is sold by the server at the same price', () => {
@@ -39,6 +46,15 @@ test('every item in the app is sold by the server at the same price', () => {
 
 test('the server sells nothing the app does not know about', () => {
   const known = new Set(catalogue.map((item) => item.id));
-  const extra = rows.filter((row) => !known.has(row.id)).map((row) => row.id);
+  const extra = [...seeded.values()].filter((row) => !known.has(row.id)).map((row) => row.id);
   assert.deepEqual(extra, []);
+});
+
+test('an exclusive in the app is money-only on the server, and only those are', () => {
+  // A frame the app calls exclusive but the server does not would be
+  // equippable by anyone (price 0 reads as free); the reverse would be a frame
+  // the app offers for energy and the server refuses to sell.
+  for (const item of catalogue) {
+    assert.equal(seeded.get(item.id).iapOnly, !!item.exclusive, `${item.id}: exclusive in the app is ${!!item.exclusive}, iap_only on the server is ${seeded.get(item.id).iapOnly}`);
+  }
 });

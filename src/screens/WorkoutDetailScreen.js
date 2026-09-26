@@ -808,21 +808,31 @@ export default function WorkoutDetailScreen({ route, navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       <LinearGradient colors={gradients.screen} style={styles.gradientBg}>
+        {/* 44-point buttons: the icons alone were 24-30 points with no
+            padding, small enough that a thumb landing a little off missed them. */}
         <View style={styles.detailHeader}>
-          <TouchableOpacity activeOpacity={0.7} onPress={handleBackPress} accessibilityLabel="Go back"><ChevronLeft color={colors.text} size={30} /></TouchableOpacity>
+          <TouchableOpacity activeOpacity={0.7} onPress={handleBackPress} style={styles.headerBtn} hitSlop={6} accessibilityLabel="Go back">
+            <ChevronLeft color={colors.text} size={24} />
+          </TouchableOpacity>
           {mode === 'started' ? (
             <View style={styles.timerHeader}><Clock color={colors.accent} size={20} /><Text style={styles.timerText}>{formatStopwatch(timer)}</Text></View>
           ) : (
-            <Text style={styles.detailTitle}>{currentWorkout?.name}</Text>
+            <Text style={styles.detailTitle} numberOfLines={1}>{currentWorkout?.name}</Text>
           )}
-          {mode === 'idle' && <TouchableOpacity activeOpacity={0.7} onPress={toggleEditMode} accessibilityLabel="Edit"><Edit3 color={colors.accent} size={24} /></TouchableOpacity>}
-          {/* Visibility moved to the workouts list: it is a decision about
-              which of your plans other people can see, and that is asked while
-              looking at all of them rather than from inside one. */}
-          {mode === 'editing' && (
-            <TouchableOpacity activeOpacity={0.7} onPress={toggleEditMode} accessibilityLabel="Save">
-              <Save color={colors.accent} size={24} />
+          {mode === 'idle' ? (
+            <TouchableOpacity activeOpacity={0.7} onPress={toggleEditMode} style={styles.headerBtn} hitSlop={6} accessibilityLabel="Edit">
+              <Edit3 color={colors.accent} size={20} />
             </TouchableOpacity>
+          ) : mode === 'editing' ? (
+            // Visibility moved to the workouts list: it is a decision about
+            // which of your plans other people can see, and that is asked while
+            // looking at all of them rather than from inside one.
+            <TouchableOpacity activeOpacity={0.7} onPress={toggleEditMode} style={[styles.headerBtn, styles.headerBtnOn]} hitSlop={6} accessibilityLabel="Save">
+              <Save color={colors.onAccent} size={20} />
+            </TouchableOpacity>
+          ) : (
+            // Keeps the timer centred while a workout runs.
+            <View style={styles.headerSpacer} />
           )}
         </View>
 
@@ -1216,8 +1226,14 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   gradientBg: { flex: 1 },
-  detailHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingTop: 15, borderBottomWidth: 1, borderBottomColor: colors.border },
-  detailTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
+  detailHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
+  headerBtn: {
+    width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
+  },
+  headerBtnOn: { backgroundColor: colors.accent, borderColor: colors.accent },
+  headerSpacer: { width: 44 },
+  detailTitle: { flex: 1, color: colors.text, fontSize: 18, fontWeight: '700', textAlign: 'center', letterSpacing: -0.3 },
   timerHeader: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(155, 157, 214, 0.1)', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24 },
   timerText: { color: colors.accent, fontSize: 17, fontWeight: '700', marginLeft: 10 },
   startBigBtn: { flexDirection: 'row', backgroundColor: colors.accent, margin: 20, padding: 20, borderRadius: 28, justifyContent: 'center', alignItems: 'center', shadowColor: colors.accent, shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },

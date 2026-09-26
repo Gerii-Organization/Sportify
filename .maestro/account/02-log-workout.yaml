@@ -1,0 +1,32 @@
+appId: com.vick1337.Sportify
+name: Start a routine, tick a set, finish
+tags:
+  - account
+---
+# Needs a test account with at least one routine. It saves a real session.
+- runFlow: 01-login.yaml
+- tapOn: "Train"
+- tapOn:
+    text: "Open .*"
+    index: 0
+- tapOn: "Start workout"
+- tapOn: "Mark set 1 done"
+- tapOn: "Finish workout"
+
+# Either confirmation can appear, depending on how much was left and how fast
+# it went; answer whichever shows.
+- runFlow:
+    when:
+      visible: "Finish early?"
+    commands:
+      - tapOn: "Finish"
+- runFlow:
+    when:
+      visible: "That was quick"
+    commands:
+      - tapOn: "Save"
+
+- extendedWaitUntil:
+    visible: "WORKOUT COMPLETE"
+    timeout: 30000
+- tapOn: "Continue"

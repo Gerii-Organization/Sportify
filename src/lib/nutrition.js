@@ -1,3 +1,5 @@
+import { ageOf } from './birthday';
+
 /**
  * The day's calorie and macro targets, from the profile.
  *
@@ -42,7 +44,7 @@ export function calorieTarget(profile) {
 
   const weight = weightOf(profile);
   const height = parseFloat(profile.height) || 170;
-  const age = parseInt(profile.age, 10) || 25;
+  const age = ageOf(profile) || 25;
   const workouts = parseInt(profile.workouts_per_week, 10) || 3;
 
   const bmr = 10 * weight + 6.25 * height - 5 * age + (profile.sex === 'F' ? -161 : 5);

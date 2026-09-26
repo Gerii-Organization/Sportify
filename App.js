@@ -33,9 +33,9 @@ import ChatScreen from './src/screens/ChatScreen';
 import GroupChatScreen from './src/screens/GroupChatScreen';
 import IntervalTimerScreen from './src/screens/IntervalTimerScreen';
 import BodyScreen from './src/screens/BodyScreen';
-import ChallengesScreen from './src/screens/ChallengesScreen';
 import { ConfirmProvider } from './src/components/ConfirmDialog';
 import { LanguageProvider, useT } from './src/i18n';
+import { applyAppFont, useAppFont } from './src/lib/fonts';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -77,7 +77,6 @@ const STACK_SCREENS = [
   { name: 'GroupChatScreen', component: GroupChatScreen, presentation: 'card' },
   { name: 'IntervalTimerScreen', component: IntervalTimerScreen, presentation: 'card' },
   { name: 'BodyScreen', component: BodyScreen, presentation: 'card' },
-  { name: 'ChallengesScreen', component: ChallengesScreen, presentation: 'card' },
 ];
 
 function MainTabs() {
@@ -104,6 +103,8 @@ function MainTabs() {
           options={{
             tabBarLabel: t(label),
             tabBarIcon: ({ color }) => <Icon color={color} size={22} />,
+            // A stable handle for the end-to-end flows, whatever the language.
+            tabBarButtonTestID: `tab-${name}`,
           }}
         />
       ))}
@@ -114,7 +115,17 @@ function MainTabs() {
 // Before anything renders, so a crash during the first paint is still reported.
 initCrashReporting();
 
+// The wrap has to be in place before the first Text renders, so it happens at
+// import time rather than in an effect.
+applyAppFont();
+
 export default function App() {
+  const fontReady = useAppFont();
+
+  // Held for the few frames the font files take to read, so the app does not
+  // appear in the system font and re-flow into Jakarta a moment later.
+  if (!fontReady) return <View style={styles.boot} />;
+
   return (
     // Outside the providers on purpose. A boundary inside them cannot catch an
     // error thrown while a provider is initialising, which is exactly when the
@@ -147,6 +158,7 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  boot: { flex: 1, backgroundColor: colors.background },
   tabBarTint: { backgroundColor: 'rgba(17, 19, 27, 0.78)' },
   tabBar: {
     position: 'absolute',

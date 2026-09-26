@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { 
-  StyleSheet, View, Text, TextInput, TouchableOpacity, 
-  FlatList, KeyboardAvoidingView, Platform, Alert, Modal, Image
+import {
+  StyleSheet, View, Text, TextInput, TouchableOpacity, FlatList, KeyboardAvoidingView, Platform, Alert, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChevronLeft, Send, Check, CheckCheck, X, Search, ImageIcon, Reply, Pencil, Trash2 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
+import CachedImage from '../components/CachedImage';
 import { unwrap } from '../lib/query';
 import ErrorState from '../components/ErrorState';
 import { REACTIONS, summarise, toggleLocally } from '../lib/reactions';
@@ -309,7 +309,7 @@ export default function ChatScreen({ route, navigation }) {
             ) : null}
 
             {/* Image messages carry an image_url instead of, or as well as, text. */}
-            {item.image_url && <Image source={{uri: item.image_url}} style={styles.chatImage} />}
+            {item.image_url && <CachedImage source={{ uri: item.image_url }} style={styles.chatImage} />}
             {item.content ? <Text style={[styles.messageText, isMe ? styles.myMessageText : styles.theirMessageText]}>{item.content}</Text> : null}
           </>
         )}

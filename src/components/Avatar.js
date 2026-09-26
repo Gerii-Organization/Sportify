@@ -1,8 +1,11 @@
-import { View, Image } from 'react-native';
+import { View } from 'react-native';
+import CachedImage from './CachedImage';
 import { User, Crown, Flame } from 'lucide-react-native';
 import { colors, levelTiers } from '../theme';
 import { getAvatar } from '../constants/cosmetics';
 import { levelFromXp } from '../lib/level';
+import { FRAME_ART_TYPES } from '../lib/frames';
+import FrameArt from './shop/FrameArt';
 
 /**
  * The one avatar renderer.
@@ -30,8 +33,12 @@ export default function Avatar({ profile, size = 46, rank, muted = false }) {
   let strokeColor = muted ? colors.textFaint : theme.color;
   let borderWidth = 1;
   let extra = {};
+  // Frames drawn as art bring their own ring, so the circle itself has none.
+  const artFrame = !muted && FRAME_ART_TYPES.includes(theme.type);
 
-  if (!muted) {
+  if (artFrame) {
+    borderWidth = 0;
+  } else if (!muted) {
     if (theme.type === 'holo') {
       borderWidth = 2;
       extra = { shadowColor: theme.color, shadowOpacity: 1, shadowRadius: 15 };
@@ -80,7 +87,7 @@ export default function Avatar({ profile, size = 46, rank, muted = false }) {
       ]}
     >
       {photo ? (
-        <Image
+        <CachedImage
           source={{ uri: photo }}
           // Inset by the border so the frame stays a frame rather than being
           // covered by the photo's corner.
@@ -95,6 +102,7 @@ export default function Avatar({ profile, size = 46, rank, muted = false }) {
         <User size={iconSize} color={iconColor} />
       )}
 
+      {artFrame ? <FrameArt type={theme.type} size={size} /> : null}
       {!muted && theme.type === 'royal' && (
         <Crown color={theme.color} size={iconSize * 0.8} fill="rgba(222, 184, 102, 0.3)" style={{ position: 'absolute', top: -size * 0.22 }} />
       )}

@@ -1,0 +1,25 @@
+appId: com.vick1337.Sportify
+name: Sign-up checks each answer before moving on
+tags:
+  - guest
+---
+# Walks the first step without creating anything: no account is made.
+- runFlow: ../common/launch.yaml
+- tapOn: "Open menu"
+- tapOn: "Log in or sign up"
+- tapOn: "Don't have an account\\? Sign up for free"
+- assertVisible: "Create your account"
+
+- tapOn: "Continue"
+- assertVisible: "Enter your email."
+
+- tapOn: "you@example.com"
+- inputText: "not-an-email"
+# Return blurs a single-line field and closes the keyboard; Maestro's
+# hideKeyboard is unreliable on iOS.
+- pressKey: Enter
+- waitForAnimationToEnd
+- tapOn: "Continue"
+- assertVisible: "That does not look like an email address."
+
+- tapOn: "Close"

@@ -32,6 +32,7 @@ import { weeklyTarget } from '../lib/split';
 import NewRoutineSheet from '../components/NewRoutineSheet';
 import { useConfirm } from '../components/ConfirmDialog';
 import { SkeletonRoutines } from '../components/Skeleton';
+import { ageOf } from '../lib/birthday';
 
 
 /** The heading above the list. Mine is the default, so it names itself. */
@@ -181,6 +182,14 @@ export default function TrainingScreen({ navigation }) {
   };
 
   const fetchPublicWorkouts = useCallback(async () => {
+    // browse_workouts is granted to signed-in users only, so a guest's call
+    // came back as an error the screen swallowed into "no shared routines".
+    if (!user) {
+      setPublicWorkouts([]);
+      setListError(null);
+      setBrowseLoading(false);
+      return;
+    }
     setBrowseLoading(true);
     // The muscle filter runs on the server. Filtering here would apply to the
     // 30 rows that already came back, so "Legs only" would quietly miss plans
@@ -200,7 +209,7 @@ export default function TrainingScreen({ navigation }) {
     } finally {
       setBrowseLoading(false);
     }
-  }, [browseMuscle, browseQuery, browseSort]);
+  }, [browseMuscle, browseQuery, browseSort, user]);
 
   const fetchSavedWorkouts = useCallback(async () => {
     setListError(null);
@@ -295,10 +304,10 @@ export default function TrainingScreen({ navigation }) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    const { data: profile } = await supabase.from('profiles').select('weight, age, sex, goal, workouts_per_week').eq('id', user.id).single();
+    const { data: profile } = await supabase.from('profiles').select('weight, age, birth_date, sex, goal, workouts_per_week').eq('id', user.id).single();
     
     const weight = parseFloat(profile?.weight) || 70;
-    const age = parseInt(profile?.age) || 25;
+    const age = ageOf(profile) || 25;
     const sex = (profile?.sex || 'M').toUpperCase();
     const goal = profile?.goal || 'build_muscle';
     const days = parseInt(profile?.workouts_per_week) || 3;
@@ -851,7 +860,15 @@ export default function TrainingScreen({ navigation }) {
               onAction={() => setView('browse')}
             />
           ) : view === 'browse' ? (
-            browseLoading ? null : (
+            browseLoading ? null : !user ? (
+              <EmptyState
+                icon={<Layout color={colors.textFaint} size={44} />}
+                title="Shared routines need an account"
+                message="Sign in to see routines other people have shared, and to share your own."
+                actionLabel="Sign in"
+                onAction={() => navigation.navigate('AuthScreen')}
+              />
+            ) : (
               <EmptyState
                 icon={<Layout color={colors.textFaint} size={44} />}
                 title={browseMuscle ? `No ${browseMuscle.toLowerCase()} routines` : 'No shared routines yet'}

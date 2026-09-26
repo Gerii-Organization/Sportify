@@ -24,7 +24,6 @@ export const SHARE_CARD_SIZE = { width: 270, height: 480 };
 
 const INK = '#F0F1F8';
 const MUTED = '#A9ABC6';
-const FAINT = '#6F7390';
 const PERIWINKLE = '#9B9DD6';
 const GOLD = '#DEB866';
 const TERRACOTTA = '#E0A17A';
@@ -85,11 +84,17 @@ const WorkoutShareCard = forwardRef(function WorkoutShareCard(
         <Text style={styles.name} numberOfLines={2}>{workoutName || 'Workout'}</Text>
       </View>
 
+      {/* Numbers on the card itself, split by hairlines, the way the summary
+          screen draws them — boxes inside a box read as a form. */}
       <View style={styles.grid}>
-        {tiles.map((tile) => (
-          <View key={tile.label} style={styles.tile}>
-            <Text style={styles.tileValue} numberOfLines={1} adjustsFontSizeToFit>{tile.value}</Text>
-            <Text style={styles.tileLabel}>{tile.label.toUpperCase()}</Text>
+        {[tiles.slice(0, 2), tiles.slice(2)].map((row, r) => (
+          <View key={r} style={[styles.gridRow, r > 0 && styles.gridRowRule]}>
+            {row.map((tile, i) => (
+              <View key={tile.label} style={[styles.tile, i > 0 && styles.tileRule]}>
+                <Text style={styles.tileValue} numberOfLines={1} adjustsFontSizeToFit>{tile.value}</Text>
+                <Text style={styles.tileLabel}>{tile.label}</Text>
+              </View>
+            ))}
           </View>
         ))}
       </View>
@@ -144,14 +149,13 @@ const styles = StyleSheet.create({
     lineHeight: 28, textAlign: 'center', marginTop: 6,
   },
 
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 26 },
-  tile: {
-    flexBasis: '47%', flexGrow: 1, paddingVertical: 11, paddingHorizontal: 12,
-    borderRadius: 14, backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderWidth: 1, borderColor: 'rgba(155, 157, 214, 0.14)',
-  },
-  tileValue: { color: INK, fontSize: 18, fontWeight: '800', letterSpacing: -0.4 },
-  tileLabel: { color: FAINT, fontSize: 8, fontWeight: '700', letterSpacing: 1, marginTop: 3 },
+  grid: { marginTop: 26 },
+  gridRow: { flexDirection: 'row' },
+  gridRowRule: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(155, 157, 214, 0.28)' },
+  tile: { flex: 1, alignItems: 'center', paddingVertical: 12, paddingHorizontal: 6 },
+  tileRule: { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: 'rgba(155, 157, 214, 0.28)' },
+  tileValue: { color: INK, fontSize: 19, fontWeight: '700', letterSpacing: -0.4 },
+  tileLabel: { color: MUTED, fontSize: 9, fontWeight: '600', marginTop: 3 },
 
   chips: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 6, marginTop: 14 },
   chip: {

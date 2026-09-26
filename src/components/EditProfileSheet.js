@@ -9,6 +9,8 @@ import {
 } from '../lib/units';
 import { GOALS, SEX_OPTIONS } from '../constants/content';
 import BottomSheet from './BottomSheet';
+import BirthDateInput from './BirthDateInput';
+import { parseBirthDate, splitBirthDate, birthDateError, ageOn } from '../lib/birthday';
 
 /**
  * Lets the user change the details they entered at sign-up.
@@ -27,7 +29,6 @@ import BottomSheet from './BottomSheet';
  * "between 66 and 661 lb" is the same rule stated in the reader's units.
  */
 const NUMERIC_FIELDS = [
-  { key: 'age',               label: 'Age',              min: 1,   max: 100, unit: 'years' },
   { key: 'weight',            label: 'Weight',           min: 30,  max: 300, unit: 'kg', decimal: true, metric: 'weight' },
   { key: 'height',            label: 'Height',           min: 100, max: 210, unit: 'cm', decimal: true, metric: 'height' },
   { key: 'workouts_per_week', label: 'Workouts per week', min: 1,  max: 7,   unit: 'sessions' },
@@ -73,7 +74,7 @@ export default function EditProfileSheet({ visible, onClose, profile, onSaved, i
     first_name: profile?.first_name ?? '',
     sex: profile?.sex ?? 'M',
     goal: profile?.goal ?? 'maintain',
-    age: String(profile?.age ?? ''),
+    birthDate: splitBirthDate(profile?.birth_date),
     weight: profile?.weight == null ? '' : String(toDisplayWeight(profile.weight, units, 0.1)),
     height: profile?.height == null ? '' : String(toDisplayHeight(profile.height, units)),
     workouts_per_week: String(profile?.workouts_per_week ?? ''),
@@ -86,6 +87,15 @@ export default function EditProfileSheet({ visible, onClose, profile, onSaved, i
   /** Returns an error message, or null when everything is valid. */
   const validate = () => {
     if (!form.first_name.trim()) return 'Please enter your name.';
+
+    // Optional for accounts made before birth dates were asked for: left
+    // empty, their typed age stays as it is. Once any box is filled, or a date
+    // was saved before, it has to be a real one.
+    const { day, month, year } = form.birthDate;
+    if (profile?.birth_date || day || month || year) {
+      const problem = birthDateError(form.birthDate);
+      if (problem) return problem;
+    }
 
     for (const field of NUMERIC_FIELDS) {
       // Checked on the stored value, so the rule is the same whichever unit it
@@ -107,7 +117,9 @@ export default function EditProfileSheet({ visible, onClose, profile, onSaved, i
       first_name: form.first_name.trim(),
       sex: form.sex,
       goal: form.goal,
-      age: parseInt(form.age, 10),
+      ...(parseBirthDate(form.birthDate)
+        ? { birth_date: parseBirthDate(form.birthDate), age: ageOn(parseBirthDate(form.birthDate)) }
+        : null),
       weight: store(fieldFor('weight'), form.weight),
       height: store(fieldFor('height'), form.height),
       workouts_per_week: parseInt(form.workouts_per_week, 10),
@@ -150,9 +162,12 @@ export default function EditProfileSheet({ visible, onClose, profile, onSaved, i
       </Section>
 
       <Section title="Measurements" note="Used for your calorie target. Nobody else sees these.">
-        {NUMERIC_FIELDS.filter((f) => ['age', 'weight', 'height'].includes(f.key)).map((field, i) => (
+        <Row label="Date of birth" stacked>
+          <BirthDateInput compact value={form.birthDate} onChange={(v) => setField('birthDate', v)} />
+        </Row>
+        {NUMERIC_FIELDS.filter((f) => ['weight', 'height'].includes(f.key)).map((field) => (
           <View key={field.key}>
-            {i > 0 && <Divider />}
+            <Divider />
             <Row label={field.label}>
               <TextInput
                 style={styles.rowInput}

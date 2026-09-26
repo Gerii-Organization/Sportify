@@ -58,9 +58,10 @@ export default function LeaderboardScreen({ embedded = false }) {
 
     try {
       if (!user) {
-        // The global board is public, so guests still get to see it.
+        // public_profiles is closed to anon (20260916), so a guest's query only
+        // ever came back "permission denied". Guests get a sign-in prompt.
         setMyId(null);
-        await fetchGlobalLeaderboard();
+        setLeaderboardData([]);
         return;
       }
       setMyId(user.id);
@@ -151,7 +152,6 @@ export default function LeaderboardScreen({ embedded = false }) {
   };
 
   const fetchGlobalLeaderboard = async () => {
-    // Seasons need an account to rank; guests see all-time XP.
     if (user && globalScope === 'season') {
       // Pays out last month's podium the first time anyone looks. Idempotent.
       await supabase.rpc('settle_last_season');
@@ -234,7 +234,15 @@ export default function LeaderboardScreen({ embedded = false }) {
     );
   };
 
-  const content = (
+  const content = !user ? (
+    <EmptyState
+      icon={<Trophy color={colors.textFaint} size={44} />}
+      title="Rankings need an account"
+      message="Sign in to see how you compare with your friends and everyone else training on Sportify."
+      actionLabel="Log in or sign up"
+      onAction={() => navigation.navigate('AuthScreen')}
+    />
+  ) : (
     <>
         {/* TOGGLE PENTRU CLASAMENTE */}
         <View style={styles.toggleContainerWrapper}>

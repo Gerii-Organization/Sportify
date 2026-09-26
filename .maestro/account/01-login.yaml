@@ -1,0 +1,25 @@
+appId: com.vick1337.Sportify
+name: Log in
+tags:
+  - account
+---
+# EMAIL and PASSWORD come from the command line (-e), never from this file.
+- runFlow: ../common/launch.yaml
+- tapOn: "Open menu"
+- tapOn: "Log in or sign up"
+- assertVisible: "Welcome back"
+- tapOn: "you@example.com"
+- inputText: ${EMAIL}
+- tapOn: "******"
+- inputText: ${PASSWORD}
+# Return blurs a single-line field and closes the keyboard; Maestro's
+# hideKeyboard is unreliable on iOS.
+- pressKey: Enter
+- waitForAnimationToEnd
+- tapOn: "Log in"
+- extendedWaitUntil:
+    notVisible: "Welcome back"
+    timeout: 20000
+- tapOn: "Open menu"
+- assertVisible: "Sign out"
+- tapOn: "Close menu"

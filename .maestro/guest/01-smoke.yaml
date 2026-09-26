@@ -1,0 +1,35 @@
+appId: com.vick1337.Sportify
+name: Guest can move around the app
+tags:
+  - guest
+  - smoke
+---
+- runFlow: ../common/launch.yaml
+
+# Tabs are found by testID: their labels are translated, and the accessible
+# name is "Train, tab, 3 of 5" rather than the word on screen.
+- tapOn:
+    id: "tab-Training"
+- assertVisible: "Interval timer"
+
+# The interval timer works without an account.
+- tapOn: "Interval timer"
+- assertVisible: "Tabata"
+- tapOn: "Start"
+- assertVisible: "GET READY"
+- tapOn: "Stop and reset"
+- assertVisible: "Tabata"
+- tapOn: "Go back"
+
+# Rankings need an account; a guest is asked to sign in, not shown an error.
+- tapOn:
+    id: "tab-Social"
+- tapOn: "Ranking"
+- assertVisible: "Rankings need an account"
+
+- tapOn:
+    id: "tab-Shop"
+- assertVisible: "Shop"
+- tapOn:
+    id: "tab-Dashboard"
+- assertVisible: "Open menu"

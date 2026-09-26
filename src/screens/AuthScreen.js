@@ -15,7 +15,9 @@ import { uploadPickedImage, pickImage } from '../lib/upload';
 import { Camera } from 'lucide-react-native';
 import { Image } from 'react-native';
 import { GOALS } from '../constants/content';
-import { SIGNUP_STEPS, WEEKLY_OPTIONS } from '../constants/onboarding';
+import { SIGNUP_STEPS, WEEKLY_OPTIONS, STEP_GOAL_OPTIONS, DEFAULT_STEP_GOAL } from '../constants/onboarding';
+import { parseBirthDate, ageOn } from '../lib/birthday';
+import BirthDateInput from '../components/BirthDateInput';
 import SplitPicker from '../components/SplitPicker';
 import { useT } from '../i18n';
 import { normaliseCode, REDEEM_ERRORS } from '../lib/invites';
@@ -48,23 +50,26 @@ export default function AuthScreen({ navigation, route }) {
    *  user id to store it under until signUp returns. */
   const [avatarUri, setAvatarUri] = useState(null);
   const [sex, setSex] = useState('');
-  const [age, setAge] = useState('');
+  const [birthDate, setBirthDate] = useState({ day: '', month: '', year: '' });
   const [weight, setWeight] = useState('');
   const [height, setHeight] = useState('');
   const [workouts, setWorkouts] = useState('');
   const [goal, setGoal] = useState('');
   const [split, setSplit] = useState([]);
+  const [stepGoal, setStepGoal] = useState(DEFAULT_STEP_GOAL);
 
   const toggleAuthMode = () => {
     setEmail(''); setPassword(''); setConfirmPassword('');
-    setFirstName(''); setSex(''); setAge(''); setWeight(''); setAvatarUri(null);
-    setHeight(''); setWorkouts(''); setGoal(''); setSplit([]);
+    setFirstName(''); setSex(''); setBirthDate({ day: '', month: '', year: '' }); setWeight(''); setAvatarUri(null);
+    setHeight(''); setWorkouts(''); setGoal(''); setSplit([]); setStepGoal(DEFAULT_STEP_GOAL);
     setStep(0); setStepError(null);
     setIsRegistering(!isRegistering);
   };
 
   /** Everything the step validators read, in one object. */
-  const form = { email, password, confirmPassword, firstName, age, sex, weight, height, workouts, goal, split };
+  const form = { email, password, confirmPassword, firstName, birthDate, sex, weight, height, workouts, goal, split, stepGoal };
+  /** Which question is on screen, by name: steps can be added without renumbering. */
+  const current = SIGNUP_STEPS[step].id;
 
   const goNext = () => {
     const error = SIGNUP_STEPS[step].validate(form);
@@ -95,11 +100,16 @@ export default function AuthScreen({ navigation, route }) {
 
       if (signUpError) Alert.alert('Error', signUpError.message);
       else if (user) {
+        const birth = parseBirthDate(birthDate);
         const { error: profileError } = await supabase.from('profiles').insert({
           id: user.id,
           first_name: firstName.trim(),
           sex: sex.trim().toUpperCase(),
-          age: parseInt(age),
+          // The age is derived from the date (also by a trigger), and kept for
+          // anything that still reads the column.
+          birth_date: birth,
+          age: ageOn(birth),
+          step_goal: stepGoal,
           // Stored metric whatever the boxes said, like everywhere else.
           weight: fromInputWeight(weight, units),
           height: fromInputHeight(height, units),
@@ -194,7 +204,7 @@ export default function AuthScreen({ navigation, route }) {
               <Text style={styles.note}>{t(SIGNUP_STEPS[step].note)}</Text>
 
               <View style={styles.form}>
-                {step === 0 && (
+                {current === 'account' && (
                   <>
                     <CustomInput label={t('Email')} value={email} onChange={setEmail} placeholder="you@example.com" autoCap="none" keyboard="email-address" />
                     <CustomInput label={t('Password')} value={password} onChange={setPassword} placeholder={t('At least 6 characters')} secure />
@@ -203,7 +213,7 @@ export default function AuthScreen({ navigation, route }) {
                   </>
                 )}
 
-                {step === 1 && (
+                {current === 'goal' && (
                   <View style={styles.goalGrid}>
                     {GOALS.map((g) => (
                       <TouchableOpacity
@@ -220,7 +230,7 @@ export default function AuthScreen({ navigation, route }) {
                   </View>
                 )}
 
-                {step === 2 && (
+                {current === 'about' && (
                   <>
                     {/* Optional, and said so. A required photo at sign-up is a
                         reason to close the app. */}
@@ -246,7 +256,10 @@ export default function AuthScreen({ navigation, route }) {
                     </TouchableOpacity>
 
                     <CustomInput label={t('First name')} value={firstName} onChange={setFirstName} placeholder="Victor" />
-                    <CustomInput label={t('Age')} value={age} onChange={setAge} placeholder="25" keyboard="numeric" />
+                    <Text style={styles.label}>{t('Date of birth')}</Text>
+                    <View style={styles.birthRow}>
+                      <BirthDateInput value={birthDate} onChange={(next) => { setBirthDate(next); setStepError(null); }} />
+                    </View>
                     <Text style={styles.label}>{t('Sex')}</Text>
                     <View style={styles.pickRow}>
                       {[['M', 'Male'], ['F', 'Female']].map(([value, label]) => (
@@ -265,7 +278,7 @@ export default function AuthScreen({ navigation, route }) {
                   </>
                 )}
 
-                {step === 3 && (
+                {current === 'body' && (
                   <>
                     {/* Guessed from the device region, and switchable right
                         here — someone typing 185 into a box labelled kg is a
@@ -305,11 +318,11 @@ export default function AuthScreen({ navigation, route }) {
                   </>
                 )}
 
-                {step === 5 && (
+                {current === 'split' && (
                   <SplitPicker value={split} perWeek={workouts} onChange={setSplit} />
                 )}
 
-                {step === 4 && (
+                {current === 'commitment' && (
                   <View style={styles.weekRow}>
                     {WEEKLY_OPTIONS.map((n) => (
                       <TouchableOpacity
@@ -326,13 +339,35 @@ export default function AuthScreen({ navigation, route }) {
                   </View>
                 )}
 
+                {current === 'steps' && (
+                  <View style={styles.stepList}>
+                    {STEP_GOAL_OPTIONS.map((n) => {
+                      const active = stepGoal === n;
+                      return (
+                        <TouchableOpacity
+                          key={n}
+                          activeOpacity={0.7}
+                          style={[styles.stepOption, active && styles.stepOptionActive]}
+                          onPress={() => { setStepGoal(n); setStepError(null); }}
+                          accessibilityRole="button"
+                          accessibilityLabel={t('{steps} steps a day', { steps: n.toLocaleString() })}
+                          accessibilityState={{ selected: active }}
+                        >
+                          <Text style={[styles.stepValue, active && styles.stepValueActive]}>{n.toLocaleString()}</Text>
+                          <Text style={[styles.stepHint, active && styles.stepHintActive]}>{t(STEP_GOAL_HINTS[n])}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+
                 {stepError ? <Text style={styles.error}>{t(stepError)}</Text> : null}
 
                 <TouchableOpacity activeOpacity={0.7} style={styles.mainButton} onPress={goNext} disabled={loading}>
                   {loading
                     ? <ActivityIndicator color={colors.onAccent} />
                     : <Text style={styles.mainButtonText}>
-                        {step === SIGNUP_STEPS.length - 1 ? 'Create account' : 'Continue'}
+                        {step === SIGNUP_STEPS.length - 1 ? t('Create account') : t('Continue')}
                       </Text>}
                 </TouchableOpacity>
 
@@ -363,6 +398,15 @@ export default function AuthScreen({ navigation, route }) {
     </KeyboardAvoidingView>
   );
 }
+
+/** One line under each step goal, so the numbers mean something. */
+const STEP_GOAL_HINTS = {
+  5000: 'An easy start',
+  7500: 'Most days active',
+  10000: 'The classic goal',
+  12500: 'Very active',
+  15000: 'On your feet all day',
+};
 
 function CustomInput({ label, value, onChange, placeholder, secure, autoCap, keyboard }) {
   return (
@@ -419,6 +463,17 @@ const styles = StyleSheet.create({
   pickText: { color: colors.textSecondary, fontSize: 15, fontWeight: '600' },
   pickTextActive: { color: colors.onAccent },
 
+  birthRow: { marginBottom: 20 },
+  stepList: { gap: 8, marginBottom: 10 },
+  stepOption: {
+    flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between',
+    backgroundColor: colors.surface, borderRadius: 16, paddingVertical: 16, paddingHorizontal: 18,
+  },
+  stepOptionActive: { backgroundColor: colors.accent },
+  stepValue: { color: colors.text, fontSize: 17, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  stepValueActive: { color: colors.onAccent },
+  stepHint: { color: colors.textMuted, fontSize: 13, fontWeight: '600' },
+  stepHintActive: { color: colors.onAccent },
   weekRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 6, marginBottom: 10 },
   weekPick: { flex: 1, aspectRatio: 1, backgroundColor: colors.surface, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   weekPickActive: { backgroundColor: colors.accent },

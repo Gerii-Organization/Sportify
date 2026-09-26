@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import {
-  View, Text, TextInput, ScrollView, Image, Modal, StyleSheet, Alert, ActivityIndicator, useWindowDimensions,
+  View, Text, TextInput, ScrollView, Modal, StyleSheet, Alert, ActivityIndicator, useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -22,6 +22,7 @@ import Press from '../components/Press';
 import FadeIn from '../components/FadeIn';
 import AmbientGlow from '../components/AmbientGlow';
 import ErrorState from '../components/ErrorState';
+import CachedImage from '../components/CachedImage';
 
 /**
  * Measurements and progress photos (roadmap T6).
@@ -276,7 +277,7 @@ export default function BodyScreen({ navigation }) {
                           accessibilityLabel={`${pose} photo from ${shortDate(photo.taken_on)}${picked ? ', selected' : ''}`}
                         >
                           {photo.url ? (
-                            <Image source={{ uri: photo.url }} style={styles.tileImage} />
+                            <CachedImage source={{ uri: photo.url }} style={styles.tileImage} recyclingKey={photo.path} />
                           ) : (
                             <View style={styles.tileMissing} />
                           )}
@@ -331,7 +332,7 @@ export default function BodyScreen({ navigation }) {
               {pair.map((photo, i) => (
                 <View key={photo.id} style={styles.compareSide}>
                   <Text style={styles.compareLabel}>{i === 0 ? 'Before' : 'After'}</Text>
-                  {photo.url ? <Image source={{ uri: photo.url }} style={styles.compareImage} resizeMode="cover" /> : null}
+                  {photo.url ? <CachedImage source={{ uri: photo.url }} style={styles.compareImage} resizeMode="cover" recyclingKey={photo.path} /> : null}
                   <Text style={styles.compareDate}>{shortDate(photo.taken_on)}</Text>
                 </View>
               ))}

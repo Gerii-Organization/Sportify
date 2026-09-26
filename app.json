@@ -37,7 +37,9 @@
         "android.permission.ACTIVITY_RECOGNITION",
         "android.permission.CAMERA",
         "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.POST_NOTIFICATIONS"
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.health.READ_HEART_RATE",
+        "android.permission.health.READ_ACTIVE_CALORIES_BURNED"
       ]
     },
     "web": {
@@ -79,11 +81,17 @@
         {
           "ios": {
             "buildReactNativeFromSource": true
+          },
+          "android": {
+            "minSdkVersion": 26
           }
         }
       ],
       "./plugins/withoutPushEntitlement",
-      "expo-sharing"
+      "expo-sharing",
+      "expo-image",
+      "react-native-health-connect",
+      "expo-font"
     ],
     "updates": {
       "url": "https://u.expo.dev/8cdb528c-17bb-428e-90d2-61ab83c4c0b8",

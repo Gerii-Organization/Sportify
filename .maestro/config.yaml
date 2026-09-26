@@ -1,0 +1,15 @@
+# End-to-end flows (roadmap Q2). Run with the app installed on a simulator,
+# emulator or device, and Metro running for a dev build:
+#
+#   npm run e2e:guest                       no account needed
+#   SPORTIFY_E2E_EMAIL=… SPORTIFY_E2E_PASSWORD=… npm run e2e:account
+#
+# The account flows sign in and log a real workout, so point them at a test
+# account, never a personal one. Flows match on the English text and the
+# accessibility labels the app already has; run them with the phone in English.
+#
+# Every flow starts from a reinstall (common/launch.yaml), which wipes the
+# app's data on that simulator: you will be signed out afterwards.
+flows:
+  - "guest/*"
+  - "account/*"

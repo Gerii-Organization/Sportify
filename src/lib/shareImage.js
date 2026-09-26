@@ -12,6 +12,37 @@
  * has not laid out yet) or 'failed'. Dismissing the share sheet is not a
  * failure.
  */
+/**
+ * Captures a rendered view to a temporary PNG without sharing it, for sending
+ * the same picture somewhere inside the app (a chat). Resolves
+ * `{ ok: true, uri }` or `{ ok: false, reason }` with the reasons above.
+ */
+export async function captureViewToFile(ref, { width, height } = {}) {
+  let captureRef;
+  try {
+    ({ captureRef } = require('react-native-view-shot'));
+  } catch {
+    return { ok: false, reason: 'unavailable' };
+  }
+  if (!ref?.current) return { ok: false, reason: 'not_ready' };
+
+  try {
+    const uri = await captureRef(ref, {
+      format: 'png',
+      quality: 1,
+      result: 'tmpfile',
+      ...(width && height ? { width, height } : null),
+    });
+    return { ok: true, uri };
+  } catch (error) {
+    const message = error?.message || '';
+    if (/null|undefined|not.*(linked|available)/i.test(message)) {
+      return { ok: false, reason: 'unavailable' };
+    }
+    return { ok: false, reason: 'failed', message };
+  }
+}
+
 export async function shareViewAsImage(ref, { dialogTitle = 'Share', width, height } = {}) {
   let captureRef;
   let Sharing;

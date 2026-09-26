@@ -1,0 +1,77 @@
+appId: com.vick1337.Sportify
+name: Launch signed out
+---
+# Every flow starts here: a fresh install, so nobody is signed in.
+#
+# clearState reinstalls the app, and a development build then opens on Expo's
+# launcher ("Development servers") instead of the app. When that screen shows,
+# a deep link points it at Metro and skips the dev menu's first-run popup
+# (disableOnboarding=1). A release build goes straight to the app and skips
+# both steps.
+#
+# Metro is at localhost for the iOS simulator and at 10.0.2.2 for the Android
+# emulator. On a physical phone, tap the server in the launcher by hand.
+#
+# The dev build's floating Tools button also starts at the top right, over the
+# app's menu button, and clearState forgets wherever it was dragged. It is
+# switched off from the dev menu it opens, until the next reinstall.
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: "Development servers|Open menu"
+    timeout: 30000
+- runFlow:
+    when:
+      platform: iOS
+      visible: "Development servers"
+    commands:
+      - openLink: "exp+sportify://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8081&disableOnboarding=1"
+- runFlow:
+    when:
+      platform: Android
+      visible: "Development servers"
+    commands:
+      - openLink: "exp+sportify://expo-development-client/?url=http%3A%2F%2F10.0.2.2%3A8081&disableOnboarding=1"
+# The first bundle after a reinstall can take a while to build. The dev menu's
+# first-run intro can still cover the app despite disableOnboarding, when the
+# bundle wins the race with the deep link.
+- extendedWaitUntil:
+    visible: "Open menu|This is the developer menu.*"
+    timeout: 90000
+- runFlow:
+    when:
+      visible: "This is the developer menu.*"
+    commands:
+      - tapOn: "Continue"
+      # Continue sometimes leaves the dev menu open and sometimes closes it and
+      # brings the Tools button back; let either settle before checking.
+      - waitForAnimationToEnd
+# Open the dev menu from the Tools button unless the intro left it open.
+- runFlow:
+    when:
+      visible:
+        id: "gearshape.fill"
+    commands:
+      - tapOn:
+          id: "gearshape.fill"
+      - extendedWaitUntil:
+          visible: "Go home"
+          timeout: 10000
+- runFlow:
+    when:
+      visible: "Go home"
+    commands:
+      - scrollUntilVisible:
+          element: "Tools button"
+      # The switch next to "Tools button". Without `below`, rightOf also
+      # matches the Fast refresh switch in the row above and turns that off.
+      - tapOn:
+          text: "1"
+          rightOf: "Tools button"
+          below: "Fast refresh"
+      - tapOn:
+          id: "xmark"
+      - waitForAnimationToEnd
+- assertVisible: "Open menu"
+- assertNotVisible:
+    id: "gearshape.fill"

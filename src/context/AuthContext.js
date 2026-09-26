@@ -5,6 +5,7 @@ import { flushQueue, pendingCount } from '../lib/pendingWorkouts';
 import { getSetting, setSetting } from '../lib/settings';
 import { normaliseUnit, detectUnit } from '../lib/units';
 import { identify } from '../lib/analytics';
+import { ageOn } from '../lib/birthday';
 
 /**
  * Session and profile, resolved once and shared.
@@ -32,6 +33,14 @@ export function AuthProvider({ children }) {
     }
     const { data } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
     setProfile(data ?? null);
+
+    // A birthday has passed since the stored age was written. The app works
+    // ages out from the date anyway (ageOf); this only rolls the column over
+    // for anything that still reads it. Not awaited: nothing waits on it.
+    const age = data?.birth_date ? ageOn(data.birth_date) : null;
+    if (age !== null && age !== data.age) {
+      supabase.from('profiles').update({ age }).eq('id', userId).then(() => {});
+    }
     return data ?? null;
   }, []);
 

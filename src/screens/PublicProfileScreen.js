@@ -4,16 +4,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
 import {
-  ChevronLeft, UserPlus, UserCheck, MessageCircle, Clock, Check, Flame, Users, Award,
-  TrendingUp, UserMinus, Ban, Ellipsis, Share2, Pencil, X, Star,
+  ChevronLeft, UserPlus, MessageCircle, Clock, Check, UserMinus, Ban, Ellipsis, Share2, Pencil, X,
 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors, gradients } from '../theme';
 import { levelFromXp, tierFor } from '../lib/level';
-import { getSocialCounts, toggleFollow, FOLLOW_ERRORS } from '../lib/social';
 import { formatRelativeDate, formatMonthYear } from '../lib/date';
 import { AchievementIcon } from '../lib/achievements';
 import { useAuth } from '../context/AuthContext';
+import { useT } from '../i18n';
 import Avatar from '../components/Avatar';
 import NameBadge from '../components/NameBadge';
 import EmptyState from '../components/EmptyState';
@@ -28,15 +27,14 @@ import { SkeletonProfile } from '../components/Skeleton';
 /**
  * Someone else's profile — or yours, as other people see it.
  *
- * Built around the relationship rather than the numbers. What you decide here
- * is whether to add, follow or message this person, so those actions sit
- * directly under their name, and what helps you decide — their tier, how
- * consistent they are, what they have unlocked, what they trained lately —
- * follows. The XP-to-next-level maths, friends list and records belong to
- * your own profile, where they are something to act on.
+ * Built around one decision: whether to add or message this person. That
+ * action sits under their name; what helps you decide follows, each fact drawn
+ * once — three numbers, the badges they have earned, their last few sessions.
+ * Level, tier and join date share one line instead of a pill and a caption.
  *
- * Remove and Block moved into the ⋯ menu. A red button beside "Message" made
- * the most destructive thing on the screen the easiest one to hit.
+ * Remove and Block live in the ⋯ menu. A red button beside "Message" made the
+ * most destructive thing on the screen the easiest one to hit. There is no
+ * Follow: the app has friends only.
  */
 
 const PRIMARY = {
@@ -46,7 +44,11 @@ const PRIMARY = {
   friends: { label: 'Message', Icon: MessageCircle, filled: true },
 };
 
+/** Recent sessions shown; the rest is their business. */
+const RECENT = 3;
+
 export default function PublicProfileScreen({ route, navigation }) {
+  const { t } = useT();
   const confirmAction = useConfirm();
   const { user } = useAuth();
   const { userId } = route.params;
@@ -58,7 +60,6 @@ export default function PublicProfileScreen({ route, navigation }) {
   /** Unlocked badges, newest first, with their catalogue name and icon. */
   const [badges, setBadges] = useState([]);
   const [badgeTotal, setBadgeTotal] = useState(0);
-  const [counts, setCounts] = useState(null);
   const [friendship, setFriendship] = useState(null);
   const [isBlocked, setIsBlocked] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -93,11 +94,10 @@ export default function PublicProfileScreen({ route, navigation }) {
 
       // Everything below is optional decoration on a profile that has already
       // loaded. None of it is allowed to turn the screen into an error.
-      const [workouts, social, catalogue, unlocked, pair] = await Promise.all([
+      const [workouts, catalogue, unlocked, pair] = await Promise.all([
         // Through an RPC: it returns four columns and refuses when either side
         // has blocked the other. The table itself is private.
         supabase.rpc('get_public_workouts', { p_user_id: userId }).then(({ data }) => data || []),
-        getSocialCounts(userId),
         supabase.from('achievements').select('code, name, icon, sort_order').then(({ data }) => data || []),
         supabase.from('user_achievements').select('code, unlocked_at').eq('user_id', userId).then(({ data }) => data || []),
         isSelf
@@ -118,11 +118,10 @@ export default function PublicProfileScreen({ route, navigation }) {
           .map((u) => ({ ...byCode.get(u.code), unlocked_at: u.unlocked_at }))
       );
       setBadgeTotal(catalogue.length);
-      setRecentWorkouts(workouts.slice(0, 5));
-      setCounts(social);
+      setRecentWorkouts(workouts.slice(0, RECENT));
       setFriendship(pair);
     } catch (e) {
-      setLoadError(e?.message || 'Something went wrong.');
+      setLoadError(e?.message || t('Something went wrong.'));
     } finally {
       setLoading(false);
     }
@@ -136,7 +135,7 @@ export default function PublicProfileScreen({ route, navigation }) {
         ? 'friends'
         : friendship.user_id === myId ? 'pending_sent' : 'pending_received';
 
-  const name = profile?.first_name || 'this athlete';
+  const name = profile?.first_name || t('this athlete');
 
   const sendRequest = async () => {
     const { data, error } = await supabase
@@ -144,27 +143,27 @@ export default function PublicProfileScreen({ route, navigation }) {
       .insert([{ user_id: myId, friend_id: userId, status: 'pending' }])
       .select()
       .single();
-    if (error) return Alert.alert('Could not send the request', error.message);
+    if (error) return Alert.alert(t('Could not send the request'), error.message);
     setFriendship(data);
   };
 
   const acceptRequest = async () => {
     const { error } = await supabase.from('friendships').update({ status: 'accepted' }).eq('id', friendship.id);
-    if (error) return Alert.alert('Could not accept', error.message);
+    if (error) return Alert.alert(t('Could not accept'), error.message);
     setFriendship((f) => ({ ...f, status: 'accepted' }));
   };
 
   const cancelRequest = async () => {
     const ok = await confirmAction({
       icon: X,
-      title: 'Cancel friend request?',
-      message: `${name} will no longer see your request.`,
-      confirmLabel: 'Cancel request',
-      cancelLabel: 'Keep it',
+      title: t('Cancel friend request?'),
+      message: t('{name} will no longer see your request.', { name }),
+      confirmLabel: t('Cancel request'),
+      cancelLabel: t('Keep it'),
     });
     if (!ok) return;
     const { error } = await supabase.from('friendships').delete().eq('id', friendship.id);
-    if (error) return Alert.alert('Could not cancel it', error.message);
+    if (error) return Alert.alert(t('Could not cancel it'), error.message);
     setFriendship(null);
   };
 
@@ -187,9 +186,9 @@ export default function PublicProfileScreen({ route, navigation }) {
     const ok = await confirmAction({
       tone: 'danger',
       icon: UserMinus,
-      title: `Remove ${name}?`,
-      message: 'You will no longer be friends. You can send a new request later.',
-      confirmLabel: 'Remove',
+      title: t('Remove {name}?', { name }),
+      message: t('You will no longer be friends. You can send a new request later.'),
+      confirmLabel: t('Remove'),
     });
     if (!ok) return;
     await supabase.from('friendships').delete().eq('id', friendship.id);
@@ -200,9 +199,9 @@ export default function PublicProfileScreen({ route, navigation }) {
     const ok = await confirmAction({
       tone: 'danger',
       icon: Ban,
-      title: `Block ${name}?`,
-      message: 'You will not be able to contact each other, and they will be removed from your friends.',
-      confirmLabel: 'Block',
+      title: t('Block {name}?', { name }),
+      message: t('You will not be able to contact each other, and they will be removed from your friends.'),
+      confirmLabel: t('Block'),
     });
     if (!ok) return;
     if (friendship) await supabase.from('friendships').delete().eq('id', friendship.id);
@@ -210,32 +209,17 @@ export default function PublicProfileScreen({ route, navigation }) {
     navigation.goBack();
   };
 
-  /** Optimistic: the count moves on tap and rolls back if the server refuses. */
-  const handleFollow = async () => {
-    if (!counts?.available || busy) return;
-    const before = counts;
-    setCounts({ ...before, iFollow: !before.iFollow, followers: before.followers + (before.iFollow ? -1 : 1) });
-
-    const result = await toggleFollow(userId);
-    if (!result.ok) {
-      setCounts(before);
-      Alert.alert('Could not update', FOLLOW_ERRORS[result.reason] || 'Please try again.');
-      return;
-    }
-    setCounts((c) => ({ ...c, iFollow: result.following }));
-  };
-
   const shareProfile = async () => {
     if (!profile) return;
     const level = levelFromXp(profile.xp);
     const streak = profile.current_streak || 0;
-    const facts = [`Level ${level} ${tierFor(level).name}`];
-    if (streak > 0) facts.push(`${streak}-day streak`);
+    const facts = [t('Level {level} {tier}', { level, tier: tierFor(level).name })];
+    if (streak > 0) facts.push(t('{count}-day streak', { count: streak }));
 
     try {
       await Share.share({
-        title: `${profile.first_name} on Sportify`,
-        message: `Check out ${profile.first_name} on Sportify: ${facts.join(' · ')}.`,
+        title: t('{name} on Sportify', { name: profile.first_name }),
+        message: t('Check out {name} on Sportify: {facts}.', { name: profile.first_name, facts: facts.join(' · ') }),
       });
     } catch {
       // Dismissing the share sheet is not an error.
@@ -252,11 +236,11 @@ export default function PublicProfileScreen({ route, navigation }) {
 
   const nav = (
     <View style={styles.nav}>
-      <Press scale={0.9} style={styles.navBtn} onPress={() => navigation.goBack()} accessibilityLabel="Go back">
+      <Press scale={0.9} style={styles.navBtn} onPress={() => navigation.goBack()} accessibilityLabel={t('Go back')}>
         <ChevronLeft color={colors.text} size={24} />
       </Press>
       {myId && !isSelf && profile && !isBlocked ? (
-        <Press scale={0.9} style={styles.navBtn} onPress={() => setMenuOpen(true)} accessibilityLabel="More options">
+        <Press scale={0.9} style={styles.navBtn} onPress={() => setMenuOpen(true)} accessibilityLabel={t('More options')}>
           <Ellipsis color={colors.text} size={22} />
         </Press>
       ) : (
@@ -284,8 +268,8 @@ export default function PublicProfileScreen({ route, navigation }) {
           <View style={styles.blockedIcon}>
             <Ban color={colors.textMuted} size={30} />
           </View>
-          <Text style={styles.blockedTitle}>Profile unavailable</Text>
-          <Text style={styles.blockedBody}>You cannot view this profile.</Text>
+          <Text style={styles.blockedTitle}>{t('Profile unavailable')}</Text>
+          <Text style={styles.blockedBody}>{t('You cannot view this profile.')}</Text>
         </View>
       </SafeAreaView>
     );
@@ -301,8 +285,8 @@ export default function PublicProfileScreen({ route, navigation }) {
         ) : (
           <EmptyState
             icon={<Ban color={colors.textFaint} size={44} />}
-            title="Profile not found"
-            message="This account may have been deleted."
+            title={t('Profile not found')}
+            message={t('This account may have been deleted.')}
           />
         )}
       </SafeAreaView>
@@ -314,10 +298,11 @@ export default function PublicProfileScreen({ route, navigation }) {
   const joined = formatMonthYear(profile.created_at);
   const primary = PRIMARY[friendStatus];
   const PrimaryIcon = primary?.Icon;
+  const friendsSince = formatMonthYear(friendship?.created_at);
   const relation = friendStatus === 'pending_received'
-    ? `${profile.first_name} sent you a friend request`
+    ? t('{name} sent you a friend request', { name: profile.first_name })
     : friendStatus === 'friends'
-      ? (formatMonthYear(friendship?.created_at) ? `Friends since ${formatMonthYear(friendship.created_at)}` : 'Friends')
+      ? (friendsSince ? t('Friends since {date}', { date: friendsSince }) : t('Friends'))
       : null;
 
   return (
@@ -325,7 +310,7 @@ export default function PublicProfileScreen({ route, navigation }) {
       <LinearGradient colors={gradients.screen} style={StyleSheet.absoluteFill} />
       {/* The top of the screen takes the colour of their tier: a Legend's
           profile should not open looking the same as a first-week account's. */}
-      <LinearGradient colors={[`${tier.color}38`, 'rgba(17, 19, 27, 0)']} style={styles.cover} pointerEvents="none" />
+      <LinearGradient colors={[`${tier.color}30`, 'rgba(17, 19, 27, 0)']} style={styles.cover} pointerEvents="none" />
       {nav}
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
@@ -337,7 +322,7 @@ export default function PublicProfileScreen({ route, navigation }) {
             </View>
           </View>
 
-          <Text style={styles.name} numberOfLines={1}>{profile.first_name || 'Athlete'}</Text>
+          <Text style={styles.name} numberOfLines={1}>{profile.first_name || t('Athlete')}</Text>
 
           {profile.equipped_title || profile.equipped_badge ? (
             <View style={styles.titleRow}>
@@ -346,26 +331,24 @@ export default function PublicProfileScreen({ route, navigation }) {
             </View>
           ) : null}
 
-          <View style={styles.metaRow}>
-            <View style={[styles.tierPill, { backgroundColor: `${tier.color}1F`, borderColor: `${tier.color}55` }]}>
-              <Text style={[styles.tierText, { color: tier.color }]}>{tier.name} · Level {level}</Text>
-            </View>
-            {joined ? <Text style={styles.joined}>Joined {joined}</Text> : null}
-          </View>
+          <Text style={styles.meta}>
+            <Text style={{ color: tier.color }}>{tier.name}</Text>
+            {joined ? `  ·  ${t('Joined {date}', { date: joined })}` : ''}
+          </Text>
 
           {relation ? <Text style={styles.relation}>{relation}</Text> : null}
 
           {isSelf ? (
             <>
-              <Text style={styles.selfNote}>This is how other people see your profile.</Text>
+              <Text style={styles.selfNote}>{t('This is how other people see your profile.')}</Text>
               <Press
                 scale={0.97}
                 style={[styles.actionBtn, styles.actionQuiet, styles.selfBtn]}
                 onPress={() => navigation.navigate('ProfileScreen')}
-                accessibilityLabel="Edit your profile"
+                accessibilityLabel={t('Edit your profile')}
               >
                 <Pencil color={colors.text} size={16} />
-                <Text style={styles.actionText}>Edit your profile</Text>
+                <Text style={styles.actionText}>{t('Edit your profile')}</Text>
               </Press>
             </>
           ) : myId && primary ? (
@@ -374,28 +357,13 @@ export default function PublicProfileScreen({ route, navigation }) {
                 scale={0.97}
                 style={[styles.actionBtn, styles.flex, primary.filled ? styles.actionFilled : styles.actionQuiet, busy && styles.busy]}
                 onPress={handlePrimary}
-                accessibilityLabel={primary.label}
+                accessibilityLabel={t(primary.label)}
               >
                 <PrimaryIcon color={primary.filled ? colors.onAccent : colors.text} size={17} />
-                <Text style={[styles.actionText, primary.filled && styles.actionTextFilled]}>{primary.label}</Text>
+                <Text style={[styles.actionText, primary.filled && styles.actionTextFilled]}>{t(primary.label)}</Text>
               </Press>
 
-              {counts?.available ? (
-                <Press
-                  scale={0.97}
-                  style={[styles.actionBtn, counts.iFollow ? styles.actionQuiet : styles.actionOutline]}
-                  onPress={handleFollow}
-                  accessibilityLabel={counts.iFollow ? `Unfollow ${name}` : `Follow ${name}`}
-                  accessibilityState={{ selected: counts.iFollow }}
-                >
-                  {counts.iFollow ? <UserCheck color={colors.text} size={16} /> : null}
-                  <Text style={[styles.actionText, !counts.iFollow && styles.actionTextAccent]}>
-                    {counts.iFollow ? 'Following' : 'Follow'}
-                  </Text>
-                </Press>
-              ) : null}
-
-              <Press scale={0.92} style={styles.iconBtn} onPress={shareProfile} accessibilityLabel={`Share ${name}'s profile`}>
+              <Press scale={0.92} style={styles.iconBtn} onPress={shareProfile} accessibilityLabel={t('Share {name}\'s profile', { name })}>
                 <Share2 color={colors.text} size={18} />
               </Press>
             </View>
@@ -404,26 +372,18 @@ export default function PublicProfileScreen({ route, navigation }) {
 
         <FadeIn index={1}>
           <View style={styles.stats}>
-            <Stat
-              icon={<Flame color={colors.streak} size={18} fill={profile.current_streak ? colors.streak : 'transparent'} />}
-              value={profile.current_streak || 0}
-              label="Day streak"
-            />
+            <Stat value={profile.current_streak || 0} label={t('Day streak')} />
             <View style={styles.rule} />
-            {counts?.available ? (
-              <Stat icon={<Users color={colors.accent} size={18} />} value={counts.followers} label="Followers" />
-            ) : (
-              <Stat icon={<Star color={colors.xp} size={18} fill={colors.xp} />} value={profile.xp || 0} label="Total XP" />
-            )}
+            <Stat value={profile.xp || 0} label={t('Total XP')} />
             <View style={styles.rule} />
-            <Stat icon={<Award color={colors.gold} size={18} />} value={badges.length} label="Badges" />
+            <Stat value={badges.length} label={t('Badges')} />
           </View>
         </FadeIn>
 
         <FadeIn index={2}>
           <View style={styles.sectionHead}>
-            <Text style={styles.sectionTitle}>Badges</Text>
-            {badgeTotal ? <Text style={styles.sectionAside}>{badges.length} of {badgeTotal}</Text> : null}
+            <Text style={styles.sectionTitle}>{t('Badges')}</Text>
+            {badgeTotal ? <Text style={styles.sectionAside}>{badges.length}/{badgeTotal}</Text> : null}
           </View>
           {badges.length ? (
             <ScrollView
@@ -435,69 +395,61 @@ export default function PublicProfileScreen({ route, navigation }) {
               {badges.map((badge) => (
                 <View key={badge.code} style={styles.badge}>
                   <View style={styles.badgeCircle}>
-                    <AchievementIcon name={badge.icon} size={22} color={colors.gold} />
+                    <AchievementIcon name={badge.icon} size={21} color={colors.gold} />
                   </View>
                   <Text style={styles.badgeName} numberOfLines={2}>{badge.name}</Text>
                 </View>
               ))}
             </ScrollView>
           ) : (
-            <View style={[styles.card, styles.emptyCard]}>
-              <Text style={styles.emptyText}>
-                {isSelf ? 'You have not unlocked a badge yet.' : `${profile.first_name || 'They'} has not unlocked a badge yet.`}
-              </Text>
-            </View>
+            <Text style={styles.emptyText}>
+              {isSelf ? t('You have not unlocked a badge yet.') : t('{name} has not unlocked a badge yet.', { name: profile.first_name || t('Athlete') })}
+            </Text>
           )}
         </FadeIn>
 
         <FadeIn index={3}>
           <View style={styles.sectionHead}>
-            <Text style={styles.sectionTitle}>Recent activity</Text>
+            <Text style={styles.sectionTitle}>{t('Recent activity')}</Text>
           </View>
           {recentWorkouts.length ? (
-            recentWorkouts.map((w, i) => (
-              <View key={w.id || i} style={[styles.card, styles.activityRow]}>
-                <View style={styles.activityIcon}>
-                  <TrendingUp color={colors.accent} size={18} />
-                </View>
-                <View style={styles.flex}>
-                  <Text style={styles.rowTitle} numberOfLines={1}>{w.workout_name}</Text>
-                  <Text style={styles.rowMeta}>{formatRelativeDate(w.completed_at)}</Text>
-                </View>
-                {w.duration_minutes ? (
-                  <View style={styles.durationPill}>
-                    <Text style={styles.durationText}>{w.duration_minutes} min</Text>
+            <View style={styles.group}>
+              {recentWorkouts.map((w, i) => (
+                <View key={w.id || i} style={[styles.activityRow, i > 0 && styles.divider]}>
+                  <View style={styles.flex}>
+                    <Text style={styles.rowTitle} numberOfLines={1}>{w.workout_name}</Text>
+                    <Text style={styles.rowMeta}>{formatRelativeDate(w.completed_at)}</Text>
                   </View>
-                ) : null}
-              </View>
-            ))
-          ) : (
-            <View style={[styles.card, styles.emptyCard]}>
-              <Text style={styles.emptyText}>No recent workouts.</Text>
+                  {w.duration_minutes ? (
+                    <Text style={styles.duration}>{w.duration_minutes} min</Text>
+                  ) : null}
+                </View>
+              ))}
             </View>
+          ) : (
+            <Text style={styles.emptyText}>{t('No recent workouts.')}</Text>
           )}
         </FadeIn>
       </ScrollView>
 
       <BottomSheet visible={menuOpen} onClose={() => setMenuOpen(false)} title={profile.first_name} avoidKeyboard={false}>
-        <MenuRow icon={Share2} label="Share profile" onPress={fromMenu(shareProfile)} />
+        <MenuRow icon={Share2} label={t('Share profile')} onPress={fromMenu(shareProfile)} />
         {friendStatus === 'pending_sent' ? (
-          <MenuRow icon={X} label="Cancel friend request" onPress={fromMenu(cancelRequest)} />
+          <MenuRow icon={X} label={t('Cancel friend request')} onPress={fromMenu(cancelRequest)} />
         ) : null}
         {friendStatus === 'friends' ? (
-          <MenuRow icon={UserMinus} label="Remove friend" danger onPress={fromMenu(handleUnfriend)} />
+          <MenuRow icon={UserMinus} label={t('Remove friend')} danger onPress={fromMenu(handleUnfriend)} />
         ) : null}
-        <MenuRow icon={Ban} label={`Block ${profile.first_name || 'user'}`} danger onPress={fromMenu(handleBlock)} last />
+        <MenuRow icon={Ban} label={t('Block {name}', { name: profile.first_name || t('Athlete') })} danger onPress={fromMenu(handleBlock)} last />
       </BottomSheet>
     </SafeAreaView>
   );
 }
 
-function Stat({ icon, value, label }) {
+function Stat({ value, label }) {
   return (
     <View style={styles.statCell}>
-      {icon}
-      <Text style={styles.statValue}>{Number(value || 0).toLocaleString()}</Text>
+      <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit>{Number(value || 0).toLocaleString()}</Text>
       <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
@@ -524,13 +476,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4,
   },
   navBtn: {
-    width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center',
+    width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center',
     backgroundColor: 'rgba(25, 28, 40, 0.75)', borderWidth: 1, borderColor: colors.border,
   },
-  navSpacer: { width: 40 },
+  navSpacer: { width: 44 },
   scroll: { paddingHorizontal: 20, paddingBottom: 60 },
 
-  hero: { alignItems: 'center', paddingTop: 4, paddingBottom: 20 },
+  // --- Hero ---
+  hero: { alignItems: 'center', paddingTop: 4 },
   avatarWrap: { width: 96, height: 96, alignItems: 'center', justifyContent: 'center' },
   levelChip: {
     position: 'absolute', right: -6, bottom: -4,
@@ -539,27 +492,22 @@ const styles = StyleSheet.create({
     borderWidth: 3, borderColor: colors.background,
   },
   levelChipText: { color: colors.onAccent, fontSize: 13, fontWeight: '900', fontVariant: ['tabular-nums'] },
-  name: { color: colors.text, fontSize: 28, fontWeight: '800', letterSpacing: -0.7, marginTop: 14 },
+  name: { color: colors.text, fontSize: 26, fontWeight: '800', letterSpacing: -0.6, marginTop: 14 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
   title: { color: colors.accent, fontSize: 14, fontWeight: '600' },
-  metaRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 12 },
-  tierPill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 4 },
-  tierText: { fontSize: 12, fontWeight: '800', letterSpacing: 0.2 },
-  joined: { color: colors.textFaint, fontSize: 12, fontWeight: '600' },
-  relation: { color: colors.textSecondary, fontSize: 13, fontWeight: '600', marginTop: 10 },
+  meta: { color: colors.textFaint, fontSize: 13, fontWeight: '600', marginTop: 10 },
+  relation: { color: colors.textSecondary, fontSize: 13, fontWeight: '600', marginTop: 8 },
   selfNote: { color: colors.textMuted, fontSize: 13, textAlign: 'center', marginTop: 14 },
 
-  actions: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18, alignSelf: 'stretch' },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 20, alignSelf: 'stretch' },
   actionBtn: {
     height: 48, borderRadius: 24, paddingHorizontal: 18,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
   },
   actionFilled: { backgroundColor: colors.accent },
   actionQuiet: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border },
-  actionOutline: { borderWidth: 1, borderColor: colors.accentBorder },
   actionText: { color: colors.text, fontSize: 15, fontWeight: '700' },
   actionTextFilled: { color: colors.onAccent },
-  actionTextAccent: { color: colors.accent },
   busy: { opacity: 0.6 },
   iconBtn: {
     width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center',
@@ -567,40 +515,36 @@ const styles = StyleSheet.create({
   },
   selfBtn: { marginTop: 12, alignSelf: 'center' },
 
-  stats: {
-    flexDirection: 'row', backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
-    borderRadius: 22, paddingVertical: 16, marginTop: 4,
-  },
-  statCell: { flex: 1, alignItems: 'center' },
-  statValue: { color: colors.text, fontSize: 20, fontWeight: '800', letterSpacing: -0.4, marginTop: 6, fontVariant: ['tabular-nums'] },
-  statLabel: { color: colors.textMuted, fontSize: 11, fontWeight: '700', letterSpacing: 0.5, textTransform: 'uppercase', marginTop: 2 },
-  rule: { width: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginVertical: 6 },
+  // --- Stats: on the page, not in a card ---
+  stats: { flexDirection: 'row', marginTop: 28 },
+  statCell: { flex: 1, alignItems: 'center', paddingVertical: 4 },
+  statValue: { color: colors.text, fontSize: 22, fontWeight: '800', letterSpacing: -0.5, fontVariant: ['tabular-nums'] },
+  statLabel: { color: colors.textMuted, fontSize: 12, fontWeight: '600', marginTop: 4 },
+  rule: { width: StyleSheet.hairlineWidth, backgroundColor: colors.borderLight, marginVertical: 6 },
 
-  sectionHead: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 24, marginBottom: 10 },
-  sectionTitle: { color: colors.text, fontSize: 18, fontWeight: '800', letterSpacing: -0.4 },
+  sectionHead: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 30, marginBottom: 12 },
+  sectionTitle: { color: colors.text, fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
   sectionAside: { color: colors.textFaint, fontSize: 13, fontWeight: '600', fontVariant: ['tabular-nums'] },
 
   bleed: { marginHorizontal: -20 },
   badgeRow: { paddingHorizontal: 20, gap: 12 },
-  badge: { width: 76, alignItems: 'center' },
+  badge: { width: 72, alignItems: 'center' },
   badgeCircle: {
-    width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center',
+    width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center',
     backgroundColor: colors.goldSoft, borderWidth: 1, borderColor: colors.goldBorder,
   },
-  badgeName: { color: colors.text, fontSize: 11, fontWeight: '600', textAlign: 'center', marginTop: 8 },
+  badgeName: { color: colors.textSecondary, fontSize: 11, fontWeight: '600', textAlign: 'center', marginTop: 8 },
 
-  card: {
-    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
-    borderRadius: 20, padding: 16, marginBottom: 8,
+  group: {
+    backgroundColor: colors.card, borderRadius: 18, paddingHorizontal: 16,
+    borderWidth: 1, borderColor: colors.border,
   },
-  emptyCard: { alignItems: 'center', paddingVertical: 18 },
-  emptyText: { color: colors.textMuted, fontSize: 13, textAlign: 'center' },
-  activityRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14 },
-  activityIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accentSoft },
+  divider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+  emptyText: { color: colors.textMuted, fontSize: 13 },
+  activityRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 13 },
   rowTitle: { color: colors.text, fontSize: 15, fontWeight: '600' },
-  rowMeta: { color: colors.textMuted, fontSize: 12, marginTop: 3 },
-  durationPill: { backgroundColor: colors.surface, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5 },
-  durationText: { color: colors.accent, fontSize: 12, fontWeight: '700' },
+  rowMeta: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
+  duration: { color: colors.textSecondary, fontSize: 13, fontWeight: '600', fontVariant: ['tabular-nums'] },
 
   centerBox: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40 },
   blockedIcon: {

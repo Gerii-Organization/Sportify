@@ -1,3 +1,5 @@
+import { ageOf } from './birthday';
+
 /**
  * Calories for a finished session, from the best source available (roadmap T7).
  *
@@ -70,7 +72,7 @@ export function pickBurn({ activeKcal, avgHeartRate, minutes, profile, estimateK
   }
 
   const perMinute = avgHeartRate
-    ? keytelKcalPerMinute({ heartRate: avgHeartRate, weightKg: profile?.weight, age: profile?.age, sex: profile?.sex })
+    ? keytelKcalPerMinute({ heartRate: avgHeartRate, weightKg: profile?.weight, age: ageOf(profile), sex: profile?.sex })
     : null;
   const mins = Number(minutes) || 0;
   if (perMinute && mins > 0) {
