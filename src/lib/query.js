@@ -21,3 +21,22 @@ export async function unwrap(query) {
 
 /** Same, for `supabase.rpc(...)`. Reads better at the call site. */
 export const unwrapRpc = unwrap;
+
+/**
+ * A failed write, as a sentence for an Alert.
+ *
+ * Postgres messages ("new row for relation \"profiles\" violates check
+ * constraint \"profiles_weight_check\"") were shown to people as they were.
+ * The SQLSTATE class says which of three things happened: the value was
+ * refused, the row was not yours, or the request never arrived.
+ */
+export function writeErrorMessage(error) {
+  const code = String(error?.code || '');
+  if (code.startsWith('22') || code === '23514' || code === '23502') {
+    return 'One of the values was not accepted. Check your details and try again.';
+  }
+  if (code === '42501' || code === 'PGRST301') {
+    return 'You do not have permission to do that. Try signing in again.';
+  }
+  return 'Check your connection and try again.';
+}

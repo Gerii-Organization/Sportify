@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, AppState, Vibration, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ChevronLeft, Minus, Plus, Pause, Play, RotateCcw } from 'lucide-react-native';
+import { ChevronLeft, Minus, Plus, Pause, Play, RotateCcw, Timer } from 'lucide-react-native';
 import { colors, gradients, spacing } from '../theme';
 import {
   MODES, DEFAULTS, buildPlan, stateAt, totalSeconds, roundsIn, elapsedOf, formatClock, normaliseSettings,
@@ -12,6 +12,7 @@ import ProgressArc from '../components/ProgressArc';
 import Button from '../components/Button';
 import Press from '../components/Press';
 import AmbientGlow from '../components/AmbientGlow';
+import { useConfirm } from '../components/ConfirmDialog';
 
 /**
  * EMOM, AMRAP and Tabata on one screen (roadmap T4).
@@ -53,6 +54,7 @@ const PHASE = {
 };
 
 export default function IntervalTimerScreen({ navigation }) {
+  const confirmAction = useConfirm();
   const [mode, setMode] = useState('tabata');
   const [settings, setSettings] = useState(DEFAULTS);
   /** `{ startedAt, pausedAt, pausedMs }` while a session exists, else null. */
@@ -106,20 +108,52 @@ export default function IntervalTimerScreen({ navigation }) {
 
   // The one cue that reaches a locked phone: the end of the session.
   const alertId = useRef(null);
+  /**
+   * Scheduling is asynchronous. A pause, reset or exit before it resolved
+   * cancelled nothing — the id was not back yet — and "Tabata finished"
+   * arrived later for a timer that no longer existed. Each schedule carries a
+   * number; one that resolves after being superseded cancels itself.
+   */
+  const alertSeq = useRef(0);
   const clearAlert = () => {
+    alertSeq.current += 1;
     cancel(alertId.current);
     alertId.current = null;
   };
   const scheduleEnd = (secondsLeft) => {
     clearAlert();
     if (secondsLeft < 5) return;
+    const mine = alertSeq.current;
     schedule({
       title: `${MODE_INFO[mode].label} finished`,
       body: 'Nice work. Log it or start another round.',
       seconds: Math.round(secondsLeft),
-    }).then((id) => { alertId.current = id; });
+    }).then((id) => {
+      if (mine === alertSeq.current) alertId.current = id;
+      else cancel(id);
+    });
   };
-  useEffect(() => () => cancel(alertId.current), []);
+  useEffect(() => () => {
+    alertSeq.current += 1;
+    cancel(alertId.current);
+  }, []);
+
+  // Back used to throw away a timer mid-round without a word.
+  const active = !!clock && !state.done;
+  useEffect(() => {
+    if (!active) return undefined;
+    return navigation.addListener('beforeRemove', (e) => {
+      e.preventDefault();
+      confirmAction({
+        tone: 'danger',
+        icon: Timer,
+        title: 'Stop the timer?',
+        message: 'The session in progress ends here.',
+        confirmLabel: 'Stop',
+        cancelLabel: 'Keep going',
+      }).then((ok) => { if (ok) navigation.dispatch(e.data.action); });
+    });
+  }, [active, navigation, confirmAction]);
 
   const start = () => {
     const startedAt = Date.now();
@@ -163,7 +197,7 @@ export default function IntervalTimerScreen({ navigation }) {
             <ChevronLeft color={colors.text} size={24} />
           </Press>
           <Text style={styles.navTitle}>Interval timer</Text>
-          <View style={styles.backBtn} />
+          <View style={{ width: 40 }} />
         </View>
 
         {!clock ? (
@@ -175,7 +209,7 @@ export default function IntervalTimerScreen({ navigation }) {
                   scale={0.97}
                   onPress={() => setMode(m)}
                   style={[styles.mode, mode === m && styles.modeOn]}
-                  accessibilityRole="button"
+                  accessibilityRole="tab"
                   accessibilityState={{ selected: mode === m }}
                 >
                   <Text style={[styles.modeText, mode === m && styles.modeTextOn]}>{MODE_INFO[m].label}</Text>
@@ -188,7 +222,17 @@ export default function IntervalTimerScreen({ navigation }) {
               {FIELDS[mode].map((field, i) => (
                 <View key={field.key} style={[styles.field, i > 0 && styles.fieldBorder]}>
                   <Text style={styles.fieldLabel}>{field.label}</Text>
-                  <View style={styles.stepper}>
+                  {/* One adjustable control to VoiceOver — swipe up or down —
+                      rather than a minus, a number and a plus read separately. */}
+                  <View
+                    style={styles.stepper}
+                    accessible
+                    accessibilityRole="adjustable"
+                    accessibilityLabel={field.label}
+                    accessibilityValue={{ text: field.format(current[field.key]) }}
+                    accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
+                    onAccessibilityAction={(e) => adjust(field.key, e.nativeEvent.actionName === 'increment' ? field.step : -field.step)}
+                  >
                     <Press hitSlop={4}
                       scale={0.9}
                       onPress={() => adjust(field.key, -field.step)}

@@ -26,4 +26,5 @@ export default {
   '{count} exercise': { one: '{count} exercise', other: '{count} exercises' },
   'Show {count} more quests': { one: 'Show {count} more quest', other: 'Show {count} more quests' },
   '{count} workouts logged': { one: '{count} workout logged', other: '{count} workouts logged' },
+  'Train for {count} minutes': { one: 'Train for {count} minute', other: 'Train for {count} minutes' },
 };

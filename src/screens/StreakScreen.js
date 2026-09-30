@@ -30,9 +30,11 @@ import { SkeletonCalendar } from '../components/Skeleton';
  * circles make those two identical.
  */
 const WEEKDAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+/** A guest's calendar: the RPC is for accounts, and refused them with an error. */
+const GUEST = { days: [], current: 0, longest: 0, total: 0 };
 
 export default function StreakScreen({ navigation }) {
-  const { profile } = useAuth();
+  const { user, profile } = useAuth();
   const [offset, setOffset] = useState(0);
 
   const month = useMemo(() => {
@@ -45,13 +47,14 @@ export default function StreakScreen({ navigation }) {
   // Unwrapped, so a failed month throws instead of coming back as `null` — and
   // `null` here would draw an empty calendar, which for a streak screen is not
   // a blank state but a claim that you never trained.
-  const load = useCallback(() => {
+  const load = useCallback(async () => {
+    if (!user) return GUEST;
     const key = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}-01`;
     return unwrap(supabase.rpc('get_streak_calendar', {
       p_month: key,
       p_tz: deviceTimeZone(),
     }));
-  }, [month]);
+  }, [month, user]);
 
   const { data, loading, error, reload, refreshControl } = useLoad(load);
 
@@ -226,7 +229,12 @@ export default function StreakScreen({ navigation }) {
                   const nextDone = did && trained.has(shiftKey(date, 1)) && date.getDay() !== 0;
 
                   return (
-                    <View key={key} style={styles.cell}>
+                    <View
+                      key={key}
+                      style={styles.cell}
+                      accessible
+                      accessibilityLabel={`${date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })}${did ? ', trained' : ''}${key === todayKey ? ', today' : ''}`}
+                    >
                       {did && (
                         <View
                           style={[
@@ -264,6 +272,11 @@ export default function StreakScreen({ navigation }) {
             <Text style={styles.footnote}>
               Finish any workout to count the day. If you miss one, a streak freeze keeps your streak going.
             </Text>
+            {!user && (
+              <Press scale={0.97} onPress={() => navigation.navigate('AuthScreen')} style={styles.signIn} accessibilityRole="button">
+                <Text style={styles.signInText}>Sign in to start your streak</Text>
+              </Press>
+            )}
           </FadeIn>
         </ScrollView>
       </LinearGradient>
@@ -306,6 +319,8 @@ function shiftKey(date, days) {
 }
 
 const styles = StyleSheet.create({
+  signIn: { alignSelf: 'center', marginTop: spacing.md, paddingVertical: 12, paddingHorizontal: spacing.lg },
+  signInText: { color: colors.accent, fontSize: 15, fontWeight: '700' },
   container: { flex: 1, backgroundColor: colors.background },
   gradient: { flex: 1 },
   nav: { paddingHorizontal: spacing.md, paddingTop: spacing.sm },

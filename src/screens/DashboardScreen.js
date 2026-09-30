@@ -40,6 +40,7 @@ import Press from '../components/Press';
 import DailyQuests from '../components/DailyQuests';
 import WeeklyQuests from '../components/WeeklyQuests';
 import { useConfirm } from '../components/ConfirmDialog';
+import { useT } from '../i18n';
 
 const { width } = Dimensions.get('window');
 
@@ -59,6 +60,7 @@ function greetingFor(date) {
 }
 
 export default function DashboardScreen({ navigation, route }) {
+  const { t } = useT();
   const confirmAction = useConfirm();
   const { refreshControl } = useRefresh(() => fetchProfileAndStats());
   const { user, refreshProfile, pendingWorkouts, syncPending, units, setUnits } = useAuth();
@@ -135,10 +137,11 @@ export default function DashboardScreen({ navigation, route }) {
 
     try {
       await deleteAccount(user?.id);
+      // The session change re-runs the focus fetch as a guest; fetching here
+      // would still carry the deleted user and fail.
       setMenuVisible(false);
-      fetchProfileAndStats();
     } catch (e) {
-      Alert.alert('Could not delete the account', e.message);
+      Alert.alert('Could not delete the account', 'Nothing was deleted. Check your connection and try again.');
     }
   };
 
@@ -292,21 +295,33 @@ export default function DashboardScreen({ navigation, route }) {
       setStatsError(null);
 
       try {
-        const profile = await unwrap(supabase.from('profiles').select('*').eq('id', user.id).maybeSingle());
-        if (profile) {
-          setUserProfile(profile);
-          setStepsGoal(profile.step_goal || 10000);
-        }
-
         const now = new Date();
         const todayStr = todayKey();
         const isoMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
 
-        const foodLogs = await unwrap(supabase
-          .from('scanned_foods')
-          .select('calories, protein, carbs, fats')
-          .eq('user_id', user.id)
-          .gte('scanned_at', isoMidnight));
+        // Five independent reads, sent together. They used to go one after
+        // another — five round trips before the screen could show today.
+        //
+        // Workouts are unwrapped for a reason that is not cosmetic: a failed
+        // read came back null, which made the activity total 0, which the
+        // upsert below then WROTE over the real figure. A failed read must not
+        // cause a write, so any failure lands in the catch before it.
+        const [profile, foodLogs, workoutsToday, statLog, tasksData] = await Promise.all([
+          unwrap(supabase.from('profiles').select('*').eq('id', user.id).maybeSingle()),
+          unwrap(supabase
+            .from('scanned_foods')
+            .select('calories, protein, carbs, fats')
+            .eq('user_id', user.id)
+            .gte('scanned_at', isoMidnight)),
+          unwrap(supabase.from('workout_completions').select('duration_minutes').eq('user_id', user.id).gte('completed_at', isoMidnight)),
+          unwrap(supabase.from('daily_stats').select('activity_minutes, water_ml, sleep_minutes').eq('user_id', user.id).eq('date', todayStr).maybeSingle()),
+          unwrap(supabase.from('tasks').select('*').eq('user_id', user.id).order('created_at', { ascending: true })),
+        ]);
+
+        if (profile) {
+          setUserProfile(profile);
+          setStepsGoal(profile.step_goal || 10000);
+        }
 
         const macroTotals = (foodLogs || []).reduce(
           (sum, log) => ({
@@ -318,13 +333,7 @@ export default function DashboardScreen({ navigation, route }) {
           { calories: 0, protein: 0, carbs: 0, fats: 0 }
         );
 
-        // Unwrapped for a reason that is not cosmetic: on a failed read this came
-        // back null, which made totalActivityMinutes 0, which the upsert below
-        // then WROTE over the real figure. A failed read must not cause a write.
-        const workoutsToday = await unwrap(supabase.from('workout_completions').select('duration_minutes').eq('user_id', user.id).gte('completed_at', isoMidnight));
         const totalActivityMinutes = workoutsToday ? workoutsToday.reduce((sum, w) => sum + (Number(w.duration_minutes) || 0), 0) : 0;
-
-        const statLog = await unwrap(supabase.from('daily_stats').select('activity_minutes, water_ml, sleep_minutes').eq('user_id', user.id).eq('date', todayStr).maybeSingle());
         const totalWaterMl = statLog?.water_ml ?? 0;
         const totalSleepMinutes = statLog?.sleep_minutes ?? 0;
 
@@ -336,10 +345,15 @@ export default function DashboardScreen({ navigation, route }) {
         // between the read and this write, the fresh figure was overwritten with
         // the stale zero. Same for water if you tapped +250 in the gap. It is the
         // shape that wiped people's XP on the daily spin.
-        await supabase.from('daily_stats').upsert(
-          { user_id: user.id, date: todayStr, activity_minutes: totalActivityMinutes },
-          { onConflict: 'user_id,date' }
-        );
+        //
+        // And only when it changed: the screen is focused many times a day, and
+        // each focus used to write the same number back.
+        if ((statLog?.activity_minutes ?? null) !== totalActivityMinutes) {
+          await supabase.from('daily_stats').upsert(
+            { user_id: user.id, date: todayStr, activity_minutes: totalActivityMinutes },
+            { onConflict: 'user_id,date' }
+          );
+        }
 
         setDailyStats(prev => ({
           ...prev,
@@ -349,7 +363,6 @@ export default function DashboardScreen({ navigation, route }) {
           sleep: formatDuration(totalSleepMinutes),
         }));
 
-        const tasksData = await unwrap(supabase.from('tasks').select('*').eq('user_id', user.id).order('created_at', { ascending: true }));
         if (tasksData) setTasks(tasksData);
       } catch (e) {
         // Nothing is zeroed and nothing is written. Whatever was last read stays
@@ -358,7 +371,10 @@ export default function DashboardScreen({ navigation, route }) {
       }
     } else {
       setIsLoggedIn(false); setUserProfile(null);
-      setDailyStats(prev => ({ ...prev, calories: 0, activity: 0, sleep: "0 m", water: 0 })); setTasks([]);
+      // A strip left over from the signed-in session would tell a guest their
+      // data failed to load.
+      setStatsError(null);
+      setDailyStats(prev => ({ ...prev, calories: 0, protein: 0, carbs: 0, fats: 0, activity: 0, sleep: '0 m', water: 0 })); setTasks([]);
     }
   };
 
@@ -386,7 +402,7 @@ export default function DashboardScreen({ navigation, route }) {
 
     if (result.goal_reached) {
       setUserProfile((prev) => (prev ? { ...prev, xp: (prev.xp || 0) + result.xp } : prev));
-      showXpToast(result.xp, 'Water goal reached 💧');
+      showXpToast(result.xp, 'Water goal reached');
       checkAchievements();
     }
   };
@@ -398,7 +414,7 @@ export default function DashboardScreen({ navigation, route }) {
   const checkAchievements = async () => {
     const { data: unlocked } = await supabase.rpc('check_achievements');
     if (unlocked?.length) {
-      showXpToast(0, `${unlocked[0].name} unlocked 🏆`);
+      showXpToast(0, `${unlocked[0].name} unlocked`);
     }
   };
 
@@ -406,17 +422,23 @@ export default function DashboardScreen({ navigation, route }) {
     let finalTitle = "";
     let finalGoal = parseFloat(newTaskGoal) || 0;
 
-    if (type === 'manual') { if (!newTaskTitle.trim()) return; finalTitle = newTaskTitle; }
-    else if (type === 'water') { if (!finalGoal) return; finalTitle = `Drink ${finalGoal}L Water`; }
-    else if (type === 'gym') { if (!finalGoal) return; finalTitle = `GYM for ${finalGoal.toLocaleString()} min`; }
+    // Stored titles for goal quests are a fallback only: the list draws them
+    // from the goal (buildQuests), in the reader's language.
+    if (type === 'manual') { if (!newTaskTitle.trim()) return; finalTitle = newTaskTitle.trim(); }
+    else if (type === 'water') { if (!finalGoal) return; finalTitle = `Drink ${finalGoal} L of water`; }
+    else if (type === 'gym') { if (!finalGoal) return; finalTitle = `Train for ${finalGoal} minutes`; }
 
     resetAndCloseModal();
     if (!user) return;
 
-    const existing = tasks.find(t => t.type === type);
+    const existing = tasks.find(task => task.type === type);
     if ((type === 'gym' || type === 'water') && existing) {
-      setTasks(prev => prev.map(t => t.id === existing.id ? { ...t, title: finalTitle, goal: finalGoal } : t));
-      await supabase.from('tasks').update({ title: finalTitle, goal: finalGoal }).eq('id', existing.id);
+      setTasks(prev => prev.map(task => task.id === existing.id ? { ...task, title: finalTitle, goal: finalGoal } : task));
+      const { error } = await supabase.from('tasks').update({ title: finalTitle, goal: finalGoal }).eq('id', existing.id);
+      if (error) {
+        setTasks(prev => prev.map(task => task.id === existing.id ? existing : task));
+        Alert.alert('Could not save the new goal', 'Check your connection and try again.');
+      }
       return;
     }
 
@@ -424,10 +446,15 @@ export default function DashboardScreen({ navigation, route }) {
     const newTask = { id: tempId, title: finalTitle, goal: finalGoal, type: type, completed: false };
     setTasks(prev => [...prev, newTask]);
 
-    try {
-      const { data } = await supabase.from('tasks').insert([{ user_id: user.id, title: newTask.title, goal: newTask.goal, type: newTask.type, completed: false }]).select();
-      if (data && data.length > 0) setTasks(prev => prev.map(t => t.id === tempId ? data[0] : t));
-    } catch (err) {}
+    // A quest that only ever existed on screen would vanish at the next
+    // refresh; better to take it back now and say why.
+    const { data, error } = await supabase.from('tasks').insert([{ user_id: user.id, title: newTask.title, goal: newTask.goal, type: newTask.type, completed: false }]).select();
+    if (error || !data?.length) {
+      setTasks(prev => prev.filter(task => task.id !== tempId));
+      Alert.alert('Could not add the quest', 'Check your connection and try again.');
+      return;
+    }
+    setTasks(prev => prev.map(task => task.id === tempId ? data[0] : task));
   };
 
   const resetAndCloseModal = () => {
@@ -435,8 +462,14 @@ export default function DashboardScreen({ navigation, route }) {
   };
 
   const deleteTask = async (id) => {
-    setTasks(prev => prev.filter(t => t.id !== id));
-    if (user) await supabase.from('tasks').delete().eq('id', id);
+    const before = tasks;
+    setTasks(prev => prev.filter(task => task.id !== id));
+    if (!user) return;
+    const { error } = await supabase.from('tasks').delete().eq('id', id);
+    if (error) {
+      setTasks(before);
+      Alert.alert('Could not remove the quest', 'Check your connection and try again.');
+    }
   };
 
   /**
@@ -450,8 +483,9 @@ export default function DashboardScreen({ navigation, route }) {
     const nowCompleted = !currentStatus;
     const completedOn = nowCompleted ? today : null;
 
+    const before = tasks.find((task) => task.id === id);
     setTasks(prev =>
-      prev.map(t => (t.id === id ? { ...t, completed: nowCompleted, completed_on: completedOn } : t))
+      prev.map(task => (task.id === id ? { ...task, completed: nowCompleted, completed_on: completedOn } : task))
     );
 
     if (!user) return;
@@ -461,11 +495,11 @@ export default function DashboardScreen({ navigation, route }) {
       .eq('id', id);
 
     if (error) {
-      // Put the row back the way it was so the tick matches what is stored.
-      setTasks(prev =>
-        prev.map(t => (t.id === id ? { ...t, completed: currentStatus } : t))
-      );
-      Alert.alert('Could not save', error.message);
+      // Put the whole row back, `completed_on` included: whether a quest is
+      // done today is read from that date, so restoring only `completed` left
+      // the tick on screen after the save had failed.
+      if (before) setTasks(prev => prev.map(task => (task.id === id ? before : task)));
+      Alert.alert('Could not save that', 'Check your connection and try again.');
     }
   };
 
@@ -593,8 +627,8 @@ const renderProgressShape = () => {
             figure comes from is a fact, not an action — it belongs in a line of
             text rather than behind a button that opens an alert to say it. */}
         <View style={styles.stepsInfoContainer}>
-          <Text style={styles.stepCount}>{dailyStats.steps}</Text>
-          <Text style={styles.stepGoal}>of {stepsGoal} steps</Text>
+          <Text style={styles.stepCount}>{Number(dailyStats.steps || 0).toLocaleString()}</Text>
+          <Text style={styles.stepGoal}>{t('of {goal} steps', { goal: Number(stepsGoal).toLocaleString() })}</Text>
           <Text style={styles.stepSource}>from your phone's motion sensor</Text>
         </View>
       </View>
@@ -619,13 +653,13 @@ const renderProgressShape = () => {
         key: gymTask.id,
         id: gymTask.id,
         type: 'gym',
-        title: gymTask.title,
+        title: t('Train for {count} minutes', { count: Number(gymTask.goal) || 0 }),
         done: isTaskAutoCompleted(gymTask),
         detail: `${dailyStats.activity} / ${gymTask.goal} min`,
         raw: gymTask,
       });
     } else {
-      list.push({ key: 'setup-gym', type: 'gym', title: 'Train for -- minutes', setup: true });
+      list.push({ key: 'setup-gym', type: 'gym', title: t('Train for -- minutes'), setup: true });
     }
 
     if (waterTask) {
@@ -633,14 +667,14 @@ const renderProgressShape = () => {
         key: waterTask.id,
         id: waterTask.id,
         type: 'water',
-        title: waterTask.title,
+        title: t('Drink {liters} L of water', { liters: waterTask.goal }),
         done: isTaskAutoCompleted(waterTask),
         detail: `${(dailyStats.water / 1000).toFixed(1)} / ${waterTask.goal} L`,
-        accessibilityLabel: 'Log water',
+        accessibilityLabel: t('Log water'),
         raw: waterTask,
       });
     } else {
-      list.push({ key: 'setup-water', type: 'water', title: 'Drink -- L of water', setup: true });
+      list.push({ key: 'setup-water', type: 'water', title: t('Drink -- L of water'), setup: true });
     }
 
     tasks.filter((t) => t.type === 'manual').forEach((t) => {
@@ -870,7 +904,8 @@ const renderProgressShape = () => {
               value={dailyStats.activity}
               unit="min"
               label="Active"
-              progress={dailyStats.activity / 60}
+              // Against your own training goal when you have set one.
+              progress={dailyStats.activity / (Number(tasks.find((task) => task.type === 'gym')?.goal) || 60)}
               onPress={() => navigation.navigate('MetricScreen', { metric: 'activity' })}
             />
             <SummaryArc
@@ -943,7 +978,7 @@ const renderProgressShape = () => {
           const result = await exportMyData();
           if (!result.ok) Alert.alert('Could not export your data', 'Check your connection and try again.');
         }}
-        onSignOut={async () => { await supabase.auth.signOut(); setMenuVisible(false); fetchProfileAndStats(); }}
+        onSignOut={async () => { await supabase.auth.signOut(); setMenuVisible(false); }}
         onSignIn={() => navigation.navigate('AuthScreen')}
       />
 

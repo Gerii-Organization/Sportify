@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
-import { View, Text, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, LayoutAnimation } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChevronLeft, ChevronDown, Dumbbell, Clock, Weight } from 'lucide-react-native';
@@ -14,7 +15,7 @@ import FadeIn from '../components/FadeIn';
 import AmbientGlow from '../components/AmbientGlow';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
-import { formatVolume } from '../lib/units';
+import { formatVolume, formatWeight, weightLabel } from '../lib/units';
 import { SkeletonHistory } from '../components/Skeleton';
 
 /**
@@ -35,9 +36,19 @@ import { SkeletonHistory } from '../components/Skeleton';
  * ProgressScreen owns the single back button, and two stacked gradients would
  * double the ambient glow.
  */
-export default function HistoryScreen({ navigation, embedded = false }) {
+/** Sessions read back. Past this a note says the list is the latest ones. */
+const LIMIT = 150;
+
+export default function HistoryScreen({ embedded = false }) {
+  const navigation = useNavigation();
   const { user, units } = useAuth();
   const [openId, setOpenId] = useState(null);
+
+  /** Rows grow and shrink in place rather than snapping. */
+  const toggle = (id) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setOpenId((current) => (current === id ? null : id));
+  };
 
   const load = useCallback(async () => {
     if (!user) return [];
@@ -48,7 +59,7 @@ export default function HistoryScreen({ navigation, embedded = false }) {
         .select('id, workout_name, duration_minutes, total_volume_kg, exercises, notes, completed_at')
         .eq('user_id', user.id)
         .order('completed_at', { ascending: false })
-        .limit(150)
+        .limit(LIMIT)
     );
   }, [user]);
 
@@ -86,7 +97,16 @@ export default function HistoryScreen({ navigation, embedded = false }) {
             </FadeIn>
 
             {sessions.length === 0 ? (
-              <EmptyState message="Finished workouts will show up here." />
+              user ? (
+                <EmptyState message="Finished workouts will show up here." />
+              ) : (
+                <EmptyState
+                  title="Keep every session"
+                  message="Sign in and each workout you finish is kept here, set by set."
+                  actionLabel="Sign in"
+                  onAction={() => navigation.navigate('AuthScreen')}
+                />
+              )
             ) : (
               months.map(([label, rows], monthIndex) => (
                 <FadeIn key={label} index={monthIndex + 1}>
@@ -105,9 +125,11 @@ export default function HistoryScreen({ navigation, embedded = false }) {
                       <Press
                         key={session.id}
                         scale={expandable ? 0.99 : 1}
-                        onPress={expandable ? () => setOpenId(open ? null : session.id) : undefined}
+                        onPress={expandable ? () => toggle(session.id) : undefined}
                         style={[styles.row, open && styles.rowOpen]}
-                        accessibilityLabel={`${session.workout_name}, ${formatRelativeDate(session.completed_at)}`}
+                        accessibilityRole={expandable ? 'button' : undefined}
+                        accessibilityState={expandable ? { expanded: open } : undefined}
+                        accessibilityLabel={`${session.workout_name}, ${formatRelativeDate(session.completed_at)}, ${session.duration_minutes} minutes`}
                       >
                         <View style={styles.rowHead}>
                           <View style={{ flex: 1 }}>
@@ -140,8 +162,13 @@ export default function HistoryScreen({ navigation, embedded = false }) {
                             {detail.map((exercise, i) => (
                               <View key={`${exercise.name}-${i}`} style={styles.exercise}>
                                 <Text style={styles.exerciseName} numberOfLines={1}>{exercise.name}</Text>
+                                {/* Stored in kg and unrounded. Shown raw, a set typed as
+                                    185 lb read "83.914588×5" — in kilograms, unlabelled. */}
                                 <Text style={styles.exerciseSets}>
-                                  {(exercise.sets || []).map((s) => `${s.weight}×${s.reps}`).join('   ')}
+                                  {(exercise.sets || [])
+                                    .map((s) => `${formatWeight(s.weight, units, { withUnit: false })}×${s.reps}`)
+                                    .join('   ')}
+                                  <Text style={styles.exerciseUnit}>  {weightLabel(units)}</Text>
                                 </Text>
                               </View>
                             ))}
@@ -152,6 +179,10 @@ export default function HistoryScreen({ navigation, embedded = false }) {
                   })}
                 </FadeIn>
               ))
+            )}
+
+            {sessions.length >= LIMIT && (
+              <Text style={styles.footnote}>Showing your latest {LIMIT} sessions.</Text>
             )}
           </ScrollView>
         )}
@@ -249,4 +280,6 @@ const styles = StyleSheet.create({
   exercise: { gap: 3 },
   exerciseName: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
   exerciseSets: { color: colors.text, fontSize: 14, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  exerciseUnit: { color: colors.textMuted, fontSize: 12, fontWeight: '500' },
+  footnote: { color: colors.textFaint, fontSize: 12, textAlign: 'center', marginTop: spacing.md },
 });

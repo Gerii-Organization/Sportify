@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { 
-  View, Text, TextInput, TouchableOpacity, StyleSheet, 
-  Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView 
+import {
+  View, Text, TextInput, TouchableOpacity, StyleSheet,
+  Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import AmbientGlow from '../components/AmbientGlow';
@@ -22,11 +22,12 @@ import SplitPicker from '../components/SplitPicker';
 import { useT } from '../i18n';
 import { normaliseCode, REDEEM_ERRORS } from '../lib/invites';
 import { getSetting, setSetting } from '../lib/settings';
+import { authErrorMessage } from '../lib/authErrors';
 
 
 export default function AuthScreen({ navigation, route }) {
   const { t } = useT();
-  const { units, setUnits } = useAuth();
+  const { user: signedInUser, units, setUnits } = useAuth();
   // Opened from an invite link: straight to sign-up, code filled in.
   const [isRegistering, setIsRegistering] = useState(!!route?.params?.inviteCode);
   const [inviteCode, setInviteCode] = useState(route?.params?.inviteCode || '');
@@ -86,23 +87,41 @@ export default function AuthScreen({ navigation, route }) {
     else navigation.goBack();
   };
 
+  /** An auth failure as a sentence, with a way to the login screen when that is the answer. */
+  const showAuthError = (error) => {
+    const { title, message, action } = authErrorMessage(error);
+    Alert.alert(title, message, action === 'login'
+      ? [{ text: 'Cancel', style: 'cancel' }, { text: 'Log in', onPress: () => { toggleAuthMode(); setEmail(email); } }]
+      : undefined);
+  };
+
   const handleAuth = async () => {
+    if (loading) return;
     // Registration is validated step by step on the way here, so this only has
     // to cover the login path — two fields, one screen, no steps.
     if (!isRegistering && (!email.trim() || !password)) {
-      return Alert.alert('Error', 'Email and password are required.');
+      return Alert.alert('Email and password needed', 'Enter both to log in.');
     }
 
     setLoading(true);
 
     if (isRegistering) {
-      const { data: { user }, error: signUpError } = await supabase.auth.signUp({ email: email.trim(), password });
+      // A second tap on "Create account" after the profile failed to save: the
+      // account already exists and is signed in. Signing up again answered
+      // "User already registered" and there was no way forward.
+      let user = signedInUser;
+      if (!user) {
+        const { data, error: signUpError } = await supabase.auth.signUp({ email: email.trim(), password });
+        if (signUpError) {
+          setLoading(false);
+          return showAuthError(signUpError);
+        }
+        user = data?.user;
+      }
 
-      if (signUpError) Alert.alert('Error', signUpError.message);
-      else if (user) {
+      if (user) {
         const birth = parseBirthDate(birthDate);
-        const { error: profileError } = await supabase.from('profiles').insert({
-          id: user.id,
+        const details = {
           first_name: firstName.trim(),
           sex: sex.trim().toUpperCase(),
           // The age is derived from the date (also by a trigger), and kept for
@@ -118,10 +137,20 @@ export default function AuthScreen({ navigation, route }) {
           // Null rather than an empty array when skipped: the advice code tests
           // for a split's presence, and [] would read as "has one, it is empty".
           split: split.length ? split : null,
-        });
+        };
+        let { error: profileError } = await supabase.from('profiles').insert({ id: user.id, ...details });
+        // On the retry the row may already be there. Not an upsert: that also
+        // writes `id`, which the column grants refuse to anyone signed in.
+        if (profileError?.code === '23505') {
+          ({ error: profileError } = await supabase.from('profiles').update(details).eq('id', user.id));
+        }
 
-        if (profileError) Alert.alert('Profile Error', profileError.message);
-        else {
+        if (profileError) {
+          Alert.alert(
+            'Your profile was not saved',
+            'Your account is ready, but your details did not reach us. Check your connection and tap Create account again.',
+          );
+        } else {
           // After the profile row exists, and deliberately not awaited into the
           // failure path: an account that was created should not look like it
           // failed because a photo upload did.
@@ -162,8 +191,8 @@ export default function AuthScreen({ navigation, route }) {
       }
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-      
-      if (error) Alert.alert('Error', error.message);
+
+      if (error) showAuthError(error);
       else {
         navigation.goBack();
       }
@@ -206,9 +235,9 @@ export default function AuthScreen({ navigation, route }) {
               <View style={styles.form}>
                 {current === 'account' && (
                   <>
-                    <CustomInput label={t('Email')} value={email} onChange={setEmail} placeholder="you@example.com" autoCap="none" keyboard="email-address" />
-                    <CustomInput label={t('Password')} value={password} onChange={setPassword} placeholder={t('At least 6 characters')} secure />
-                    <CustomInput label={t('Confirm password')} value={confirmPassword} onChange={setConfirmPassword} placeholder={t('Type it again')} secure />
+                    <CustomInput label={t('Email')} value={email} onChange={setEmail} placeholder="you@example.com" autoCap="none" keyboard="email-address" kind="email" />
+                    <CustomInput label={t('Password')} value={password} onChange={setPassword} placeholder={t('At least 6 characters')} secure kind="newPassword" />
+                    <CustomInput label={t('Confirm password')} value={confirmPassword} onChange={setConfirmPassword} placeholder={t('Type it again')} secure kind="newPassword" />
                     <CustomInput label={t('Invite code (optional)')} value={inviteCode} onChange={(text) => setInviteCode(normaliseCode(text))} placeholder={t('From a friend')} autoCap="characters" />
                   </>
                 )}
@@ -255,7 +284,7 @@ export default function AuthScreen({ navigation, route }) {
                       </Text>
                     </TouchableOpacity>
 
-                    <CustomInput label={t('First name')} value={firstName} onChange={setFirstName} placeholder="Victor" />
+                    <CustomInput label={t('First name')} value={firstName} onChange={setFirstName} placeholder="Alex" kind="givenName" />
                     <Text style={styles.label}>{t('Date of birth')}</Text>
                     <View style={styles.birthRow}>
                       <BirthDateInput value={birthDate} onChange={(next) => { setBirthDate(next); setStepError(null); }} />
@@ -307,13 +336,13 @@ export default function AuthScreen({ navigation, route }) {
                       label={`Weight (${weightLabel(units)})`}
                       value={weight} onChange={setWeight}
                       placeholder={units === 'imperial' ? '175' : '80'}
-                      keyboard="numeric"
+                      keyboard="decimal-pad"
                     />
                     <CustomInput
                       label={`Height (${heightLabel(units)})`}
                       value={height} onChange={setHeight}
                       placeholder={units === 'imperial' ? '73' : '185'}
-                      keyboard="numeric"
+                      keyboard="decimal-pad"
                     />
                   </>
                 )}
@@ -380,8 +409,8 @@ export default function AuthScreen({ navigation, route }) {
             <>
               <Text style={styles.title}>{t('Welcome back')}</Text>
               <View style={styles.form}>
-                <CustomInput label={t('Email')} value={email} onChange={setEmail} placeholder="you@example.com" autoCap="none" keyboard="email-address" />
-                <CustomInput label={t('Password')} value={password} onChange={setPassword} placeholder="******" secure />
+                <CustomInput label={t('Email')} value={email} onChange={setEmail} placeholder="you@example.com" autoCap="none" keyboard="email-address" kind="email" />
+                <CustomInput label={t('Password')} value={password} onChange={setPassword} placeholder="••••••" secure kind="password" onSubmit={handleAuth} />
 
                 <TouchableOpacity activeOpacity={0.7} style={styles.mainButton} onPress={handleAuth} disabled={loading}>
                   {loading ? <ActivityIndicator color={colors.onAccent} /> : <Text style={styles.mainButtonText}>{t('Log in')}</Text>}
@@ -408,13 +437,29 @@ const STEP_GOAL_HINTS = {
   15000: 'On your feet all day',
 };
 
-function CustomInput({ label, value, onChange, placeholder, secure, autoCap, keyboard }) {
+/**
+ * What each field is, told to the system: iOS and Android offer saved logins
+ * for `email`/`password`, suggest a strong password for `newPassword`, and
+ * fill a name for `givenName`. Without it every login was typed by hand.
+ */
+const AUTOFILL = {
+  email: { textContentType: 'username', autoComplete: 'email', autoCorrect: false },
+  password: { textContentType: 'password', autoComplete: 'current-password', autoCorrect: false },
+  newPassword: { textContentType: 'newPassword', autoComplete: 'new-password', autoCorrect: false, passwordRules: 'minlength: 6;' },
+  givenName: { textContentType: 'givenName', autoComplete: 'given-name' },
+};
+
+function CustomInput({ label, value, onChange, placeholder, secure, autoCap, keyboard, kind, onSubmit }) {
   return (
     <View style={styles.inputContainer}>
       <Text style={styles.label}>{label}</Text>
       <TextInput
         style={styles.input} value={value} onChangeText={onChange} placeholder={placeholder}
         placeholderTextColor={colors.textFaint} secureTextEntry={secure} autoCapitalize={autoCap || 'sentences'} keyboardType={keyboard || 'default'}
+        accessibilityLabel={label}
+        returnKeyType={onSubmit ? 'go' : 'next'}
+        onSubmitEditing={onSubmit}
+        {...(kind ? AUTOFILL[kind] : null)}
       />
     </View>
   );

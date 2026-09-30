@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
-import { 
-  StyleSheet, View, Text, TextInput, TouchableOpacity, 
-  FlatList, KeyboardAvoidingView, Platform
+import { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  StyleSheet, View, Text, TextInput, TouchableOpacity,
+  FlatList, KeyboardAvoidingView, Platform, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -15,79 +15,90 @@ import { gradients } from '../theme';
 import GroupSheet from '../components/GroupSheet';
 import DaySeparator, { needsSeparator, dayLabel } from '../components/DaySeparator';
 import { SkeletonMessages } from '../components/Skeleton';
+import { useAuth } from '../context/AuthContext';
+
+/** The latest group messages loaded when the chat opens. */
+const PAGE = 300;
 
 
 export default function GroupChatScreen({ route, navigation }) {
   const { groupId, groupName } = route.params;
-  const [myId, setMyId] = useState(null);
+  const { user } = useAuth();
+  const myId = user?.id || null;
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
-  
+
   // Member names, keyed by user id, so each bubble can show its author.
   const [memberNames, setMemberNames] = useState({});
   const [group, setGroup] = useState(null);
   const [groupSheetVisible, setGroupSheetVisible] = useState(false);
 
   const flatListRef = useRef(null);
+  /** Message count at the last scroll to the bottom. */
+  const lastCount = useRef(0);
 
-  useEffect(() => {
-    let subscription;
-
-    const setupGroupChat = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      setMyId(user.id);
-
-      try {
-        setLoadError(null);
-
-        // The group row carries created_by, which decides who may rename or
-        // delete it. Without it the sheet cannot show the right controls.
-        setGroup(await unwrap(supabase.from('groups').select('*').eq('id', groupId).maybeSingle()));
-
-        // 1. Members first — we need their names before rendering messages.
-        const members = await unwrap(supabase.from('group_members').select('user_id').eq('group_id', groupId));
-        if (members && members.length > 0) {
-          const memberIds = members.map(m => m.user_id);
-          // Unwrapped for more than tidiness: on a failed read this was null and
-          // the `.forEach` below threw, taking the screen down with it.
-          const profiles = await unwrap(supabase.from('public_profiles').select('id, first_name').in('id', memberIds));
-          const namesMap = {};
-          (profiles || []).forEach(p => namesMap[p.id] = p.first_name);
-          setMemberNames(namesMap);
-        }
-
-        // 2. Existing messages, oldest first so the list reads top to bottom.
-        const initialMessages = await unwrap(supabase
+  /**
+   * The group, its members' names and the latest page of messages. The three
+   * reads go together; only the names wait, for the member list.
+   */
+  const loadGroup = useCallback(async () => {
+    // A guest has no groups. Returning before this left the skeleton up forever.
+    if (!myId) {
+      setLoading(false);
+      return;
+    }
+    setLoadError(null);
+    try {
+      // The group row carries created_by, which decides who may rename or
+      // delete it. Without it the sheet cannot show the right controls.
+      const [groupRow, members, latest] = await Promise.all([
+        unwrap(supabase.from('groups').select('*').eq('id', groupId).maybeSingle()),
+        unwrap(supabase.from('group_members').select('user_id').eq('group_id', groupId)),
+        unwrap(supabase
           .from('group_messages')
           .select('*')
           .eq('group_id', groupId)
-          .order('created_at', { ascending: true }));
+          .order('created_at', { ascending: false })
+          .limit(PAGE)),
+      ]);
+      setGroup(groupRow);
 
-        setMessages(initialMessages || []);
-      } catch (e) {
-        setLoadError(e?.message || 'Something went wrong.');
-      } finally {
-        setLoading(false);
+      if (members && members.length > 0) {
+        // Unwrapped for more than tidiness: on a failed read this was null and
+        // the `.forEach` below threw, taking the screen down with it.
+        const profiles = await unwrap(supabase.from('public_profiles').select('id, first_name').in('id', members.map(m => m.user_id)));
+        const namesMap = {};
+        (profiles || []).forEach(p => namesMap[p.id] = p.first_name);
+        setMemberNames(namesMap);
       }
 
-      // 3. Subscribe to new messages for this group only.
-      subscription = supabase
-        .channel(`public:group_messages:${groupId}`)
-        .on('postgres_changes', { 
-            event: 'INSERT', schema: 'public', table: 'group_messages', filter: `group_id=eq.${groupId}` 
-        }, (payload) => {
-            if (payload.new.sender_id !== user.id) {
-                setMessages(prev => [...prev, payload.new]);
-            }
-        }).subscribe();
-    };
+      // Newest first from the server, oldest first on screen.
+      setMessages((latest || []).slice().reverse());
+    } catch (e) {
+      setLoadError(e?.message || 'Something went wrong.');
+    } finally {
+      setLoading(false);
+    }
+  }, [groupId, myId]);
 
-    setupGroupChat();
-    return () => { if (subscription) supabase.removeChannel(subscription); };
-  }, [groupId]);
+  useEffect(() => { loadGroup(); }, [loadGroup]);
+
+  // New messages from the others in this group. Our own arrive through send.
+  useEffect(() => {
+    if (!myId) return undefined;
+    const subscription = supabase
+      .channel(`public:group_messages:${groupId}`)
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'group_messages', filter: `group_id=eq.${groupId}`
+      }, (payload) => {
+        if (payload.new.sender_id !== myId) {
+          setMessages(prev => [...prev, payload.new]);
+        }
+      }).subscribe();
+    return () => { supabase.removeChannel(subscription); };
+  }, [groupId, myId]);
 
   const sendMessage = async () => {
     if (!inputText.trim() || !myId) return;
@@ -100,12 +111,19 @@ export default function GroupChatScreen({ route, navigation }) {
     setMessages(prev => [...prev, newMessage]);
     setInputText('');
 
-    await supabase.from('group_messages').insert([{
+    const { data: saved, error } = await supabase.from('group_messages').insert([{
       group_id: groupId, sender_id: myId, content: newMessage.content
-    }]);
+    }]).select().single();
+
+    if (error || !saved) {
+      // Not sent: take the bubble back out and return the words to the box.
+      setMessages(prev => prev.filter(m => m.id !== newMessage.id));
+      setInputText((current) => current || newMessage.content);
+      Alert.alert('Message not sent', 'Check your connection and try again.');
+      return;
+    }
+    setMessages(prev => prev.map(m => (m.id === newMessage.id ? saved : m)));
   };
-
-
 
   const renderMessage = ({ item, index }) => {
     const isMe = item.sender_id === myId;
@@ -132,7 +150,7 @@ export default function GroupChatScreen({ route, navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       <LinearGradient colors={gradients.flat} style={styles.gradientBg}>
-        
+
         <View style={styles.header}>
           <TouchableOpacity accessibilityLabel="Go back" activeOpacity={0.7} onPress={() => navigation.goBack()} style={styles.backBtn}>
             <ChevronLeft color={colors.text} size={28} />
@@ -157,21 +175,26 @@ export default function GroupChatScreen({ route, navigation }) {
         </View>
 
         {loadError ? (
-          <ErrorState message={loadError} />
+          <ErrorState message={loadError} onRetry={() => { setLoading(true); loadGroup(); }} />
         ) : loading ? (
           <SkeletonMessages group />
         ) : (
           <FlatList
             ref={flatListRef} data={messages} keyExtractor={(item) => item.id.toString()} renderItem={renderMessage}
             contentContainerStyle={styles.chatList}
-            onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+            // Down to the newest only when a message arrives, not on every relayout.
+            onContentSizeChange={() => {
+              if (messages.length === lastCount.current) return;
+              lastCount.current = messages.length;
+              flatListRef.current?.scrollToEnd({ animated: true });
+            }}
             onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
           />
         )}
 
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}>
           <View style={styles.inputContainer}>
-            <TextInput style={styles.textInput} placeholder="Message the group..." placeholderTextColor={colors.textMuted} value={inputText} onChangeText={setInputText} multiline />
+            <TextInput style={styles.textInput} placeholder="Message the group…" placeholderTextColor={colors.textMuted} value={inputText} onChangeText={setInputText} multiline />
             <TouchableOpacity activeOpacity={0.7} style={[styles.sendBtn, !inputText.trim() ? { opacity: 0.5 } : {}]} onPress={sendMessage} disabled={!inputText.trim()} accessibilityLabel="Send message">
               <Send color={colors.onAccent} size={20} />
             </TouchableOpacity>
@@ -183,11 +206,13 @@ export default function GroupChatScreen({ route, navigation }) {
           onClose={() => setGroupSheetVisible(false)}
           group={group}
           currentUserId={myId}
-          onChanged={() => {
-            // A rename should show immediately; a leave or delete means this
-            // screen no longer has anything to display.
+          onChanged={(change) => {
+            // Left or deleted: nothing here to show. This used to be inferred
+            // from whether the group could still be read, so a rename followed
+            // by a dropped connection threw you out of the chat.
+            if (change === 'left' || change === 'deleted') return navigation.goBack();
             supabase.from('groups').select('*').eq('id', groupId).maybeSingle()
-              .then(({ data }) => (data ? setGroup(data) : navigation.goBack()));
+              .then(({ data }) => { if (data) setGroup(data); });
           }}
         />
       </LinearGradient>
@@ -203,7 +228,7 @@ const styles = StyleSheet.create({
   headerName: { color: colors.text, fontSize: 17, fontWeight: '700' },
   centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   chatList: { padding: 16, flexGrow: 1, justifyContent: 'flex-end' },
-  
+
   senderName: { color: colors.accent, fontSize: 11, fontWeight: '600', marginLeft: 10, marginBottom: 6 },
   messageBubble: { maxWidth: '80%', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24 },
   myMessage: { alignSelf: 'flex-end', backgroundColor: colors.accent, borderBottomRightRadius: 5 },

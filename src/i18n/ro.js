@@ -318,4 +318,12 @@ export default {
   'The classic goal': 'Ținta clasică',
   'Very active': 'Foarte activ',
   'On your feet all day': 'Toată ziua în picioare',
+
+  // Dashboard quests and steps (audit 2026-09-27)
+  'Train for {count} minutes': { one: 'Antrenează-te {count} minut', few: 'Antrenează-te {count} minute', other: 'Antrenează-te {count} de minute' },
+  'Train for -- minutes': 'Antrenează-te -- minute',
+  'Drink {liters} L of water': 'Bea {liters} L de apă',
+  'Drink -- L of water': 'Bea -- L de apă',
+  'Log water': 'Adaugă apă',
+  'of {goal} steps': 'din {goal} de pași',
 };

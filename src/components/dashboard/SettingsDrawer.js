@@ -1,5 +1,7 @@
 import { View, Text, Modal, ScrollView, TouchableOpacity, Dimensions, Alert, Linking, StyleSheet } from 'react-native';
-import { Bell, Timer, Flame, Droplets, Ruler, Shield, HelpCircle, Scale, TrendingUp, LogIn, ChevronRight, Download, Languages } from 'lucide-react-native';
+import Animated, { SlideInRight } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Bell, Timer, Flame, Droplets, Ruler, Shield, HelpCircle, Scale, TrendingUp, LogOut, ChevronRight, Download, Languages } from 'lucide-react-native';
 import { colors } from '../../theme';
 import { labelForRestChoice } from '../../lib/rest';
 import { useT } from '../../i18n';
@@ -58,22 +60,34 @@ export default function SettingsDrawer({
   onOpenProgress,
 }) {
   const { t, language, preference, setPreference } = useT();
+  const insets = useSafeAreaInsets();
   const nextLanguage = LANGUAGE_CYCLE[(LANGUAGE_CYCLE.indexOf(preference) + 1) % LANGUAGE_CYCLE.length];
+  /**
+   * Rows that need an account. For a guest they were disabled — dimmed and
+   * dead to the touch, with no word on why. Now a tap leads to signing in.
+   */
+  const needsAccount = (action) => (isLoggedIn ? action : () => { onClose(); onSignIn(); });
   return (
         <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
           <View style={styles.menuOverlaySide}>
             <TouchableOpacity activeOpacity={0.7} style={styles.menuCloseArea} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close menu" />
-            <View style={styles.sideMenuContent}>
+            {/* Slides in from the edge it lives on, rather than fading in over
+                the screen like a dialog. */}
+            <Animated.View
+              entering={SlideInRight.duration(260)}
+              style={[styles.sideMenuContent, { paddingTop: insets.top + 16, paddingBottom: Math.max(insets.bottom, 16) }]}
+            >
 
               {/* The whole profile block is tappable, not just the avatar. */}
               <TouchableOpacity activeOpacity={0.7}
                 style={styles.sidebarProfileSection}
                 onPress={() => {
-                  if (isLoggedIn) {
-                    onClose();
-                    onOpenProfile();
-                  }
+                  onClose();
+                  if (isLoggedIn) onOpenProfile();
+                  else onSignIn();
                 }}
+                accessibilityRole="button"
+                accessibilityHint={isLoggedIn ? 'Opens your profile' : 'Log in or sign up'}
               >
                 {renderAvatar(56, 30)}
                 <View style={{ marginLeft: 16, flex: 1 }}>
@@ -94,7 +108,7 @@ export default function SettingsDrawer({
                     <Text style={[styles.viewProfileSidebar, { color: colors.textSecondary }]}>{t('Not logged in')}</Text>
                   )}
                 </View>
-                {isLoggedIn && <ChevronRight color={colors.textFaint} size={24} />}
+                <ChevronRight color={colors.textFaint} size={24} />
               </TouchableOpacity>
 
               <View style={styles.menuDivider} />
@@ -108,14 +122,14 @@ export default function SettingsDrawer({
                   icon={<TrendingUp color={colors.textMuted} size={20}/>}
                   label={t('Progress')}
                   value={t('Stats, history, records')}
-                  onPress={() => { onClose(); onOpenProgress(); }}
-                  disabled={!isLoggedIn}
+                  onPress={needsAccount(() => { onClose(); onOpenProgress(); })}
+                  locked={!isLoggedIn}
                 />
                 <MenuOption
                   icon={<Scale color={colors.textMuted} size={20}/>}
                   label={t('Body weight')}
-                  onPress={() => { onClose(); onOpenWeight(); }}
-                  disabled={!isLoggedIn}
+                  onPress={needsAccount(() => { onClose(); onOpenWeight(); })}
+                  locked={!isLoggedIn}
                 />
 
                 <Text style={styles.menuGroupTitle}>{t('Settings')}</Text>
@@ -137,15 +151,15 @@ export default function SettingsDrawer({
                   icon={<Flame color={colors.textMuted} size={20}/>}
                   label={t('Streak reminder')}
                   value={streakReminders ? '19:00' : t('Off')}
-                  onPress={onToggleStreakReminders}
-                  disabled={!isLoggedIn}
+                  onPress={needsAccount(onToggleStreakReminders)}
+                  locked={!isLoggedIn}
                 />
                 <MenuOption
                   icon={<Droplets color={colors.textMuted} size={20}/>}
                   label={t('Water reminders')}
                   value={waterReminders ? t('3 a day') : t('Off')}
-                  onPress={onToggleWaterReminders}
-                  disabled={!isLoggedIn}
+                  onPress={needsAccount(onToggleWaterReminders)}
+                  locked={!isLoggedIn}
                 />
                 {/* Display only. Everything is stored metric, so switching is
                      reversible and changes no recorded figure. */}
@@ -195,8 +209,8 @@ export default function SettingsDrawer({
               <View style={styles.menuFooter}>
                 {isLoggedIn ? (
                   <>
-                    <TouchableOpacity activeOpacity={0.7} style={styles.logoutButton} onPress={onSignOut}>
-                      <LogIn color={colors.danger} size={20} /><Text style={styles.logoutText}>{t('Sign out')}</Text>
+                    <TouchableOpacity activeOpacity={0.7} style={styles.logoutButton} onPress={onSignOut} accessibilityRole="button">
+                      <LogOut color={colors.danger} size={20} /><Text style={styles.logoutText}>{t('Sign out')}</Text>
                     </TouchableOpacity>
 
                     {/* Quiet and last. It has to be findable — Play requires it
@@ -217,19 +231,21 @@ export default function SettingsDrawer({
                   </TouchableOpacity>
                 )}
               </View>
-            </View>
+            </Animated.View>
           </View>
         </Modal>
   );
 }
 
-function MenuOption({ icon, label, value, onPress, disabled }) {
+function MenuOption({ icon, label, value, onPress, locked }) {
   return (
     <TouchableOpacity activeOpacity={0.7}
-      style={[styles.menuOption, disabled && { opacity: 0.4 }]}
+      style={[styles.menuOption, locked && { opacity: 0.4 }]}
       onPress={onPress}
-      disabled={disabled || !onPress}
+      disabled={!onPress}
       accessibilityRole="button"
+      accessibilityLabel={value ? `${label}, ${value}` : label}
+      accessibilityHint={locked ? 'Needs an account. Opens sign in.' : undefined}
     >
       <View style={styles.menuOptionLeft}>{icon}<Text style={styles.menuOptionText}>{label}</Text></View>
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -243,7 +259,7 @@ function MenuOption({ icon, label, value, onPress, disabled }) {
 const styles = StyleSheet.create({
   menuOverlaySide: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', flexDirection: 'row' },
   menuCloseArea: { flex: 1 },
-  sideMenuContent: { width: width * 0.75, backgroundColor: colors.card, padding: 26, paddingTop: 60 },
+  sideMenuContent: { width: width * 0.75, backgroundColor: colors.card, paddingHorizontal: 26 },
   sidebarProfileSection: { flexDirection: 'row', alignItems: 'center', marginBottom: 20, paddingVertical: 10 },
   sidebarName: { color: colors.text, fontSize: 17, fontWeight: '700' },
   sidebarXpBarBg: { height: 4, backgroundColor: colors.surfaceHigh, borderRadius: 2, marginTop: 10, width: 100, overflow: 'hidden' },

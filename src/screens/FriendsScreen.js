@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
-import { 
-  StyleSheet, View, Text, ScrollView, TouchableOpacity, 
-  TextInput, Modal, Alert, KeyboardAvoidingView, Platform 
+import {
+  StyleSheet, View, Text, ScrollView, TouchableOpacity, Pressable,
+  TextInput, Modal, Alert, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -54,7 +54,7 @@ export default function FriendsScreen() {
   const [groups, setGroups] = useState([]);
   /** Sum across every conversation — drives the header badge. */
   const [totalUnread, setTotalUnread] = useState(0);
-  
+
   const [receivedRequests, setReceivedRequests] = useState([]);
   const [sentRequests, setSentRequests] = useState([]);
 
@@ -66,7 +66,7 @@ export default function FriendsScreen() {
   const [feedNonce, setFeedNonce] = useState(0);
   const [startChatModalVisible, setStartChatModalVisible] = useState(false);
   const [createGroupModalVisible, setCreateGroupModalVisible] = useState(false);
-  
+
   const [isFabMenuOpen, setIsFabMenuOpen] = useState(false);
 
   // Form state
@@ -143,7 +143,10 @@ export default function FriendsScreen() {
       .order('created_at', { ascending: false })) || []);
   };
 
- const fetchFriendsAndChats = async (userId) => {
+  /** How many recent messages are read to find each chat's last line. */
+  const RECENT_MESSAGES = 400;
+
+  const fetchFriendsAndChats = async (userId) => {
     // 1. Load every friendship this user is part of.
     // This used to be `if (error || !fData) return;` — a silent bail that left
     // every list empty and the screen reporting no friends, no chats and no
@@ -155,7 +158,7 @@ export default function FriendsScreen() {
     const acceptedIds = [];
     const pendingIn = [];
     const pendingOutIds = [];
-    const fMap = {}; 
+    const fMap = {};
 
     fData.forEach(f => {
       const otherId = f.user_id === userId ? f.friend_id : f.user_id;
@@ -167,93 +170,117 @@ export default function FriendsScreen() {
       }
     });
 
-    if (acceptedIds.length > 0) {
-      const pData = await unwrap(supabase.from('public_profiles').select('*').in('id', acceptedIds));
+    const everyone = [...acceptedIds, ...pendingIn, ...pendingOutIds];
 
-      // Newest first, so the first row seen per partner is the latest message.
-      const mData = await unwrap(supabase.from('messages')
-        .select('*')
-        .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
-        .order('created_at', { ascending: false }));
+    // 2. Everything else at once. This used to download every message the
+    // account had ever sent or received, on every visit, just to find each
+    // chat's last line and count what was unread. Now: the recent messages
+    // for the previews, and only the unread ones for the counts.
+    const [profiles, recent, unread] = await Promise.all([
+      everyone.length ? unwrap(supabase.from('public_profiles').select('*').in('id', everyone)) : [],
+      acceptedIds.length
+        ? unwrap(supabase.from('messages')
+          .select('*')
+          .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
+          .order('created_at', { ascending: false })
+          .limit(RECENT_MESSAGES))
+        : [],
+      acceptedIds.length
+        ? unwrap(supabase.from('messages')
+          .select('sender_id')
+          .eq('receiver_id', userId)
+          .eq('is_read', false)
+          .eq('is_deleted', false)
+          .limit(2000))
+        : [],
+    ]);
 
-      // Messages arrive newest-first, so the first one seen for a partner is
-      // the latest. The same pass counts what is still unread, which saves a
-      // second round-trip per conversation.
-      const lastMessagesMap = {};
-      const unreadCounts = {};
+    const byId = new Map((profiles || []).map((profile) => [profile.id, profile]));
+    const pick = (ids) => ids.map((id) => byId.get(id)).filter(Boolean);
 
-      (mData || []).forEach(m => {
-        const partnerId = m.sender_id === userId ? m.receiver_id : m.sender_id;
-        if (!lastMessagesMap[partnerId]) lastMessagesMap[partnerId] = m;
-        // Only messages sent TO you count — your own are read by definition.
-        if (m.receiver_id === userId && !m.is_read && !m.is_deleted) {
-          unreadCounts[partnerId] = (unreadCounts[partnerId] || 0) + 1;
-        }
-      });
+    // Newest first, so the first row seen per partner is the latest message.
+    const lastMessagesMap = {};
+    (recent || []).forEach(m => {
+      const partnerId = m.sender_id === userId ? m.receiver_id : m.sender_id;
+      if (!lastMessagesMap[partnerId]) lastMessagesMap[partnerId] = m;
+    });
+    const unreadCounts = {};
+    (unread || []).forEach((m) => { unreadCounts[m.sender_id] = (unreadCounts[m.sender_id] || 0) + 1; });
 
-      const allFriends = pData || [];
+    const allFriends = pick(acceptedIds);
 
-      // Split friends into those with a conversation and those without,
-      const active = allFriends
-        .filter(f => lastMessagesMap[f.id])
-        .map(f => ({ ...f, lastMessage: lastMessagesMap[f.id], unread: unreadCounts[f.id] || 0 }))
-        .sort((a, b) => new Date(b.lastMessage.created_at) - new Date(a.lastMessage.created_at));
+    // Split friends into those with a conversation and those without.
+    const active = allFriends
+      .filter(f => lastMessagesMap[f.id])
+      .map(f => ({ ...f, lastMessage: lastMessagesMap[f.id], unread: unreadCounts[f.id] || 0 }))
+      .sort((a, b) => new Date(b.lastMessage.created_at) - new Date(a.lastMessage.created_at));
 
-      setTotalUnread(Object.values(unreadCounts).reduce((sum, n) => sum + n, 0));
-        
-      const inactive = allFriends.filter(f => !lastMessagesMap[f.id]);
-
-      setActiveChats(active);
-      setInactiveChats(inactive);
-    } else {
-      setActiveChats([]);
-      setInactiveChats([]);
-    }
-
-    if (pendingIn.length > 0) {
-      const pData = await unwrap(supabase.from('public_profiles').select('*').in('id', pendingIn));
-      setReceivedRequests((pData || []).map(p => ({ ...p, friendship_id: fMap[p.id] })));
-    } else setReceivedRequests([]);
-
-    if (pendingOutIds.length > 0) {
-      const pData = await unwrap(supabase.from('public_profiles').select('*').in('id', pendingOutIds));
-      setSentRequests((pData || []).map(p => ({ ...p, friendship_id: fMap[p.id] })));
-    } else setSentRequests([]);
+    setTotalUnread(Object.entries(unreadCounts)
+      .filter(([id]) => acceptedIds.includes(id))
+      .reduce((sum, [, n]) => sum + n, 0));
+    setActiveChats(active);
+    setInactiveChats(allFriends.filter(f => !lastMessagesMap[f.id]));
+    setReceivedRequests(pick(pendingIn).map(p => ({ ...p, friendship_id: fMap[p.id] })));
+    setSentRequests(pick(pendingOutIds).map(p => ({ ...p, friendship_id: fMap[p.id] })));
   };
 
   const handleSearch = async () => {
-    if (!searchQuery.trim()) return;
+    const term = searchQuery.trim();
+    if (!term || !myId) return;
     setIsSearching(true);
     // Searching people by name must not also hand over their measurements.
-    const { data } = await supabase.from('public_profiles')
+    // `%` and `_` are wildcards to ilike; typed, they are just characters.
+    const { data, error } = await supabase.from('public_profiles')
       .select('*')
-      .ilike('first_name', `%${searchQuery.trim()}%`)
+      .ilike('first_name', `%${term.replace(/[%_\\]/g, (c) => `\\${c}`)}%`)
       .neq('id', myId)
       .limit(10);
-    
-    setSearchResults(data || []);
+
     setIsSearching(false);
+    if (error) {
+      Alert.alert('Could not search', 'Check your connection and try again.');
+      return;
+    }
+    setSearchResults(data || []);
   };
 
   const sendFriendRequest = async (targetId) => {
     const { error } = await supabase.from('friendships').insert([{ user_id: myId, friend_id: targetId, status: 'pending' }]);
-    if (error) Alert.alert("Already connected", "A request already exists, or you are already friends.");
-    else {
-      Alert.alert("Sent", "Friend request sent.");
-      setSearchModalVisible(false); setSearchQuery(''); setSearchResults([]);
-      fetchData(); 
+    if (error) {
+      // A duplicate is a fact about the two of you; anything else is the
+      // network, and telling someone they are "already connected" when the
+      // request simply did not go through is wrong in the unhelpful direction.
+      if (error.code === '23505') Alert.alert('Already connected', 'A request already exists, or you are already friends.');
+      else Alert.alert('Could not send the request', 'Check your connection and try again.');
+      return;
     }
+    Alert.alert('Request sent', 'You will be friends once they accept.');
+    setSearchModalVisible(false); setSearchQuery(''); setSearchResults([]);
+    fetchData();
   };
 
-  const acceptRequest = async (friendshipId) => {
-    await supabase.from('friendships').update({ status: 'accepted' }).eq('id', friendshipId);
-    fetchData(); 
+  /** Moves a request off the list at once; puts it back if the server refuses. */
+  const answerRequest = async (friendshipId, accept) => {
+    const received = receivedRequests;
+    const sent = sentRequests;
+    setReceivedRequests((list) => list.filter((r) => r.friendship_id !== friendshipId));
+    setSentRequests((list) => list.filter((r) => r.friendship_id !== friendshipId));
+
+    const { error } = accept
+      ? await supabase.from('friendships').update({ status: 'accepted' }).eq('id', friendshipId)
+      : await supabase.from('friendships').delete().eq('id', friendshipId);
+
+    if (error) {
+      setReceivedRequests(received);
+      setSentRequests(sent);
+      Alert.alert('Could not update the request', 'Check your connection and try again.');
+      return;
+    }
+    fetchData();
   };
 
-  const removeRequest = async (friendshipId) => {
-    await supabase.from('friendships').delete().eq('id', friendshipId);
-    fetchData(); 
-  };
+  const acceptRequest = (friendshipId) => answerRequest(friendshipId, true);
+  const removeRequest = (friendshipId) => answerRequest(friendshipId, false);
 
   const handleCreateGroup = async () => {
     if (!groupName.trim()) return Alert.alert("Name required", "Enter a name for the group.");
@@ -274,10 +301,10 @@ export default function FriendsScreen() {
       const { error: membersErr } = await supabase.from('group_members').insert(membersToInsert);
       if (membersErr) throw membersErr;
 
-      Alert.alert("Created", "Your group is ready.");
+      Alert.alert('Group created', 'Your group is ready.');
       setCreateGroupModalVisible(false); setGroupName(''); setSelectedFriends([]);
       fetchData();
-    } catch (e) { Alert.alert("Could not create group", e.message); } 
+    } catch (e) { Alert.alert('Could not create the group', 'Check your connection and try again.'); }
     finally { setLoading(false); }
   };
 
@@ -364,13 +391,13 @@ export default function FriendsScreen() {
           <Text style={styles.userName}>{item.first_name}</Text>
           <Text style={styles.userTitle}>Lvl {levelFromXp(item.xp)}</Text>
         </View>
-        
+
         {type === 'received' ? (
           <View style={styles.requestActions}>
-            <TouchableOpacity hitSlop={{ top: 6, bottom: 6, left: 2, right: 2 }} accessibilityLabel="Close" activeOpacity={0.7} style={styles.actionBtnReject} onPress={() => removeRequest(item.friendship_id)}>
+            <TouchableOpacity hitSlop={{ top: 6, bottom: 6, left: 2, right: 2 }} accessibilityLabel={`Decline ${item.first_name}'s request`} activeOpacity={0.7} style={styles.actionBtnReject} onPress={() => removeRequest(item.friendship_id)}>
               <X color={colors.text} size={18} />
             </TouchableOpacity>
-            <TouchableOpacity hitSlop={{ top: 6, bottom: 6, left: 2, right: 2 }} activeOpacity={0.7} accessibilityLabel="Confirm" style={styles.actionBtnAccept} onPress={() => acceptRequest(item.friendship_id)}>
+            <TouchableOpacity hitSlop={{ top: 6, bottom: 6, left: 2, right: 2 }} activeOpacity={0.7} accessibilityLabel={`Accept ${item.first_name}'s request`} style={styles.actionBtnAccept} onPress={() => acceptRequest(item.friendship_id)}>
               <Check color={colors.onAccent} size={18} />
             </TouchableOpacity>
           </View>
@@ -380,7 +407,7 @@ export default function FriendsScreen() {
               <Clock color={colors.textSecondary} size={14} />
               <Text style={styles.pendingText}>Pending</Text>
             </View>
-            <TouchableOpacity hitSlop={{ top: 6, bottom: 6, left: 2, right: 2 }} accessibilityLabel="Close" activeOpacity={0.7} style={styles.actionBtnReject} onPress={() => removeRequest(item.friendship_id)}>
+            <TouchableOpacity hitSlop={{ top: 6, bottom: 6, left: 2, right: 2 }} accessibilityLabel={`Cancel your request to ${item.first_name}`} activeOpacity={0.7} style={styles.actionBtnReject} onPress={() => removeRequest(item.friendship_id)}>
               <X color={colors.danger} size={18} />
             </TouchableOpacity>
           </View>
@@ -389,11 +416,21 @@ export default function FriendsScreen() {
     );
   };
 
+  /**
+   * "Find friends" from the feed or the ranking. Both are panels of this
+   * screen, so navigating to Social from them went nowhere.
+   */
+  const findFriends = () => {
+    if (!user) return navigation.navigate('AuthScreen');
+    setSection('chats');
+    setSearchModalVisible(true);
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <LinearGradient colors={gradients.screen} style={styles.gradientBg}>
         <AmbientGlow tone="accent" height={260} intensity={0.28} />
-        
+
         {/* HEADER */}
         <View style={styles.header}>
           <View style={styles.titleRow}>
@@ -438,7 +475,7 @@ export default function FriendsScreen() {
                 scale={0.98}
                 style={[styles.sectionTab, active && styles.sectionTabOn]}
                 onPress={() => setSection(t.id)}
-                accessibilityRole="button"
+                accessibilityRole="tab"
                 accessibilityState={{ selected: active }}
               >
                 <Text style={[styles.sectionTabText, active && styles.sectionTabTextOn]}>
@@ -450,9 +487,9 @@ export default function FriendsScreen() {
         </View>
 
         {section === 'feed' ? (
-          <FeedScreen embedded reloadKey={feedNonce} />
+          <FeedScreen embedded reloadKey={feedNonce} onFindFriends={findFriends} />
         ) : section === 'ranking' ? (
-          <LeaderboardScreen embedded />
+          <LeaderboardScreen embedded onFindFriends={findFriends} />
         ) : loadError ? (
           <ErrorState message={loadError} onRetry={fetchData} />
         ) : loading ? (
@@ -460,7 +497,7 @@ export default function FriendsScreen() {
         ) : (
           <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}
           refreshControl={refreshControl}>
-            
+
             {groups.length > 0 && (
               <View style={styles.shelfBlock}>
                 <Text style={styles.eyebrow}>Groups</Text>
@@ -476,7 +513,15 @@ export default function FriendsScreen() {
 
             <Text style={styles.eyebrow}>Messages</Text>
 
-            {activeChats.length === 0 ? (
+            {!user ? (
+              <EmptyState
+                icon={<MessageSquare color={colors.textFaint} size={44} />}
+                title="Chat with your friends"
+                message="Sign in to add friends, message them and train together."
+                actionLabel="Sign in"
+                onAction={() => navigation.navigate('AuthScreen')}
+              />
+            ) : activeChats.length === 0 ? (
               <EmptyState
                 icon={<MessageSquare color={colors.textFaint} size={44} />}
                 title="No conversations yet"
@@ -507,11 +552,11 @@ export default function FriendsScreen() {
         {isFabMenuOpen && section === 'chats' && (
           <View style={styles.fabMenu}>
             <TouchableOpacity activeOpacity={0.7} style={styles.fabMenuItem} onPress={() => { setIsFabMenuOpen(false); setSearchModalVisible(true); }}>
-              <Text style={styles.fabMenuItemText}>Add Friend</Text>
+              <Text style={styles.fabMenuItemText}>Add friend</Text>
               <View style={styles.fabMenuIcon}><UserPlus color={colors.onAccent} size={20} /></View>
             </TouchableOpacity>
             <TouchableOpacity activeOpacity={0.7} style={styles.fabMenuItem} onPress={() => { setIsFabMenuOpen(false); setCreateGroupModalVisible(true); }}>
-              <Text style={styles.fabMenuItemText}>Create Group</Text>
+              <Text style={styles.fabMenuItemText}>Create group</Text>
               <View style={styles.fabMenuIcon}><Users color={colors.onAccent} size={20} /></View>
             </TouchableOpacity>
           </View>
@@ -520,7 +565,11 @@ export default function FriendsScreen() {
           accessibilityLabel={section === 'feed' ? 'Write a post' : 'Add a friend or start a group'}
           activeOpacity={0.7}
           style={[styles.fabMain, isFabMenuOpen && styles.fabMainOpen]}
-          onPress={() => (section === 'feed' ? setComposeVisible(true) : setIsFabMenuOpen(!isFabMenuOpen))}
+          onPress={() => {
+            // Posting, adding friends and groups all belong to an account.
+            if (!user) return navigation.navigate('AuthScreen');
+            return section === 'feed' ? setComposeVisible(true) : setIsFabMenuOpen(!isFabMenuOpen);
+          }}
         >
           <Plus color={isFabMenuOpen ? colors.text : colors.onAccent} size={28} style={{ transform: [{ rotate: isFabMenuOpen ? '45deg' : '0deg' }] }} />
         </TouchableOpacity>
@@ -531,7 +580,7 @@ export default function FriendsScreen() {
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Start a Chat</Text>
+              <Text style={styles.modalTitle}>Start a chat</Text>
               <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} onPress={() => setStartChatModalVisible(false)}><X color={colors.textMuted} size={24} /></TouchableOpacity>
             </View>
             <ScrollView style={{ maxHeight: 400 }}>
@@ -539,8 +588,8 @@ export default function FriendsScreen() {
                 <Text style={{color: colors.textMuted, textAlign: 'center', marginTop: 20}}>You already have a chat open with every friend.</Text>
               ) : (
                 inactiveChats.map(friend => (
-                  <TouchableOpacity accessibilityLabel="Open chat" activeOpacity={0.7} 
-                    key={friend.id} 
+                  <TouchableOpacity accessibilityLabel={`Message ${friend.first_name}`} activeOpacity={0.7}
+                    key={friend.id}
                     style={styles.searchResultItem}
                     onPress={() => {
                       setStartChatModalVisible(false);
@@ -571,12 +620,12 @@ export default function FriendsScreen() {
         {/* A sheet, not a dialog. It slides from the edge it is attached to and
             the backdrop closes it — the same gesture as every other panel in the
             app, which is what makes it feel like part of it. */}
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setRequestsModalVisible(false)}
-        >
-          <TouchableOpacity activeOpacity={1} style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
+        {/* The backdrop sits behind the sheet rather than around it. Wrapped
+            in touchables, the whole sheet read to VoiceOver as one button,
+            and Accept and Decline could not be reached at all. */}
+        <View style={styles.modalOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setRequestsModalVisible(false)} accessibilityLabel="Close requests" />
+          <View style={styles.modalContent}>
             <View style={styles.grabber} />
 
             <View style={styles.modalHeader}>
@@ -620,8 +669,8 @@ export default function FriendsScreen() {
                 </>
               )}
             </ScrollView>
-          </TouchableOpacity>
-        </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
 
       {/* MODAL: ADD FRIEND (Search) */}
@@ -676,26 +725,32 @@ export default function FriendsScreen() {
                   </Text>
                 ) : (
                   searchResults.map(res => (
-                    <TouchableOpacity
-                      activeOpacity={0.7}
-                      key={res.id}
-                      style={styles.pickRow}
-                      onPress={() => { closeSearchModal(); navigation.navigate('PublicProfileScreen', { userId: res.id }); }}
-                    >
-                      <Avatar profile={res} size={40} />
-                      <View style={{ flex: 1, minWidth: 0 }}>
-                        <Text style={styles.pickName} numberOfLines={1}>{res.first_name}</Text>
-                        <Text style={styles.userTitle}>Level {levelFromXp(res.xp)}</Text>
-                      </View>
+                    // Two targets side by side. The add button used to sit
+                    // inside the row's own button, where VoiceOver could not
+                    // reach it and a near-miss opened the profile instead.
+                    <View key={res.id} style={styles.pickRow}>
                       <TouchableOpacity
-                        accessibilityLabel={`Add ${res.first_name}`}
                         activeOpacity={0.7}
+                        style={styles.pickMain}
+                        onPress={() => { closeSearchModal(); navigation.navigate('PublicProfileScreen', { userId: res.id }); }}
+                        accessibilityLabel={`${res.first_name}, level ${levelFromXp(res.xp)}. Open profile`}
+                      >
+                        <Avatar profile={res} size={40} />
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text style={styles.pickName} numberOfLines={1}>{res.first_name}</Text>
+                          <Text style={styles.userTitle}>Level {levelFromXp(res.xp)}</Text>
+                        </View>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        accessibilityLabel={`Send ${res.first_name} a friend request`}
+                        activeOpacity={0.7}
+                        hitSlop={8}
                         style={styles.sendReqBtn}
                         onPress={() => sendFriendRequest(res.id)}
                       >
                         <UserPlus color={colors.accent} size={18} />
                       </TouchableOpacity>
-                    </TouchableOpacity>
+                    </View>
                   ))
                 )}
               </ScrollView>
@@ -829,7 +884,7 @@ const styles = StyleSheet.create({
     borderWidth: 2, borderColor: colors.background,
   },
   bellCountText: { color: '#FFFFFF', fontSize: 10, fontWeight: '800' },
-  
+
   scrollContent: { padding: 20, paddingBottom: 130 },
 
   // --- Section labels -----------------------------------------------------
@@ -900,7 +955,7 @@ const styles = StyleSheet.create({
   userTitle: { color: colors.textSecondary, fontSize: 13, marginTop: 2 },
   // An unread preview reads brighter, so the row is scannable without relying
   // on the badge alone — colour and weight both carry the state.
-  
+
   requestActions: { flexDirection: 'row', alignItems: 'center' },
   actionBtnReject: { backgroundColor: colors.surfaceHigh, width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center', marginRight: 10 },
   actionBtnAccept: { backgroundColor: colors.accent, width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
@@ -962,7 +1017,7 @@ const styles = StyleSheet.create({
   modalTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
   searchBar: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.surfaceHigh, borderRadius: radius.md, paddingHorizontal: 16, height: 52 },
   searchInput: { flex: 1, color: colors.text, fontSize: 16, fontWeight: '600', padding: 0 },
-  
+
   searchResultItem: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceHigh, padding: 16, borderRadius: 18, marginBottom: 10 },
   sendReqBtn: { backgroundColor: 'rgba(155, 157, 214, 0.1)', padding: 10, borderRadius: 14, borderWidth: 1, borderColor: colors.accent + '55' },
 

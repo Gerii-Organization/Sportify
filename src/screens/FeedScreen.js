@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   FlatList, StyleSheet, Alert,
 } from 'react-native';
@@ -32,7 +32,7 @@ const PAGE_SIZE = 20;
  * `embedded` drops the screen's own background and title so it can render as a
  * panel inside Social, which now owns both halves of "other people".
  */
-export default function FeedScreen({ embedded = false, reloadKey = 0 }) {
+export default function FeedScreen({ embedded = false, reloadKey = 0, onFindFriends }) {
   const { user } = useAuth();
   const navigation = useNavigation();
 
@@ -42,10 +42,17 @@ export default function FeedScreen({ embedded = false, reloadKey = 0 }) {
   const [exhausted, setExhausted] = useState(false);
   const [commentsFor, setCommentsFor] = useState(null);
   const [error, setError] = useState(null);
+  /** What is on screen, for the reload to merge into without a stale closure. */
+  const shown = useRef([]);
+  useEffect(() => { shown.current = events; }, [events]);
+  /** Events with a like or unlike still on its way; a second tap waits. */
+  const liking = useRef(new Set());
+  const copying = useRef(false);
 
   const load = useCallback(async () => {
     if (!user) {
       setEvents([]);
+      setError(null);
       setLoading(false);
       return;
     }
@@ -53,14 +60,26 @@ export default function FeedScreen({ embedded = false, reloadKey = 0 }) {
     setError(null);
 
     try {
-      const data = await unwrap(supabase.rpc('get_feed', { p_limit: PAGE_SIZE, p_before: null }));
-      setEvents(data || []);
-      setExhausted((data?.length || 0) < PAGE_SIZE);
+      const fresh = (await unwrap(supabase.rpc('get_feed', { p_limit: PAGE_SIZE, p_before: null }))) || [];
+      const prev = shown.current;
+
+      if (fresh.length === PAGE_SIZE && prev.length > fresh.length) {
+        // Coming back from a profile reloads the first page. Replacing the
+        // list with it threw away every page scrolled through and yanked the
+        // list up; now the newest page is refreshed and the older ones stay.
+        const ids = new Set(fresh.map((e) => e.id));
+        const oldest = Date.parse(fresh[fresh.length - 1].created_at);
+        setEvents([...fresh, ...prev.filter((e) => !ids.has(e.id) && Date.parse(e.created_at) < oldest)]);
+      } else {
+        setEvents(fresh);
+        setExhausted(fresh.length < PAGE_SIZE);
+      }
     } catch (e) {
       // Without this the feed rendered "Nothing here yet" on a dead network,
       // which reads as "none of your friends did anything" — a claim about
-      // other people, made from a failed request.
-      setError(e?.message || 'Something went wrong.');
+      // other people, made from a failed request. A background reload that
+      // fails with the feed already on screen leaves it there instead.
+      if (shown.current.length === 0) setError(e?.message || 'Something went wrong.');
     } finally {
       setLoading(false);
     }
@@ -100,6 +119,8 @@ export default function FeedScreen({ embedded = false, reloadKey = 0 }) {
    * and the round trip is long enough to feel broken otherwise.
    */
   const toggleLike = async (event) => {
+    if (!user || liking.current.has(event.id)) return;
+    liking.current.add(event.id);
     const liked = event.liked_by_me;
 
     setEvents((prev) =>
@@ -114,6 +135,7 @@ export default function FeedScreen({ embedded = false, reloadKey = 0 }) {
     const { error } = liked
       ? await query.delete().eq('event_id', event.id).eq('user_id', user.id)
       : await query.insert({ event_id: event.id, user_id: user.id });
+    liking.current.delete(event.id);
 
     // Put it back if the server disagreed.
     if (error) {
@@ -129,9 +151,12 @@ export default function FeedScreen({ embedded = false, reloadKey = 0 }) {
 
   const copyWorkout = async (event) => {
     const workoutId = event.meta?.workout_id;
-    if (!workoutId) return;
+    // A second tap while the first is on its way made a second copy.
+    if (!workoutId || copying.current) return;
 
+    copying.current = true;
     const { data, error } = await supabase.rpc('copy_workout', { p_workout_id: workoutId });
+    copying.current = false;
 
     if (error || !data?.ok) {
       const reason =
@@ -156,7 +181,7 @@ export default function FeedScreen({ embedded = false, reloadKey = 0 }) {
   const content = (
     <>
         {error ? (
-          <ErrorState message={error} onRetry={load} />
+          <ErrorState message={error} onRetry={() => { setLoading(true); load(); }} />
         ) : loading ? (
           <SkeletonFeed count={4} />
         ) : (
@@ -181,13 +206,25 @@ export default function FeedScreen({ embedded = false, reloadKey = 0 }) {
               />
             )}
             ListEmptyComponent={
-              <EmptyState
-                icon={<Users color={colors.textFaint} size={44} />}
-                title="Nothing here yet"
-                message="Finish a workout or add friends to see activity here."
-                actionLabel="Find friends"
-                onAction={() => navigation.navigate('Social')}
-              />
+              user ? (
+                <EmptyState
+                  icon={<Users color={colors.textFaint} size={44} />}
+                  title="Nothing here yet"
+                  message="Finish a workout or add friends to see activity here."
+                  actionLabel="Find friends"
+                  onAction={onFindFriends || (() => navigation.navigate('Social'))}
+                />
+              ) : (
+                // A guest was told to finish a workout to fill a feed they
+                // could never see.
+                <EmptyState
+                  icon={<Users color={colors.textFaint} size={44} />}
+                  title="See what your friends train"
+                  message="Sign in to follow your friends' workouts, records and streaks."
+                  actionLabel="Sign in"
+                  onAction={() => navigation.navigate('AuthScreen')}
+                />
+              )
             }
           />
         )}
@@ -201,10 +238,10 @@ export default function FeedScreen({ embedded = false, reloadKey = 0 }) {
           visible={!!commentsFor}
           onClose={() => setCommentsFor(null)}
           currentUserId={user?.id}
-          onPosted={(eventId) =>
+          onPosted={(eventId, delta = 1) =>
             setEvents((prev) =>
               prev.map((e) =>
-                e.id === eventId ? { ...e, comment_count: Number(e.comment_count) + 1 } : e
+                e.id === eventId ? { ...e, comment_count: Math.max(0, Number(e.comment_count) + delta) } : e
               )
             )
           }

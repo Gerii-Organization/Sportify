@@ -20,7 +20,7 @@ import ErrorState from '../components/ErrorState';
 import Press from '../components/Press';
 import FadeIn from '../components/FadeIn';
 import BottomSheet from '../components/BottomSheet';
-import { unwrap } from '../lib/query';
+import { unwrap, writeErrorMessage } from '../lib/query';
 import { useConfirm } from '../components/ConfirmDialog';
 import { SkeletonProfile } from '../components/Skeleton';
 
@@ -143,13 +143,23 @@ export default function PublicProfileScreen({ route, navigation }) {
       .insert([{ user_id: myId, friend_id: userId, status: 'pending' }])
       .select()
       .single();
-    if (error) return Alert.alert(t('Could not send the request'), error.message);
+    if (error?.code === '23505') {
+      // One already exists — theirs to you, or yours from a second tap. Show
+      // it rather than an error about a duplicate key.
+      const { data: existing } = await supabase
+        .from('friendships')
+        .select('*')
+        .or(`and(user_id.eq.${myId},friend_id.eq.${userId}),and(user_id.eq.${userId},friend_id.eq.${myId})`)
+        .maybeSingle();
+      if (existing) return setFriendship(existing);
+    }
+    if (error) return Alert.alert(t('Could not send the request'), writeErrorMessage(error));
     setFriendship(data);
   };
 
   const acceptRequest = async () => {
     const { error } = await supabase.from('friendships').update({ status: 'accepted' }).eq('id', friendship.id);
-    if (error) return Alert.alert(t('Could not accept'), error.message);
+    if (error) return Alert.alert(t('Could not accept'), writeErrorMessage(error));
     setFriendship((f) => ({ ...f, status: 'accepted' }));
   };
 
@@ -163,7 +173,7 @@ export default function PublicProfileScreen({ route, navigation }) {
     });
     if (!ok) return;
     const { error } = await supabase.from('friendships').delete().eq('id', friendship.id);
-    if (error) return Alert.alert(t('Could not cancel it'), error.message);
+    if (error) return Alert.alert(t('Could not cancel it'), writeErrorMessage(error));
     setFriendship(null);
   };
 

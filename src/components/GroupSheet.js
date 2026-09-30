@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
-import { LogOut, Trash2, Check, Pencil } from 'lucide-react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import { LogOut, Trash2, Check, Pencil, ChevronRight } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors, radius, spacing } from '../theme';
 import Avatar from './Avatar';
@@ -20,11 +21,19 @@ import { SkeletonMembers } from './Skeleton';
  * the UI as well keeps destructive buttons from appearing to people who would
  * only get an error if they pressed them.
  */
+/** Same limit as when the group is created. */
+const NAME_MAX = 40;
+const TRY_AGAIN = 'Check your connection and try again.';
+
 export default function GroupSheet({ visible, onClose, group, currentUserId, onChanged }) {
   const confirmAction = useConfirm();
+  const navigation = useNavigation();
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  /** A rename, leave or delete on its way; the buttons wait for it. */
+  const [busy, setBusy] = useState(false);
   const [name, setName] = useState(group?.name ?? '');
 
   const isOwner = group?.created_by === currentUserId;
@@ -32,11 +41,20 @@ export default function GroupSheet({ visible, onClose, group, currentUserId, onC
   const load = useCallback(async () => {
     if (!group?.id) return;
     setLoading(true);
+    setFailed(false);
 
-    const { data: rows } = await supabase
+    const { data: rows, error } = await supabase
       .from('group_members')
       .select('user_id, joined_at')
       .eq('group_id', group.id);
+
+    if (error) {
+      // An empty list read as "0 members" — and the delete warning then said
+      // messages would go "for all 0 members".
+      setFailed(true);
+      setLoading(false);
+      return;
+    }
 
     const ids = (rows || []).map((r) => r.user_id);
     if (ids.length === 0) {
@@ -71,15 +89,25 @@ export default function GroupSheet({ visible, onClose, group, currentUserId, onC
   }, [visible, group?.name, load]);
 
   const handleRename = async () => {
+    // Return and the tick both submit; the second used to send it twice.
+    if (busy) return;
     const next = name.trim();
     if (!next) return Alert.alert('Name required', 'Give the group a name.');
     if (next === group.name) return setRenaming(false);
 
+    setBusy(true);
     const { error } = await supabase.from('groups').update({ name: next }).eq('id', group.id);
-    if (error) return Alert.alert('Could not rename', error.message);
+    setBusy(false);
+    if (error) return Alert.alert('Could not rename the group', TRY_AGAIN);
 
     setRenaming(false);
-    onChanged?.();
+    onChanged?.('renamed');
+  };
+
+  /** A member's profile, from the list. The sheet closes on the way. */
+  const openMember = (member) => {
+    onClose();
+    navigation.navigate('PublicProfileScreen', { userId: member.id });
   };
 
   const handleLeave = async () => {
@@ -87,23 +115,27 @@ export default function GroupSheet({ visible, onClose, group, currentUserId, onC
       tone: 'danger',
       icon: LogOut,
       title: `Leave ${group?.name || 'this group'}?`,
+      // The owner leaving used to be told only that the group carries on. It
+      // does, but nobody is left who can rename or delete it.
       message: isOwner
-        ? 'The group stays active for the other members.'
+        ? 'The group stays for the other members, but nobody will be able to rename or delete it. To close it for everyone, delete it instead.'
         : 'You will stop getting messages from this group.',
       confirmLabel: 'Leave',
       cancelLabel: 'Stay',
     });
-    if (!ok) return;
+    if (!ok || busy) return;
 
+    setBusy(true);
     const { error } = await supabase
       .from('group_members')
       .delete()
       .eq('group_id', group.id)
       .eq('user_id', currentUserId);
+    setBusy(false);
 
-    if (error) return Alert.alert('Could not leave', error.message);
+    if (error) return Alert.alert('Could not leave the group', TRY_AGAIN);
     onClose();
-    onChanged?.();
+    onChanged?.('left');
   };
 
   const handleDelete = async () => {
@@ -111,15 +143,19 @@ export default function GroupSheet({ visible, onClose, group, currentUserId, onC
       tone: 'danger',
       icon: Trash2,
       title: `Delete ${group?.name || 'this group'}?`,
-      message: `All messages will be deleted for all ${members.length} members. This cannot be undone.`,
+      message: members.length > 1
+        ? `The group and its messages will be deleted for all ${members.length} members. This cannot be undone.`
+        : 'The group and its messages will be deleted. This cannot be undone.',
       confirmLabel: 'Delete',
     });
-    if (!ok) return;
+    if (!ok || busy) return;
 
+    setBusy(true);
     const { error } = await supabase.from('groups').delete().eq('id', group.id);
-    if (error) return Alert.alert('Could not delete', error.message);
+    setBusy(false);
+    if (error) return Alert.alert('Could not delete the group', TRY_AGAIN);
     onClose();
-    onChanged?.();
+    onChanged?.('deleted');
   };
 
   return (
@@ -133,15 +169,17 @@ export default function GroupSheet({ visible, onClose, group, currentUserId, onC
             autoFocus
             placeholder="Group name"
             placeholderTextColor={colors.textFaint}
+            maxLength={NAME_MAX}
+            returnKeyType="done"
             onSubmitEditing={handleRename}
           />
-          <TouchableOpacity activeOpacity={0.7} style={styles.confirm} onPress={handleRename} accessibilityLabel="Save name">
-            <Check color={colors.onAccent} size={20} />
+          <TouchableOpacity activeOpacity={0.7} style={styles.confirm} onPress={handleRename} disabled={busy} accessibilityLabel="Save name">
+            {busy ? <ActivityIndicator color={colors.onAccent} /> : <Check color={colors.onAccent} size={20} />}
           </TouchableOpacity>
         </View>
       ) : (
         isOwner && (
-          <TouchableOpacity activeOpacity={0.7} style={styles.renameHint} onPress={() => setRenaming(true)}>
+          <TouchableOpacity activeOpacity={0.7} style={styles.renameHint} onPress={() => setRenaming(true)} hitSlop={{ top: 10, bottom: 10 }} accessibilityRole="button">
             <Pencil color={colors.textSecondary} size={14} />
             <Text style={styles.renameHintText}>Rename group</Text>
           </TouchableOpacity>
@@ -149,33 +187,55 @@ export default function GroupSheet({ visible, onClose, group, currentUserId, onC
       )}
 
       <Text style={styles.sectionLabel}>
-        {loading ? 'Members' : `${members.length} ${members.length === 1 ? 'member' : 'members'}`}
+        {loading || failed ? 'Members' : `${members.length} ${members.length === 1 ? 'member' : 'members'}`}
       </Text>
 
       {loading ? (
         <SkeletonMembers count={4} />
+      ) : failed ? (
+        <View style={styles.failed}>
+          <Text style={styles.failedText}>Members could not be loaded.</Text>
+          <TouchableOpacity onPress={load} activeOpacity={0.7} accessibilityRole="button">
+            <Text style={styles.retry}>Try again</Text>
+          </TouchableOpacity>
+        </View>
       ) : (
         <View style={styles.list}>
-          {members.map((member) => (
-            <View key={member.id} style={styles.memberRow}>
-              <Avatar profile={member} size={38} />
-              <Text style={styles.memberName}>
-                {member.first_name}
-                {member.id === currentUserId ? ' (you)' : ''}
-              </Text>
-              {member.id === group?.created_by && <Text style={styles.ownerTag}>Owner</Text>}
-            </View>
-          ))}
+          {members.map((member) => {
+            const isMe = member.id === currentUserId;
+            const isOwnerRow = member.id === group?.created_by;
+            // Your own row is not a button: there is nowhere for it to go.
+            const Row = isMe ? View : TouchableOpacity;
+            const touch = isMe
+              ? { accessible: true }
+              : { activeOpacity: 0.7, onPress: () => openMember(member), accessibilityRole: 'button' };
+            return (
+              <Row
+                key={member.id}
+                style={styles.memberRow}
+                {...touch}
+                accessibilityLabel={`${member.first_name || 'Member'}${isMe ? ', you' : ''}${isOwnerRow ? ', owner' : ''}`}
+              >
+                <Avatar profile={member} size={38} />
+                <Text style={styles.memberName} numberOfLines={1}>
+                  {member.first_name || 'Member'}
+                  {isMe ? ' (you)' : ''}
+                </Text>
+                {isOwnerRow && <Text style={styles.ownerTag}>Owner</Text>}
+                {!isMe && <ChevronRight color={colors.textFaint} size={18} />}
+              </Row>
+            );
+          })}
         </View>
       )}
 
-      <TouchableOpacity style={styles.dangerRow} onPress={handleLeave} activeOpacity={0.7}>
+      <TouchableOpacity style={styles.dangerRow} onPress={handleLeave} activeOpacity={0.7} disabled={busy} accessibilityRole="button">
         <LogOut color={colors.danger} size={18} />
         <Text style={styles.dangerText}>Leave group</Text>
       </TouchableOpacity>
 
       {isOwner && (
-        <TouchableOpacity style={styles.dangerRow} onPress={handleDelete} activeOpacity={0.7}>
+        <TouchableOpacity style={styles.dangerRow} onPress={handleDelete} activeOpacity={0.7} disabled={busy} accessibilityRole="button">
           <Trash2 color={colors.danger} size={18} />
           <Text style={styles.dangerText}>Delete group</Text>
         </TouchableOpacity>
@@ -213,6 +273,9 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   list: { gap: spacing.xs, marginBottom: spacing.md },
+  failed: { alignItems: 'center', marginBottom: spacing.md },
+  failedText: { color: colors.textMuted, fontSize: 14 },
+  retry: { color: colors.accent, fontSize: 14, fontWeight: '700', padding: spacing.sm },
   memberRow: {
     flexDirection: 'row',
     alignItems: 'center',

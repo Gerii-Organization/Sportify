@@ -18,11 +18,19 @@ import useRefresh from './useRefresh';
  *
  * `initial` is what `data` holds before the first result and after a failure,
  * so a screen can render `data.rows.map(...)` without guarding every field.
+ *
+ * `keepData`: when the loader changes (a filter, a timeframe), keep showing
+ * the last result until the new one lands instead of dropping back to the
+ * skeleton. `fetching` is true while that happens, for a screen to dim.
  */
-export default function useLoad(load, initial = null) {
+export default function useLoad(load, initial = null, { keepData = false } = {}) {
   const [data, setData] = useState(initial);
   const [loading, setLoading] = useState(true);
+  const [fetching, setFetching] = useState(false);
   const [error, setError] = useState(null);
+  /** Mirrors `error` for `run`, which must not change identity with it. */
+  const failed = useRef(false);
+  const loadedOnce = useRef(false);
 
   // Tracks the live request so a slow first response cannot overwrite a fast
   // second one — switching a filter twice used to leave the earlier result on
@@ -37,26 +45,37 @@ export default function useLoad(load, initial = null) {
 
   const run = useCallback(async () => {
     const id = ++requestId.current;
+    // "Try again" cleared the error and showed the screen behind it — empty,
+    // since a failure leaves `initial` — until the answer arrived. "Nothing
+    // logged yet" for a second, straight after "Something went wrong".
+    if (failed.current) setLoading(true);
+    failed.current = false;
     setError(null);
+    setFetching(true);
 
     try {
       const result = await load();
       if (!mounted.current || id !== requestId.current) return;
       setData(result);
+      loadedOnce.current = true;
     } catch (e) {
       if (!mounted.current || id !== requestId.current) return;
+      failed.current = true;
       setError(e?.message || 'Something went wrong.');
     } finally {
-      if (mounted.current && id === requestId.current) setLoading(false);
+      if (mounted.current && id === requestId.current) {
+        setLoading(false);
+        setFetching(false);
+      }
     }
   }, [load]);
 
   useEffect(() => {
-    setLoading(true);
+    if (!keepData || !loadedOnce.current) setLoading(true);
     run();
-  }, [run]);
+  }, [run, keepData]);
 
   const { refreshControl } = useRefresh(run);
 
-  return { data, loading, error, reload: run, refreshControl };
+  return { data, loading, fetching, error, reload: run, refreshControl };
 }

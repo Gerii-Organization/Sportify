@@ -2,10 +2,10 @@ import { useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import { ChevronLeft } from 'lucide-react-native';
 import { colors, gradients, spacing } from '../theme';
 import AmbientGlow from '../components/AmbientGlow';
 import Press from '../components/Press';
-import ScreenHeader from '../components/ScreenHeader';
 import StatsScreen from './StatsScreen';
 import HistoryScreen from './HistoryScreen';
 import RecordsScreen from './RecordsScreen';
@@ -42,9 +42,17 @@ export default function ProgressScreen({ navigation }) {
       <LinearGradient colors={gradients.screen} style={styles.gradient}>
         <AmbientGlow tone="accent" height={300} intensity={0.24} />
 
-        <ScreenHeader title="Progress" compact />
+        {/* The panels below drop their own back buttons because this screen
+            owns one — except it had none, so leaving meant knowing to swipe. */}
+        <View style={styles.nav}>
+          <Press scale={0.92} onPress={() => navigation.goBack()} style={styles.back} accessibilityLabel="Go back">
+            <ChevronLeft color={colors.text} size={24} />
+          </Press>
+          <Text style={styles.navTitle} accessibilityRole="header">Progress</Text>
+          <View style={{ width: 40 }} />
+        </View>
 
-        <View style={styles.segments}>
+        <View style={styles.segments} accessibilityRole="tablist">
           {TABS.map((t) => {
             const active = tab === t.id;
             return (
@@ -53,7 +61,7 @@ export default function ProgressScreen({ navigation }) {
                 scale={0.98}
                 style={[styles.segment, active && styles.segmentActive]}
                 onPress={() => setTab(t.id)}
-                accessibilityRole="button"
+                accessibilityRole="tab"
                 accessibilityState={{ selected: active }}
               >
                 <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
@@ -81,6 +89,12 @@ export default function ProgressScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   gradient: { flex: 1 },
+  nav: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.sm,
+  },
+  back: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
+  navTitle: { color: colors.text, fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
   segments: {
     flexDirection: 'row',
     backgroundColor: colors.surface,

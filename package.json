@@ -10,7 +10,8 @@
     "web": "expo start --web",
     "e2e": "maestro test .maestro",
     "e2e:guest": "maestro test --include-tags guest .maestro",
-    "e2e:account": "maestro test --include-tags account -e EMAIL=\"$SPORTIFY_E2E_EMAIL\" -e PASSWORD=\"$SPORTIFY_E2E_PASSWORD\" .maestro"
+    "e2e:account": "maestro test --include-tags account -e EMAIL=\"$SPORTIFY_E2E_EMAIL\" -e PASSWORD=\"$SPORTIFY_E2E_PASSWORD\" .maestro",
+    "check": "node scripts/check-code.js"
   },
   "dependencies": {
     "@expo-google-fonts/plus-jakarta-sans": "^0.4.2",

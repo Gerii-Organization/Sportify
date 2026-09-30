@@ -20,6 +20,11 @@ import ErrorState from '../components/ErrorState';
 import NameBadge from '../components/NameBadge';
 import useRefresh from '../lib/useRefresh';
 
+/**
+ * Last month's podium is paid out by the first person to look. Once per app
+ * session is enough; it used to run, and be waited on, on every focus.
+ */
+let settledThisSession = false;
 
 /**
  * `embedded` drops the screen's own background and nav row so it can render as
@@ -27,7 +32,7 @@ import useRefresh from '../lib/useRefresh';
  * feed, ranking — and reaching it meant a trophy button in the corner while the
  * other two were a tap apart.
  */
-export default function LeaderboardScreen({ embedded = false }) {
+export default function LeaderboardScreen({ embedded = false, onFindFriends }) {
   const { refreshControl } = useRefresh(() => fetchData());
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState('friends');
@@ -45,6 +50,13 @@ export default function LeaderboardScreen({ embedded = false }) {
   const [globalScope, setGlobalScope] = useState('season');
   const [season, setSeason] = useState(null);
   const navigation = useNavigation();
+  /**
+   * Bumped per fetch. Friends → Global → Friends in quick succession could let
+   * the Global answer land last, ranking strangers under the Friends tab.
+   */
+  const seq = useRef(0);
+  /** The board last shown; coming back to the same one refreshes quietly. */
+  const shownKey = useRef(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -53,7 +65,11 @@ export default function LeaderboardScreen({ embedded = false }) {
   );
 
   const fetchData = async () => {
-    setLoading(true);
+    const mine = ++seq.current;
+    const key = `${activeTab}|${globalScope}|${user?.id}`;
+    // A skeleton when the board changes; returning from a profile to the same
+    // board keeps it on screen while it refreshes.
+    if (key !== shownKey.current) setLoading(true);
     setError(null);
 
     try {
@@ -66,21 +82,24 @@ export default function LeaderboardScreen({ embedded = false }) {
       }
       setMyId(user.id);
 
-      if (activeTab === 'friends') {
-        await fetchFriendsLeaderboard(user.id);
-      } else if (activeTab === 'groups') {
-        await fetchGroupLeaderboard(user.id);
-      } else {
-        await fetchGlobalLeaderboard();
-      }
+      const rows = activeTab === 'friends'
+        ? await fetchFriendsLeaderboard(user.id)
+        : activeTab === 'groups'
+          ? await fetchGroupLeaderboard(user.id)
+          : await fetchGlobalLeaderboard();
+      if (mine !== seq.current) return;
+      setLeaderboardData(rows);
+      shownKey.current = key;
     } catch (e) {
+      if (mine !== seq.current) return;
       // An empty board and an unreachable one used to render the same blank
       // scroll view. On the friends tab that blank reads as "you have no
       // friends", which is a rough thing to be told by a failed request.
       setError(e?.message || 'Something went wrong.');
       setLeaderboardData([]);
+      shownKey.current = null;
     } finally {
-      setLoading(false);
+      if (mine === seq.current) setLoading(false);
     }
   };
 
@@ -104,7 +123,7 @@ export default function LeaderboardScreen({ embedded = false }) {
       .in('id', ids)
       .order('xp', { ascending: false }));
 
-    setLeaderboardData(pData || []);
+    return pData || [];
   };
 
   /**
@@ -126,48 +145,50 @@ export default function LeaderboardScreen({ embedded = false }) {
     const chosen = mine.some((g) => g.id === preferredId) ? preferredId : mine[0]?.id || null;
     groupIdRef.current = chosen;
     setGroupId(chosen);
-    if (!chosen) {
-      setLeaderboardData([]);
-      return;
-    }
+    if (!chosen) return [];
 
     const board = await unwrap(supabase.rpc('get_group_leaderboard', { p_group_id: chosen, p_tz: deviceTimeZone() }));
-    setLeaderboardData(board || []);
+    return board || [];
   };
 
   const selectGroup = async (id) => {
     if (!user || id === groupIdRef.current) return;
+    const mine = ++seq.current;
     groupIdRef.current = id;
     setGroupId(id);
     setLoading(true);
     setError(null);
     try {
-      await fetchGroupLeaderboard(user.id, id);
+      const rows = await fetchGroupLeaderboard(user.id, id);
+      if (mine === seq.current) setLeaderboardData(rows);
     } catch (e) {
+      if (mine !== seq.current) return;
       setError(e?.message || 'Something went wrong.');
       setLeaderboardData([]);
     } finally {
-      setLoading(false);
+      if (mine === seq.current) setLoading(false);
     }
   };
 
   const fetchGlobalLeaderboard = async () => {
     if (user && globalScope === 'season') {
       // Pays out last month's podium the first time anyone looks. Idempotent.
-      await supabase.rpc('settle_last_season');
+      if (!settledThisSession) {
+        await supabase.rpc('settle_last_season');
+        settledThisSession = true;
+      }
       const [mine, board] = await Promise.all([
         unwrap(supabase.rpc('get_my_season')),
         unwrap(supabase.rpc('get_season_leaderboard', { p_scope: 'global' })),
       ]);
       setSeason(mine);
-      setLeaderboardData(board || []);
-      return;
+      return board || [];
     }
     const data = await unwrap(supabase.from('public_profiles')
       .select('*')
       .order('xp', { ascending: false })
       .limit(50));
-    setLeaderboardData(data || []);
+    return data || [];
   };
 
 
@@ -175,11 +196,20 @@ export default function LeaderboardScreen({ embedded = false }) {
     const level = levelFromXp(item.xp);
     const isMe = item.id === myId;
 
+    const name = isMe ? 'You' : item.first_name || 'Athlete';
+    const score = activeTab === 'groups'
+      ? `${item.workouts_week || 0} workouts this week`
+      : activeTab === 'global' && globalScope === 'season'
+        ? `${item.season_points || 0} points`
+        : `${item.xp || 0} XP`;
+
     return (
-      <TouchableOpacity activeOpacity={0.7} 
-        key={item.id || index} 
+      <TouchableOpacity activeOpacity={0.7}
+        key={item.id || index}
         style={[styles.userCard, isMe && styles.myUserCard]}
         onPress={() => navigation.navigate('PublicProfileScreen', { userId: item.id })}
+        accessibilityRole="button"
+        accessibilityLabel={`Number ${index + 1}, ${name}, level ${level}, ${score}`}
       >
         <View style={styles.rankBox}>
           <Text style={styles.rankText}>#{index + 1}</Text>
@@ -247,9 +277,11 @@ export default function LeaderboardScreen({ embedded = false }) {
         {/* TOGGLE PENTRU CLASAMENTE */}
         <View style={styles.toggleContainerWrapper}>
           <View style={styles.toggleContainer}>
-            <TouchableOpacity activeOpacity={0.7} 
+            <TouchableOpacity activeOpacity={0.7}
               style={[styles.toggleBtn, activeTab === 'friends' && styles.toggleBtnActive]}
               onPress={() => setActiveTab('friends')}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: activeTab === 'friends' }}
             >
               <Users color={activeTab === 'friends' ? colors.onAccent : colors.textFaint} size={18} />
               <Text style={[styles.toggleText, activeTab === 'friends' && styles.toggleTextActive]}>Friends</Text>
@@ -260,15 +292,19 @@ export default function LeaderboardScreen({ embedded = false }) {
               <TouchableOpacity activeOpacity={0.7}
                 style={[styles.toggleBtn, activeTab === 'groups' && styles.toggleBtnActive]}
                 onPress={() => setActiveTab('groups')}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: activeTab === 'groups' }}
               >
                 <Shield color={activeTab === 'groups' ? colors.onAccent : colors.textFaint} size={18} />
                 <Text style={[styles.toggleText, activeTab === 'groups' && styles.toggleTextActive]}>Groups</Text>
               </TouchableOpacity>
             ) : null}
-            
-            <TouchableOpacity activeOpacity={0.7} 
+
+            <TouchableOpacity activeOpacity={0.7}
               style={[styles.toggleBtn, activeTab === 'global' && styles.toggleBtnActive]}
               onPress={() => setActiveTab('global')}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: activeTab === 'global' }}
             >
               <Trophy color={activeTab === 'global' ? colors.onAccent : colors.textFaint} size={18} />
               <Text style={[styles.toggleText, activeTab === 'global' && styles.toggleTextActive]}>Global</Text>
@@ -352,7 +388,16 @@ export default function LeaderboardScreen({ embedded = false }) {
                     : 'The global board fills up as people train.'}
               />
             ) : (
-              leaderboardData.map((user, index) => renderUserItem(user, index))
+              <>
+                {leaderboardData.map((row, index) => renderUserItem(row, index))}
+                {/* You are always on your own friends board, so "No one to
+                    rank yet" never showed — just you, first of one. */}
+                {activeTab === 'friends' && leaderboardData.length === 1 ? (
+                  <TouchableOpacity activeOpacity={0.7} onPress={onFindFriends || (() => navigation.navigate('Social'))} style={styles.aloneHint} accessibilityRole="button">
+                    <Text style={styles.aloneText}>Add friends to see how you compare.</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </>
             )}
           </ScrollView>
         )}
@@ -388,32 +433,34 @@ const styles = StyleSheet.create({
   navHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 20, paddingBottom: 16 },
   backBtn: { padding: 6 },
   headerTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
-  
+
   toggleContainerWrapper: { paddingHorizontal: 20, marginBottom: 16 },
   toggleContainer: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 18, padding: 6 },
   toggleBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 14 },
   toggleBtnActive: { backgroundColor: colors.accent },
   toggleText: { color: colors.textSecondary, fontWeight: '600', marginLeft: 10 },
   toggleTextActive: { color: colors.onAccent },
-  
+
   centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   // Inside the Social tab now, so the list has to clear the floating bar —
   // the same 130 the feed beside it uses.
   scrollContent: { paddingHorizontal: 20, paddingBottom: 130 },
+  aloneHint: { alignSelf: 'center', marginTop: 16, paddingVertical: 10, paddingHorizontal: 16 },
+  aloneText: { color: colors.accent, fontSize: 14, fontWeight: '700' },
 
   userCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, padding: 16, borderRadius: 24, marginBottom: 10 },
   myUserCard: { borderColor: colors.accent + '55', backgroundColor: 'rgba(155, 157, 214, 0.05)' },
   rankBox: { width: 30, alignItems: 'center' },
   rankText: { color: colors.textMuted, fontWeight: '600', fontSize: 15 },
-  
+
   avatarBase: { width: 46, height: 46, borderRadius: 23, backgroundColor: colors.surface, justifyContent: 'center', alignItems: 'center', marginLeft: 10 },
   crownRank: { position: 'absolute', top: -14, left: -6, transform: [{rotate: '-15deg'}] },
-  
+
   userInfo: { flex: 1, marginLeft: 16 },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   userName: { color: colors.text, fontSize: 15, fontWeight: '600' },
   userTitle: { color: colors.accent, fontSize: 13, marginTop: 2 },
-  
+
   userStats: { alignItems: 'flex-end' },
   statChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(224, 161, 122, 0.12)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, marginBottom: 6 },
   statChipText: { color: colors.streak, fontWeight: '600', fontSize: 13, marginLeft: 6 },

@@ -13,7 +13,7 @@ import Press from '../components/Press';
 import FadeIn from '../components/FadeIn';
 import AmbientGlow from '../components/AmbientGlow';
 import BottomSheet from '../components/BottomSheet';
-import { formatWeight, toDisplayWeight } from '../lib/units';
+import { formatWeight, toDisplayWeight, weightLabel } from '../lib/units';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import { SkeletonRecords, SkeletonRecordDetail } from '../components/Skeleton';
@@ -88,11 +88,21 @@ export default function RecordsScreen({ navigation, embedded = false }) {
             refreshControl={refreshControl}
           >
             {exercises.length === 0 ? (
-              <EmptyState
-                icon={<Trophy color={colors.textFaint} size={34} />}
-                title="Nothing logged yet"
-                message="Log sets with weight and reps to see your best lifts here."
-              />
+              user ? (
+                <EmptyState
+                  icon={<Trophy color={colors.textFaint} size={34} />}
+                  title="Nothing logged yet"
+                  message="Log sets with weight and reps to see your best lifts here."
+                />
+              ) : (
+                <EmptyState
+                  icon={<Trophy color={colors.textFaint} size={34} />}
+                  title="Your best lifts, kept"
+                  message="Sign in and every personal record is saved here with how you got there."
+                  actionLabel="Sign in"
+                  onAction={() => navigation.navigate('AuthScreen')}
+                />
+              )
             ) : (
               <>
                 <FadeIn>
@@ -110,7 +120,10 @@ export default function RecordsScreen({ navigation, embedded = false }) {
                         scale={0.99}
                         onPress={() => setSelected(exercise.exercise_name)}
                         style={styles.row}
-                        accessibilityLabel={`${exercise.exercise_name} history`}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${exercise.exercise_name}, ${exercise.sessions} session${exercise.sessions === 1 ? '' : 's'}`}
+                        accessibilityHint="Shows your progress"
+
                       >
                         <View style={{ flex: 1 }}>
                           <Text style={styles.rowTitle} numberOfLines={1}>{exercise.exercise_name}</Text>
@@ -122,11 +135,13 @@ export default function RecordsScreen({ navigation, embedded = false }) {
                         <View style={styles.rowRight}>
                           {record ? (
                             <>
-                              <Text style={styles.rowBest}>{trim(record.weight_kg)}kg × {record.reps}</Text>
+                              {/* Hard-coded "kg" here showed kilograms to people
+                                  who had chosen pounds, beside a 1RM in pounds. */}
+                              <Text style={styles.rowBest}>{formatWeight(record.weight_kg, units)} × {record.reps}</Text>
                               <Text style={styles.rowRm}>{formatWeight(record.estimated_1rm, units, { step: 0.5 })} est. 1RM</Text>
                             </>
                           ) : (
-                            <Text style={styles.rowRm}>{trim(exercise.best_1rm)}kg est. 1RM</Text>
+                            <Text style={styles.rowRm}>{formatWeight(exercise.best_1rm, units)} est. 1RM</Text>
                           )}
                         </View>
 
@@ -172,10 +187,12 @@ export default function RecordsScreen({ navigation, embedded = false }) {
  * yet" over a full chart, which is the screen contradicting itself.
  */
 function ExerciseDetail({ name, record, onBack, embedded = false, showNav = true }) {
-  const { units } = useAuth();
+  const { user, units } = useAuth();
+  // A guest mid-workout can open this sheet; the RPC is for accounts and
+  // answered them with "Something went wrong".
   const load = useCallback(
-    () => unwrap(supabase.rpc('get_exercise_history', { p_name: name })),
-    [name]
+    async () => (user ? unwrap(supabase.rpc('get_exercise_history', { p_name: name })) : []),
+    [name, user]
   );
 
   const { data, loading, error, reload } = useLoad(load, []);
@@ -211,7 +228,7 @@ function ExerciseDetail({ name, record, onBack, embedded = false, showNav = true
             <FadeIn style={styles.hero}>
               <Trophy color={colors.energy} size={26} />
               <Text style={styles.heroValue}>
-                {best ? `${toDisplayWeight(best.weight_kg, units)} × ${best.reps}` : '—'}
+                {best ? `${formatWeight(best.weight_kg, units)} × ${best.reps}` : '—'}
               </Text>
               <Text style={styles.heroLabel}>
                 {best
@@ -229,7 +246,7 @@ function ExerciseDetail({ name, record, onBack, embedded = false, showNav = true
 
             {chart.length > 1 && (
               <FadeIn index={1} style={styles.card}>
-                <Text style={styles.cardTitle}>Estimated 1RM per session</Text>
+                <Text style={styles.cardTitle}>Estimated 1RM per session ({weightLabel(units)})</Text>
                 <View style={styles.chart}>
                   {chart.map((session, i) => {
                     const value = Number(session.best_1rm) || 0;
@@ -253,7 +270,7 @@ function ExerciseDetail({ name, record, onBack, embedded = false, showNav = true
                           />
                         </View>
                         <Text style={[styles.barValue, isLast && { color: colors.energy }]} numberOfLines={1}>
-                          {Math.round(value)}
+                          {toDisplayWeight(value, units, 1)}
                         </Text>
                       </View>
                     );
@@ -351,12 +368,6 @@ function trendOf(chart) {
     label: `Down ${Math.abs(change).toFixed(0)}% over ${chart.length} sessions`,
   };
 }
-
-/** Postgres numerics arrive as "60.00". Drop the noise, keep a real half. */
-const trim = (value) => {
-  const n = Number(value) || 0;
-  return n % 1 === 0 ? String(n) : n.toFixed(1);
-};
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },

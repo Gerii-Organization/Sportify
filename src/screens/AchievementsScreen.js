@@ -2,7 +2,7 @@ import { useCallback } from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ChevronLeft, Lock } from 'lucide-react-native';
+import { ChevronLeft, Lock, Trophy } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors, gradients, spacing } from '../theme';
 import { formatRelativeDate } from '../lib/date';
@@ -15,6 +15,7 @@ import Press from '../components/Press';
 import FadeIn from '../components/FadeIn';
 import AmbientGlow from '../components/AmbientGlow';
 import ErrorState from '../components/ErrorState';
+import EmptyState from '../components/EmptyState';
 import { SkeletonAchievements } from '../components/Skeleton';
 
 /**
@@ -53,6 +54,15 @@ export default function AchievementsScreen({ navigation, embedded = false }) {
         <SkeletonAchievements />
       ) : error ? (
         <ErrorState message={error} onRetry={reload} />
+      ) : !user ? (
+        // "0 of 0 tiers unlocked" over an empty page, for a guest.
+        <EmptyState
+          icon={<Trophy color={colors.textFaint} size={34} />}
+          title="Earn badges as you train"
+          message="Sign in and every workout counts toward Bronze, Silver and Gold."
+          actionLabel="Sign in"
+          onAction={() => navigation.navigate('AuthScreen')}
+        />
       ) : (
         <ScrollView
           contentContainerStyle={styles.scroll}

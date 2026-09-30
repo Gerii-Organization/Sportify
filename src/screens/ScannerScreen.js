@@ -1,5 +1,7 @@
-import { useState, useRef } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, Dimensions, Alert, Modal, FlatList, TextInput, ScrollView } from 'react-native';
+import { useState, useRef, useEffect } from 'react';
+import { StyleSheet, Text, View, TouchableOpacity, Dimensions, Alert, Modal, FlatList, TextInput, ScrollView, Linking } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Animated, { useSharedValue, useAnimatedStyle, withRepeat, withTiming, cancelAnimation, Easing, useReducedMotion } from 'react-native-reanimated';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { BlurView } from 'expo-blur';
 import { X, Zap, ZapOff, Image as ImageIcon, RefreshCcw, Scan, Clock, Plus, Star, Check } from 'lucide-react-native';
@@ -7,7 +9,8 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '../lib/supabase';
 import { colors } from '../theme';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
+import { useAuth } from '../context/AuthContext';
 import EmptyState from '../components/EmptyState';
 import { lookupBarcode } from '../lib/foodDatabase';
 
@@ -30,7 +33,31 @@ const MODE_HINTS = {
   create: 'Frame your fridge, then press the shutter',
 };
 
+/**
+ * The bar under "Analysing image…". It used to be a fixed half-filled strip,
+ * which during a ten-second analysis looked exactly like a frozen screen. A
+ * slow sweep says "still working"; with Reduce Motion it stays still.
+ */
+function ScanProgress() {
+  const reduceMotion = useReducedMotion();
+  const x = useSharedValue(0);
+  useEffect(() => {
+    if (reduceMotion) return undefined;
+    x.value = withRepeat(withTiming(1, { duration: 900, easing: Easing.inOut(Easing.quad) }), -1, true);
+    return () => cancelAnimation(x);
+  }, [reduceMotion, x]);
+  const sweep = useAnimatedStyle(() => ({ transform: [{ translateX: x.value * 40 }] }));
+  return (
+    <View style={styles.progressBar}>
+      <Animated.View style={[styles.progressFill, sweep]} />
+    </View>
+  );
+}
+
 export default function ScannerScreen() {
+  const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
+  const { user } = useAuth();
   const isFocused = useIsFocused();
   const [permission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState('back');
@@ -61,15 +88,30 @@ export default function ScannerScreen() {
   if (!permission) return <View />;
 
   if (!permission.granted) {
+    // Once refused, the system will not show its prompt again and
+    // requestPermission quietly does nothing. The button then has to go to
+    // Settings, or it is a button that does nothing.
+    const blocked = permission.canAskAgain === false;
     return (
       <View style={styles.permissionContainer}>
-        <Text style={styles.permissionText}>We need your permission to use the camera.</Text>
-        <TouchableOpacity activeOpacity={0.7} style={styles.btn} onPress={requestPermission}>
-          <Text style={styles.btnText}>Allow Access</Text>
+        <Text style={styles.permissionTitle}>Scan what you eat</Text>
+        <Text style={styles.permissionText}>
+          {blocked
+            ? 'Camera access is turned off for Sportify. Turn it on in Settings to scan meals and barcodes.'
+            : 'Sportify uses the camera to read barcodes and estimate a meal from a photo. Nothing is recorded until you add it.'}
+        </Text>
+        <TouchableOpacity activeOpacity={0.7} style={styles.btn} onPress={blocked ? () => Linking.openSettings() : requestPermission}>
+          <Text style={styles.btnText}>{blocked ? 'Open Settings' : 'Allow camera'}</Text>
         </TouchableOpacity>
       </View>
     );
   }
+
+  /** Food logs, favourites and AI scans belong to an account. */
+  const askToSignIn = (title) => Alert.alert(title, 'Your food log is kept in your account, so it follows you to any phone.', [
+    { text: 'Not now', style: 'cancel' },
+    { text: 'Sign in', onPress: () => navigation.navigate('AuthScreen') },
+  ]);
 
   const toggleCameraFacing = () => {
     setFacing(current => (current === 'back' ? 'front' : 'back'));
@@ -135,7 +177,6 @@ export default function ScannerScreen() {
 
   const fetchHistory = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         const { data, error } = await supabase
           .from('scanned_foods')
@@ -148,7 +189,7 @@ export default function ScannerScreen() {
         setHistoryList(data || []);
       }
     } catch (error) {
-      Alert.alert("Error", "Could not load scan history.");
+      Alert.alert('Could not load your meals', 'Check your connection and try again.');
     }
   };
 
@@ -161,6 +202,7 @@ export default function ScannerScreen() {
   };
 
   const openHistory = () => {
+    if (!user) return askToSignIn('Sign in to see your meals');
     setIsHistoryVisible(true);
     fetchHistory();
     fetchFavorites();
@@ -220,7 +262,6 @@ export default function ScannerScreen() {
 
   /** Logs a meal again as a new entry for now: the same numbers, no scan. */
   const logAgain = async (item) => {
-    const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
     const { data, error } = await supabase
@@ -322,6 +363,9 @@ export default function ScannerScreen() {
 
   const takePictureAndAnalyze = async () => {
     if (!cameraRef.current || isScanning) return;
+    // The analysis runs on the server for signed-in users. Asking now beats
+    // taking the photo, waiting, and being told afterwards.
+    if (!user) return askToSignIn('Sign in to scan meals');
 
     setIsScanning(true);
     setScannedFood(null);
@@ -331,13 +375,14 @@ export default function ScannerScreen() {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.5 });
       await processImage(photo.uri);
     } catch (error) {
-      Alert.alert("Camera Error", "Could not capture the image.");
+      Alert.alert('Could not take the photo', 'Try again, or pick one from your photos.');
       setIsScanning(false);
     }
   };
 
   const pickImageAndAnalyze = async () => {
     if (isScanning) return;
+    if (!user) return askToSignIn('Sign in to scan meals');
 
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -359,39 +404,40 @@ export default function ScannerScreen() {
         await processImage(result.assets[0].uri);
       }
     } catch (error) {
-      Alert.alert("Gallery Error", "Could not open the gallery.");
+      Alert.alert('Could not open your photos', 'Try again in a moment.');
       setIsScanning(false);
     }
   };
 
   const saveToDatabase = async (item) => {
+    // Without an account this used to skip the write and still announce
+    // "saved to your history" — the meal was simply gone.
+    if (!user) return askToSignIn('Sign in to log meals');
+
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { error } = await supabase.from('scanned_foods').insert({
+        user_id: user.id,
+        food_name: item.name,
+        calories: item.calories,
+        protein: item.protein,
+        carbs: item.carbs,
+        fats: item.fats,
+        emoji: item.emoji,
+      });
+      if (error) throw error;
 
-      if (user) {
-        const { error } = await supabase.from('scanned_foods').insert({
-          user_id: user.id,
-          food_name: item.name,
-          calories: item.calories,
-          protein: item.protein,
-          carbs: item.carbs,
-          fats: item.fats,
-          emoji: item.emoji,
-        });
+      Alert.alert('Added to today', `${item.name} now counts towards today's calories.`);
 
-        if (error) throw error;
-      }
-
-      Alert.alert("Success", `${item.name} has been saved to your history.`);
-
-      if (mode === 'scan') {
-        setScannedFood(null);
-      } else {
+      if (mode === 'create') {
         setGeneratedMeals(current => current.filter(m => m.id !== item.id));
+      } else {
+        setScannedFood(null);
       }
+      // The same packet can be scanned again for a second one.
+      lastCodeRef.current = null;
       setExpandedItem(null);
     } catch (error) {
-      Alert.alert("Error", "Could not save this food to the database.");
+      Alert.alert('Could not add this meal', 'Check your connection and try again.');
     }
   };
 
@@ -404,7 +450,7 @@ export default function ScannerScreen() {
   };
 
   const renderFoodItem = (item) => (
-    <BlurView intensity={70} tint="dark" style={mode === 'scan' ? styles.foodCard : styles.mealCard}>
+    <BlurView intensity={70} tint="dark" style={mode === 'create' ? styles.mealCard : styles.foodCard}>
       <TouchableOpacity activeOpacity={0.7}
         style={styles.cardContentTouchable}
         onPress={() => setExpandedItem(item)}
@@ -416,9 +462,11 @@ export default function ScannerScreen() {
         <View style={styles.foodInfo}>
           <View style={styles.foodHeaderRow}>
             <Text style={styles.foodTitle} numberOfLines={1}>{item.name}</Text>
-            <View style={styles.matchBadge}>
-              <Text style={styles.matchText}>{item.match}%</Text>
-            </View>
+            {Number.isFinite(Number(item.match)) ? (
+              <View style={styles.matchBadge}>
+                <Text style={styles.matchText}>{Math.round(Number(item.match))}%</Text>
+              </View>
+            ) : null}
           </View>
 
           <View style={styles.macrosRow}>
@@ -431,6 +479,10 @@ export default function ScannerScreen() {
               <Text style={styles.macroValue}>{item.protein}g</Text>
             </View>
             <View style={styles.macroItem}>
+              <Text style={styles.macroLabel}>Carbs</Text>
+              <Text style={styles.macroValue}>{item.carbs}g</Text>
+            </View>
+            <View style={styles.macroItem}>
               <Text style={styles.macroLabel}>Fats</Text>
               <Text style={styles.macroValue}>{item.fats}g</Text>
             </View>
@@ -438,7 +490,7 @@ export default function ScannerScreen() {
         </View>
       </TouchableOpacity>
 
-      <TouchableOpacity accessibilityLabel="Add" activeOpacity={0.7} style={styles.addButton} onPress={() => saveToDatabase(item)}>
+      <TouchableOpacity accessibilityLabel={`Add ${item.name} to today`} activeOpacity={0.7} style={styles.addButton} onPress={() => saveToDatabase(item)}>
         <Plus color={colors.onAccent} size={24} />
       </TouchableOpacity>
     </BlurView>
@@ -464,7 +516,7 @@ export default function ScannerScreen() {
       )}
 
       <View style={StyleSheet.absoluteFillObject}>
-        <View style={styles.header}>
+        <View style={[styles.header, { top: insets.top + 8 }]}>
           <TouchableOpacity activeOpacity={0.7} style={styles.iconButton} onPress={openHistory} accessibilityLabel="Meals">
             <Clock color={colors.accent} size={22} />
           </TouchableOpacity>
@@ -514,9 +566,7 @@ export default function ScannerScreen() {
                      <Text style={styles.scanningText}>
                        {mode === 'barcode' ? 'Looking it up…' : 'Analysing image…'}
                      </Text>
-                     <View style={styles.progressBar}>
-                       <View style={styles.progressFill} />
-                     </View>
+                     <ScanProgress />
                    </BlurView>
                  </View>
                ) : (
@@ -548,7 +598,10 @@ export default function ScannerScreen() {
           </View>
         </View>
 
-        {mode === 'scan' && scannedFood && !isScanning && renderFoodItem(scannedFood)}
+        {/* Barcode results use the same card. It was drawn for photo scans
+            only, so a barcode that matched showed nothing at all — the hint
+            vanished and the screen looked as if the scan had failed. */}
+        {(mode === 'scan' || mode === 'barcode') && scannedFood && !isScanning && renderFoodItem(scannedFood)}
 
         {mode === 'create' && generatedMeals.length > 0 && !isScanning && (
           <View style={styles.mealsListWrapper}>
@@ -611,6 +664,10 @@ export default function ScannerScreen() {
                   <Text style={styles.macroValue}>{expandedItem?.protein}g</Text>
                 </View>
                 <View style={styles.expandedMacroItem}>
+                  <Text style={styles.macroLabel}>Carbs</Text>
+                  <Text style={styles.macroValue}>{expandedItem?.carbs}g</Text>
+                </View>
+                <View style={styles.expandedMacroItem}>
                   <Text style={styles.macroLabel}>Fats</Text>
                   <Text style={styles.macroValue}>{expandedItem?.fats}g</Text>
                 </View>
@@ -618,7 +675,7 @@ export default function ScannerScreen() {
 
               {expandedItem?.ingredients && expandedItem.ingredients.length > 0 && (
                 <View style={styles.expandedIngredientsContainer}>
-                  <Text style={styles.expandedIngredientsTitle}>Ingredients:</Text>
+                  <Text style={styles.expandedIngredientsTitle}>Ingredients</Text>
                   <ScrollView style={{ maxHeight: 150 }} showsVerticalScrollIndicator={false}>
                     {expandedItem.ingredients.map((ing, idx) => (
                       <View key={idx} style={styles.ingredientRow}>
@@ -631,7 +688,7 @@ export default function ScannerScreen() {
               )}
 
               <TouchableOpacity activeOpacity={0.7} style={styles.expandedAddBtn} onPress={() => saveToDatabase(expandedItem)}>
-                <Text style={styles.expandedAddBtnText}>Add to history</Text>
+                <Text style={styles.expandedAddBtnText}>Add to today</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -643,7 +700,7 @@ export default function ScannerScreen() {
               <Text style={styles.manualTitle}>Add ingredient</Text>
               <TextInput
                 style={styles.manualInput}
-                placeholder="E.g. Tomatoes, Chicken, Eggs..."
+                placeholder="e.g. tomatoes, chicken, eggs"
                 placeholderTextColor={colors.textMuted}
                 value={manualInput}
                 onChangeText={setManualInput}
@@ -753,7 +810,8 @@ export default function ScannerScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   permissionContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background },
-  permissionText: { color: colors.text, marginBottom: 20 },
+  permissionTitle: { color: colors.text, fontSize: 22, fontWeight: '800', letterSpacing: -0.4, marginBottom: 10 },
+  permissionText: { color: colors.textMuted, fontSize: 15, lineHeight: 21, textAlign: 'center', marginBottom: 22, paddingHorizontal: 32 },
   btn: { backgroundColor: colors.accent, padding: 16, borderRadius: 12 },
   btnText: { color: colors.onAccent, fontWeight: '600' },
   header: {
@@ -843,7 +901,8 @@ const styles = StyleSheet.create({
     width: 80,
     height: 4,
     backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 2
+    borderRadius: 2,
+    overflow: 'hidden',
   },
   progressFill: {
     width: 40,

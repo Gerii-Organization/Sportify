@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import {
   View, Text, TextInput, ScrollView, Modal, StyleSheet, Alert, ActivityIndicator, useWindowDimensions,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ChevronLeft, Plus, Camera, Lock, X, Trash2, Columns2 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
@@ -51,6 +51,7 @@ export default function BodyScreen({ navigation }) {
   const { user, units } = useAuth();
   const confirmAction = useConfirm();
   const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
 
   const [pose, setPose] = useState('front');
   const [measureOpen, setMeasureOpen] = useState(false);
@@ -63,8 +64,8 @@ export default function BodyScreen({ navigation }) {
   const load = useCallback(async () => {
     if (!user) return EMPTY;
     const [measurements, photos] = await Promise.all([
-      unwrap(supabase.from('body_measurements').select('*').order('measured_on')),
-      unwrap(supabase.from('progress_photos').select('*').order('taken_on', { ascending: false }).order('created_at', { ascending: false })),
+      unwrap(supabase.from('body_measurements').select('*').eq('user_id', user.id).order('measured_on')),
+      unwrap(supabase.from('progress_photos').select('*').eq('user_id', user.id).order('taken_on', { ascending: false }).order('created_at', { ascending: false })),
     ]);
 
     // One round trip for every URL. An hour is longer than anyone stays on
@@ -89,7 +90,21 @@ export default function BodyScreen({ navigation }) {
 
   // ---- Measurements -------------------------------------------------------
 
+  /**
+   * A guest could open the form, fill it in and press Save, and nothing
+   * happened — no save, no message, the sheet still open.
+   */
+  const askToSignIn = () => Alert.alert(
+    'Sign in to keep your progress',
+    'Measurements and photos are stored privately in your account.',
+    [
+      { text: 'Not now', style: 'cancel' },
+      { text: 'Sign in', onPress: () => navigation.navigate('AuthScreen') },
+    ],
+  );
+
   const openMeasure = () => {
+    if (!user) return askToSignIn();
     // Prefilled with the latest figures: most entries change one or two numbers.
     setForm(Object.fromEntries(summary.map((row) => [row.key, row.latest === null ? '' : String(toDisplayLength(row.latest, units))])));
     setMeasureOpen(true);
@@ -122,6 +137,7 @@ export default function BodyScreen({ navigation }) {
   // ---- Photos -------------------------------------------------------------
 
   const addPhoto = () => {
+    if (!user) return askToSignIn();
     Alert.alert('Add a progress photo', `Saved as a ${pose} photo. Only you can see it.`, [
       { text: 'Take photo', onPress: () => uploadFrom(takePhoto) },
       { text: 'Choose from library', onPress: () => uploadFrom(pickImage) },
@@ -144,7 +160,7 @@ export default function BodyScreen({ navigation }) {
       }
       reload();
     } catch (e) {
-      Alert.alert('Could not add the photo', e?.message || 'Try again in a moment.');
+      Alert.alert('Could not add the photo', 'Check your connection and try again.');
     } finally {
       setUploading(false);
     }
@@ -192,7 +208,7 @@ export default function BodyScreen({ navigation }) {
             <ChevronLeft color={colors.text} size={24} />
           </Press>
           <Text style={styles.navTitle}>Body & photos</Text>
-          <View style={styles.back} />
+          <View style={{ width: 40 }} />
         </View>
 
         {error ? (
@@ -274,7 +290,11 @@ export default function BodyScreen({ navigation }) {
                           onPress={() => toggleSelect(photo)}
                           onLongPress={() => deletePhoto(photo)}
                           style={[styles.tile, { width: tile, height: Math.round(tile * 4 / 3) }, picked && styles.tileOn]}
-                          accessibilityLabel={`${pose} photo from ${shortDate(photo.taken_on)}${picked ? ', selected' : ''}`}
+                          accessibilityLabel={`${pose} photo from ${shortDate(photo.taken_on)}`}
+                          accessibilityState={{ selected: picked }}
+                          accessibilityHint="Select to compare"
+                          accessibilityActions={[{ name: 'delete', label: 'Delete photo' }]}
+                          onAccessibilityAction={() => deletePhoto(photo)}
                         >
                           {photo.url ? (
                             <CachedImage source={{ uri: photo.url }} style={styles.tileImage} recyclingKey={photo.path} />
@@ -311,6 +331,7 @@ export default function BodyScreen({ navigation }) {
                 value={form[key] ?? ''}
                 onChangeText={(text) => setForm((f) => ({ ...f, [key]: text }))}
                 keyboardType="decimal-pad"
+                selectTextOnFocus
                 placeholder="—"
                 placeholderTextColor={colors.textFaint}
                 style={styles.input}
@@ -325,7 +346,8 @@ export default function BodyScreen({ navigation }) {
 
         <Modal visible={comparing} animationType="fade" onRequestClose={() => setComparing(false)}>
           <View style={styles.compare}>
-            <Press scale={0.9} onPress={() => setComparing(false)} style={styles.compareClose} accessibilityLabel="Close comparison">
+            {/* Below the status bar on any phone, not at a fixed 60pt. */}
+            <Press scale={0.9} onPress={() => setComparing(false)} style={[styles.compareClose, { top: insets.top + 12 }]} accessibilityLabel="Close comparison">
               <X color={colors.text} size={24} />
             </Press>
             <View style={styles.compareRow}>

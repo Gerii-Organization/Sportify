@@ -214,7 +214,8 @@ export default function ShopScreen({ navigation }) {
   const fetchShopData = async () => {
     try {
       setLoading(true);
-      const { data: { user } } = await supabase.auth.getUser();
+      // The session from AuthContext; getUser() would be one more round trip
+      // before the shop could load.
       if (!user) {
         setBalance(0);
         setProfileData(null);
@@ -223,30 +224,35 @@ export default function ShopScreen({ navigation }) {
         return;
       }
 
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('first_name, avatar_url, xp, energy_points, streak_freezes, equipped_ring, equipped_avatar, equipped_badge, equipped_title, owned_titles, coin_boost_active, last_reward_date, reward_day, xp_boost_expires_at, current_streak, previous_streak')
-        .eq('id', user.id)
-        .maybeSingle();
+      // Together rather than one after another. The daily rotation is allowed
+      // to fail on its own: a shop that will not open because the rotation
+      // could not be read is worse than a shop without one.
+      const [
+        { data: profile, error: profileError },
+        { data: inventory, error: invError },
+        { data: deals },
+      ] = await Promise.all([
+        supabase
+          .from('profiles')
+          .select('first_name, avatar_url, xp, energy_points, streak_freezes, equipped_ring, equipped_avatar, equipped_badge, equipped_title, owned_titles, coin_boost_active, last_reward_date, reward_day, xp_boost_expires_at, current_streak, previous_streak')
+          .eq('id', user.id)
+          .maybeSingle(),
+        supabase.from('user_inventory').select('item_id').eq('user_id', user.id),
+        supabase.rpc('get_daily_shop'),
+      ]);
 
       if (profileError) throw profileError;
-      if (!profile) return;
-
-      const { data: inventory, error: invError } = await supabase.from('user_inventory').select('item_id').eq('user_id', user.id);
       if (invError) throw invError;
+      if (!profile) return;
 
       const owned = new Set(inventory.map((row) => row.item_id));
       setProfileData(profile);
       setBalance(profile.energy_points || 0);
       setOwnedIds(owned);
       setCatalogue(buildCatalogue(profile, owned));
-
-      // Missing until the migration runs. A shop that fails to open because a
-      // rotation could not be fetched is worse than one without a rotation.
-      const { data: deals } = await supabase.rpc('get_daily_shop');
       setDailyDeals(deals || []);
     } catch (error) {
-      Alert.alert("Error", error.message);
+      Alert.alert('Could not load the shop', 'Check your connection and pull down to try again.');
     } finally {
       setLoading(false);
     }
@@ -313,7 +319,7 @@ export default function ShopScreen({ navigation }) {
     const { data, error } = await supabase.rpc('claim_daily_reward');
     setClaiming(false);
 
-    if (error) return Alert.alert('Could not claim', error.message);
+    if (error) return Alert.alert('Could not claim', 'Check your connection and try again.');
 
     if (!data?.ok) {
       if (data?.reason === 'already_claimed') {
@@ -368,12 +374,24 @@ export default function ShopScreen({ navigation }) {
     }
 
     if (item.owned && categoryType !== 'powerup') {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
       const field = { ring: 'equipped_ring', avatar: 'equipped_avatar', badge: 'equipped_badge', title: 'equipped_title' }[categoryType];
+
+      // On screen at once; the server confirms behind it.
+      const before = profileData;
+      const next = { ...profileData, [field]: item.id };
+      setProfileData(next);
+      setCatalogue(buildCatalogue(next, ownedIds));
+
       const { error } = await supabase.from('profiles').update({ [field]: item.id }).eq('id', user.id);
-      if (!error) fetchShopData();
+      if (error) {
+        setProfileData(before);
+        setCatalogue(buildCatalogue(before, ownedIds));
+        Alert.alert('Could not equip that', 'Check your connection and try again.');
+        return;
+      }
+      // Everywhere else reads the profile from AuthContext; without this the
+      // dashboard and profile kept showing the old frame until a restart.
+      refreshProfile();
     } else {
       // Both cases go to the same place. The sheet shows what you would be left
       // with when you can afford it, and how far off you are when you cannot.
@@ -402,7 +420,7 @@ export default function ShopScreen({ navigation }) {
     setPurchaseModalVisible(false);
 
     if (error) {
-      Alert.alert('Purchase failed', error.message);
+      Alert.alert('Purchase failed', 'Nothing was charged. Check your connection and try again.');
       return;
     }
 

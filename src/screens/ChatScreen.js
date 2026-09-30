@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  StyleSheet, View, Text, TextInput, TouchableOpacity, FlatList, KeyboardAvoidingView, Platform, Alert, Modal,
+  StyleSheet, View, Text, TextInput, TouchableOpacity, Pressable, FlatList, KeyboardAvoidingView, Platform, Alert, Modal,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -12,11 +13,21 @@ import ErrorState from '../components/ErrorState';
 import { REACTIONS, summarise, toggleLocally } from '../lib/reactions';
 import * as ImagePicker from 'expo-image-picker';
 import { SkeletonMessages } from '../components/Skeleton';
+import { useAuth } from '../context/AuthContext';
+import { useConfirm } from '../components/ConfirmDialog';
+import { uploadPickedImage } from '../lib/upload';
 
+
+/** The latest messages loaded when a conversation opens. */
+const PAGE = 300;
 
 export default function ChatScreen({ route, navigation }) {
   const { friendId, friendName } = route.params;
-  const [myId, setMyId] = useState(null);
+  const { user } = useAuth();
+  const confirmAction = useConfirm();
+  const myId = user?.id || null;
+  /** True while a photo is being resized and uploaded. */
+  const [sendingPhoto, setSendingPhoto] = useState(false);
   const [friendProfile, setFriendProfile] = useState(null);
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
@@ -33,7 +44,7 @@ export default function ChatScreen({ route, navigation }) {
   const [theyAreOnline, setTheyAreOnline] = useState(false);
   const presenceRef = useRef(null);
   const typingTimer = useRef(null);
-  
+
   /** Conversation search. The messages are already in memory, so this filters
    *  what is rendered rather than going back to the server. */
   const [searchOpen, setSearchOpen] = useState(false);
@@ -42,33 +53,46 @@ export default function ChatScreen({ route, navigation }) {
   const [editingMessage, setEditingMessage] = useState(null);
   const [editInput, setEditInput] = useState('');
   const flatListRef = useRef(null);
+  /** Message count at the last scroll to the bottom. */
+  const lastCount = useRef(0);
+
+  /**
+   * The friend's profile and the latest page of the conversation, together.
+   * Newest first and reversed: a long chat no longer downloads every message
+   * ever sent before showing the last one.
+   */
+  const loadConversation = useCallback(async () => {
+    if (!myId) {
+      setLoading(false);
+      return;
+    }
+    setLoadError(null);
+    try {
+      const [profile, latest] = await Promise.all([
+        unwrap(supabase.from('public_profiles').select('*').eq('id', friendId).single()),
+        unwrap(supabase.from('messages').select('*')
+          .or(`and(sender_id.eq.${myId},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${myId})`)
+          .order('created_at', { ascending: false })
+          .limit(PAGE)),
+      ]);
+      setFriendProfile(profile);
+      const ordered = (latest || []).slice().reverse();
+      setMessages(ordered);
+      markUnreadAsSeen(ordered, myId);
+    } catch (e) {
+      setLoadError(e?.message || 'Something went wrong.');
+    } finally {
+      setLoading(false);
+    }
+  }, [friendId, myId]);
+
+  useEffect(() => { loadConversation(); }, [loadConversation]);
 
   useEffect(() => {
+    if (!myId) return undefined;
     let subscription;
     const setupChat = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      setMyId(user.id);
-
-      try {
-        setLoadError(null);
-
-        // Load the friend's profile so we can show their avatar in the header.
-        setFriendProfile(await unwrap(supabase.from('public_profiles').select('*').eq('id', friendId).single()));
-
-        const initialMessages = await unwrap(supabase.from('messages').select('*')
-          .or(`and(sender_id.eq.${user.id},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${user.id})`)
-          .order('created_at', { ascending: true }));
-
-        if (initialMessages) {
-          setMessages(initialMessages);
-          markUnreadAsSeen(initialMessages, user.id);
-        }
-      } catch (e) {
-        setLoadError(e?.message || 'Something went wrong.');
-      } finally {
-        setLoading(false);
-      }
+      const user = { id: myId };
 
       // Scoped to this conversation. The previous version subscribed to every
       // row in `messages` and filtered client-side, so every user's traffic
@@ -89,12 +113,23 @@ export default function ChatScreen({ route, navigation }) {
             }
           }
         )
+        // Your own messages, for the read receipt. Only the other side's
+        // messages were listened to, so the double tick never appeared while
+        // you watched — only after leaving and coming back.
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'messages', filter: `receiver_id=eq.${friendId}` },
+          (payload) => {
+            if (payload.new?.sender_id !== user.id) return;
+            setMessages((prev) => prev.map((m) => (m.id === payload.new.id ? { ...m, ...payload.new } : m)));
+          }
+        )
         .subscribe();
     };
 
     setupChat();
     return () => { if (subscription) supabase.removeChannel(subscription); };
-  }, [friendId]);
+  }, [friendId, myId]);
 
   const markUnreadAsSeen = async (msgs, currentUserId) => {
     const unreadIds = msgs.filter(m => m.receiver_id === currentUserId && !m.is_read).map(m => m.id);
@@ -176,39 +211,50 @@ export default function ChatScreen({ route, navigation }) {
     clearTimeout(typingTimer.current);
     presenceRef.current?.track({ typing: false });
 
-    await supabase.from('messages').insert([{
+    const { data: saved, error } = await supabase.from('messages').insert([{
       sender_id: myId, receiver_id: friendId, content: newMessage.content, image_url: imageUrl,
       reply_to: quoted?.id ?? null,
-    }]);
+    }]).select().single();
+
+    if (error || !saved) {
+      // Not sent. The bubble used to stay as if it had been; now it comes back
+      // out and the words go back in the box, ready to try again.
+      setMessages((prev) => prev.filter((m) => m.id !== newMessage.id));
+      if (newMessage.content) setInputText((current) => current || newMessage.content);
+      Alert.alert('Message not sent', 'Check your connection and try again.');
+      return;
+    }
+    // Swap the stand-in for the stored row. Its temporary id was what edit,
+    // delete and reactions were sent against — none of which could work until
+    // the chat was reopened.
+    setMessages((prev) => prev.map((m) => (m.id === newMessage.id ? saved : m)));
   };
 
-  // Pick an image, upload it to Supabase Storage, then send its public URL.
+  /**
+   * Picks a photo and sends it. Resized to 1080 wide as JPEG first — a phone
+   * photo is several megabytes, sent in full to be shown 200 points wide. The
+   * conversation stays on screen while it uploads; only the button spins.
+   */
   const pickAndSendImage = async () => {
-    let result = await ImagePicker.launchImageLibraryAsync({
+    if (sendingPhoto || !myId) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true, quality: 0.7,
+      allowsEditing: true, quality: 0.8,
     });
+    if (result.canceled) return;
 
-    if (!result.canceled) {
-      setLoading(true);
-      try {
-        const uri = result.assets[0].uri;
-        const response = await fetch(uri);
-        const blob = await response.blob();
-        const fileExt = uri.substring(uri.lastIndexOf('.') + 1);
-        const fileName = `${Date.now()}.${fileExt}`;
-        const filePath = `${myId}/${fileName}`;
-
-        // Upload in Supabase Storage
-        const { error } = await supabase.storage.from('chat_images').upload(filePath, blob);
-        if (error) throw error;
-
-        // Storage paths are private by default; getPublicUrl gives a shareable link.
-        const { data } = supabase.storage.from('chat_images').getPublicUrl(filePath);
-        await sendMessage(data.publicUrl); // Trimitem mesajul cu poza
-
-      } catch (e) { Alert.alert("Upload failed", "Could not upload the image: " + e.message); }
-      setLoading(false);
+    setSendingPhoto(true);
+    try {
+      const url = await uploadPickedImage({
+        uri: result.assets[0].uri,
+        bucket: 'chat_images',
+        pathPrefix: `${myId}/${Date.now()}`,
+      });
+      await sendMessage(url);
+    } catch (e) {
+      Alert.alert('Photo not sent', 'Check your connection and try again.');
+    } finally {
+      setSendingPhoto(false);
     }
   };
 
@@ -247,16 +293,37 @@ export default function ChatScreen({ route, navigation }) {
     ));
   };
 
+  /** Asked first: it deletes for both of you, and there is no undo. */
   const deleteMessage = async (id) => {
+    const ok = await confirmAction({
+      tone: 'danger',
+      icon: Trash2,
+      title: 'Delete this message?',
+      message: 'It will be deleted for both of you.',
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+
+    const before = messages.find((m) => m.id === id);
     setMessages(prev => prev.map(m => m.id === id ? { ...m, is_deleted: true } : m));
-    await supabase.from('messages').update({ is_deleted: true, content: 'This message was deleted', image_url: null }).eq('id', id);
+    const { error } = await supabase.from('messages').update({ is_deleted: true, content: 'This message was deleted', image_url: null }).eq('id', id);
+    if (error) {
+      if (before) setMessages(prev => prev.map(m => (m.id === id ? before : m)));
+      Alert.alert('Could not delete the message', 'Check your connection and try again.');
+    }
   };
 
   const saveEdit = async () => {
-    if (!editInput.trim()) return;
-    setMessages(prev => prev.map(m => m.id === editingMessage.id ? { ...m, content: editInput.trim(), is_edited: true } : m));
-    await supabase.from('messages').update({ content: editInput.trim(), is_edited: true }).eq('id', editingMessage.id);
+    const text = editInput.trim();
+    if (!text || !editingMessage) return;
+    const before = editingMessage;
+    setMessages(prev => prev.map(m => m.id === before.id ? { ...m, content: text, is_edited: true } : m));
     setEditingMessage(null);
+    const { error } = await supabase.from('messages').update({ content: text, is_edited: true }).eq('id', before.id);
+    if (error) {
+      setMessages(prev => prev.map(m => (m.id === before.id ? before : m)));
+      Alert.alert('Could not save the edit', 'Check your connection and try again.');
+    }
   };
 
   /**
@@ -289,7 +356,7 @@ export default function ChatScreen({ route, navigation }) {
     return (
       <>
       {showDay && <DaySeparator label={dayLabel(item.created_at)} />}
-      <TouchableOpacity activeOpacity={0.7} 
+      <TouchableOpacity activeOpacity={0.7}
         style={[styles.messageBubble, isMe ? styles.myMessage : styles.theirMessage, item.is_deleted && { backgroundColor: 'transparent' }]}
         onLongPress={() => handleLongPress(item)} delayLongPress={300}
       >
@@ -360,13 +427,13 @@ export default function ChatScreen({ route, navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       <LinearGradient colors={gradients.flat} style={styles.gradientBg}>
-        
+
         {/* HEADER CENTRAT */}
         <View style={styles.header}>
           <TouchableOpacity accessibilityLabel="Go back" activeOpacity={0.7} onPress={() => navigation.goBack()} style={styles.headerBtn}>
             <ChevronLeft color={colors.text} size={28} />
           </TouchableOpacity>
-          
+
           <TouchableOpacity activeOpacity={0.7} style={styles.headerCenter} onPress={() => navigation.navigate('PublicProfileScreen', { userId: friendId })}>
             <Avatar profile={friendProfile} size={36} />
             <View style={{ alignItems: 'center' }}>
@@ -420,7 +487,7 @@ export default function ChatScreen({ route, navigation }) {
         )}
 
         {loadError ? (
-          <ErrorState message={loadError} />
+          <ErrorState message={loadError} onRetry={() => { setLoading(true); loadConversation(); }} />
         ) : loading ? (
           <SkeletonMessages />
         ) : (
@@ -435,7 +502,13 @@ export default function ChatScreen({ route, navigation }) {
                 ? <Text style={styles.searchEmpty}>No messages match "{searchQuery.trim()}".</Text>
                 : null
             }
-            onContentSizeChange={() => { if (!searchQuery.trim()) flatListRef.current?.scrollToEnd({ animated: true }); }}
+            // Down to the newest only when a message arrives: a reaction to
+            // something old used to pull the list away from what you were reading.
+            onContentSizeChange={() => {
+              if (searchQuery.trim() || messages.length === lastCount.current) return;
+              lastCount.current = messages.length;
+              flatListRef.current?.scrollToEnd({ animated: true });
+            }}
             onLayout={() => { if (!searchQuery.trim()) flatListRef.current?.scrollToEnd({ animated: true }); }}
           />
         )}
@@ -462,11 +535,13 @@ export default function ChatScreen({ route, navigation }) {
           ) : null}
 
           <View style={styles.inputContainer}>
-            <TouchableOpacity activeOpacity={0.7} style={styles.attachBtn} onPress={pickAndSendImage} accessibilityLabel="Choose from gallery">
-              <ImageIcon color={colors.textSecondary} size={24} />
+            <TouchableOpacity activeOpacity={0.7} style={styles.attachBtn} onPress={pickAndSendImage} disabled={sendingPhoto} accessibilityLabel={sendingPhoto ? 'Sending photo' : 'Send a photo'}>
+              {sendingPhoto
+                ? <ActivityIndicator color={colors.textSecondary} />
+                : <ImageIcon color={colors.textSecondary} size={24} />}
             </TouchableOpacity>
             <TextInput
-              style={styles.textInput} placeholder="Message..." placeholderTextColor={colors.textMuted}
+              style={styles.textInput} placeholder="Message…" placeholderTextColor={colors.textMuted}
               value={inputText}
               onChangeText={(t) => { setInputText(t); announceTyping(); }}
               multiline
@@ -495,8 +570,12 @@ export default function ChatScreen({ route, navigation }) {
       {/* The long-press sheet. Reactions first: it is the most common thing
           anyone wants to do to a message, and it takes one tap from here. */}
       <Modal visible={!!actionsFor} transparent animationType="fade" onRequestClose={() => setActionsFor(null)}>
-        <TouchableOpacity style={styles.sheetBackdrop} activeOpacity={1} onPress={() => setActionsFor(null)}>
-          <TouchableOpacity activeOpacity={1} style={styles.actionSheet} onPress={(e) => e.stopPropagation()}>
+        {/* Backdrop beside the sheet, not around it: wrapped in touchables,
+            the sheet read to VoiceOver as one button and Reply, Edit and
+            Delete could not be reached. */}
+        <View style={styles.sheetBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setActionsFor(null)} accessibilityLabel="Close" />
+          <View style={styles.actionSheet}>
             <View style={styles.grabber} />
 
             <View style={styles.emojiRow}>
@@ -543,8 +622,8 @@ export default function ChatScreen({ route, navigation }) {
                 </TouchableOpacity>
               </>
             )}
-          </TouchableOpacity>
-        </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
 
     </SafeAreaView>
@@ -562,7 +641,7 @@ const styles = StyleSheet.create({
   searchCount: { color: colors.textMuted, fontSize: 13, fontWeight: '600', fontVariant: ['tabular-nums'] },
   searchEmpty: { color: colors.textMuted, textAlign: 'center', marginTop: 40, paddingHorizontal: 24 },
   chatList: { padding: 16, flexGrow: 1, justifyContent: 'flex-end' },
-  
+
   messageBubble: { maxWidth: '80%', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24, marginBottom: 10 },
   myMessage: { alignSelf: 'flex-end', backgroundColor: colors.accent, borderBottomRightRadius: 5 },
   theirMessage: { alignSelf: 'flex-start', backgroundColor: colors.surfaceHigh, borderBottomLeftRadius: 5 },
@@ -570,7 +649,7 @@ const styles = StyleSheet.create({
   myMessageText: { color: colors.onAccent, fontWeight: '500' },
   theirMessageText: { color: colors.text },
   chatImage: { width: 200, height: 200, borderRadius: 18, marginBottom: 6, backgroundColor: 'rgba(0,0,0,0.1)' },
-  
+
   messageFooter: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', marginTop: 6 },
   timeText: { fontSize: 11, fontWeight: '600' },
 

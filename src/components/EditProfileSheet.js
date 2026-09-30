@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { supabase } from '../lib/supabase';
+import { writeErrorMessage } from '../lib/query';
 import { colors, radius, spacing } from '../theme';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -129,7 +130,7 @@ export default function EditProfileSheet({ visible, onClose, profile, onSaved, i
     const { error } = await supabase.from('profiles').update(updates).eq('id', profile.id);
     setSaving(false);
 
-    if (error) return Alert.alert('Could not save', error.message);
+    if (error) return Alert.alert('Could not save', writeErrorMessage(error));
 
     onSaved?.(updates);
     onClose();

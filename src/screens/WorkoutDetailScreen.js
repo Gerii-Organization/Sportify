@@ -1,7 +1,7 @@
 import { Fragment, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   View, Text, StyleSheet, TouchableOpacity, 
-  Modal, TextInput, ScrollView, KeyboardAvoidingView, Platform, FlatList, Alert 
+  Modal, TextInput, ScrollView, KeyboardAvoidingView, Platform, FlatList, Alert, AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -227,11 +227,29 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     // the user reads in, so switching has to refill the column.
   }, [user, workout, units]);
 
+  /**
+   * When this session started, in ms. The clock is worked out from it on every
+   * tick rather than counted up: iOS suspends timers while the phone is locked
+   * between sets, and a counted clock simply stopped — an hour in the gym could
+   * save as forty minutes, and the calorie estimate with it.
+   */
+  const startedAt = useRef(null);
+
   useEffect(() => {
-    let interval;
-    if (mode === 'started') interval = setInterval(() => setTimer(prev => prev + 1), 1000);
-    else clearInterval(interval);
-    return () => clearInterval(interval);
+    if (mode !== 'started') return undefined;
+    if (!startedAt.current) startedAt.current = Date.now() - timer * 1000;
+
+    const tick = () => setTimer(Math.max(0, Math.round((Date.now() - startedAt.current) / 1000)));
+    tick();
+    const interval = setInterval(tick, 1000);
+    // Catch up at once on returning to the app, not a second later.
+    const sub = AppState.addEventListener('change', (state) => { if (state === 'active') tick(); });
+    return () => {
+      clearInterval(interval);
+      sub.remove();
+    };
+    // `timer` is read once, to carry a clock that was already running.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
   /**
@@ -248,9 +266,9 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       id: String(currentWorkout.id),
       name: currentWorkout.name || null,
       exercises: currentWorkout.exercises,
-      startedAt: Date.now() - timer * 1000,
+      startedAt: startedAt.current || Date.now(),
     });
-    // `timer` is deliberately absent: it changes every second, and the draft
+    // The clock is not in the deps: it changes every second, and the draft
     // only needs re-writing when the sets do.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, currentWorkout]);
@@ -277,7 +295,8 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       if (!done) return;
 
       setCurrentWorkout((w) => ({ ...w, exercises: draft.exercises }));
-      setTimer(Math.max(0, Math.round((Date.now() - (draft.startedAt || Date.now())) / 1000)));
+      startedAt.current = draft.startedAt || Date.now();
+      setTimer(Math.max(0, Math.round((Date.now() - startedAt.current) / 1000)));
       setMode('started');
     })();
 
@@ -308,7 +327,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
         .eq('id', currentWorkout.id);
 
       if (error) {
-        Alert.alert("Save Error", error.message);
+        Alert.alert('Could not save your changes', 'Check your connection and try again. Your edits are still here.');
       } else {
         setMode('idle');
         if (onSave) onSave(currentWorkout);
@@ -318,32 +337,31 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     }
   };
 
-  const moveExerciseUp = (index) => {
-    if (index === 0) return;
-    const newExercises = [...currentWorkout.exercises];
-    const temp = newExercises[index - 1];
-    newExercises[index - 1] = newExercises[index];
-    newExercises[index] = temp;
-    setCurrentWorkout({ ...currentWorkout, exercises: newExercises });
-  };
+  // Every edit below is a functional update. The "last time" column is filled
+  // in by a request that can land mid-typing; an update built from the state
+  // this render saw would quietly wipe it (or the digit just typed).
 
-  const moveExerciseDown = (index) => {
-    if (index === currentWorkout.exercises.length - 1) return;
-    const newExercises = [...currentWorkout.exercises];
-    const temp = newExercises[index + 1];
-    newExercises[index + 1] = newExercises[index];
-    newExercises[index] = temp;
-    setCurrentWorkout({ ...currentWorkout, exercises: newExercises });
+  /** Swaps an exercise with its neighbour; `step` is -1 for up, 1 for down. */
+  const moveExercise = (index, step) => {
+    setCurrentWorkout((w) => {
+      const target = index + step;
+      if (target < 0 || target >= w.exercises.length) return w;
+      const exercises = [...w.exercises];
+      [exercises[index], exercises[target]] = [exercises[target], exercises[index]];
+      return { ...w, exercises };
+    });
   };
 
   /** Applies a set kind. Writes `type` and the older `warmup` flag together. */
   const updateSetType = (exerciseId, setId, type) => {
     const patch = patchForType(type);
-    const updatedExercises = currentWorkout.exercises.map((ex) => {
-      if (ex.id !== exerciseId) return ex;
-      return { ...ex, sets: ex.sets.map((set) => (set.id === setId ? { ...set, ...patch } : set)) };
-    });
-    setCurrentWorkout({ ...currentWorkout, exercises: updatedExercises });
+    setCurrentWorkout((w) => ({
+      ...w,
+      exercises: w.exercises.map((ex) => (ex.id !== exerciseId ? ex : {
+        ...ex,
+        sets: ex.sets.map((set) => (set.id === setId ? { ...set, ...patch } : set)),
+      })),
+    }));
   };
 
   const rateSet = (exerciseId, setId, rir) => {
@@ -358,23 +376,25 @@ export default function WorkoutDetailScreen({ route, navigation }) {
   };
 
   const updateSetData = (exerciseId, setId, field, value) => {
-    const updatedExercises = currentWorkout.exercises.map(ex => {
-      if (ex.id === exerciseId) return { ...ex, sets: ex.sets.map(s => s.id === setId ? { ...s, [field]: value } : s) };
-      return ex;
-    });
-    setCurrentWorkout({ ...currentWorkout, exercises: updatedExercises });
+    setCurrentWorkout((w) => ({
+      ...w,
+      exercises: w.exercises.map((ex) => (ex.id !== exerciseId ? ex : {
+        ...ex,
+        sets: ex.sets.map((s) => (s.id === setId ? { ...s, [field]: value } : s)),
+      })),
+    }));
   };
 
   const addSetToExercise = (exerciseId) => {
-    const updatedExercises = currentWorkout.exercises.map(ex => {
-      if (ex.id === exerciseId) {
+    setCurrentWorkout((w) => ({
+      ...w,
+      exercises: w.exercises.map((ex) => {
+        if (ex.id !== exerciseId) return ex;
         const lastSet = ex.sets.length > 0 ? ex.sets[ex.sets.length - 1] : null;
         const newSet = { id: Math.random().toString(), weight: lastSet ? lastSet.weight : '', reps: lastSet ? lastSet.reps : '', prev: '-', completed: false };
         return { ...ex, sets: [...ex.sets, newSet] };
-      }
-      return ex;
-    });
-    setCurrentWorkout({ ...currentWorkout, exercises: updatedExercises });
+      }),
+    }));
   };
 
   const addNewExercise = (exercise) => {
@@ -386,7 +406,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
       muscle: exercise.muscle,
       sets: [{ id: Math.random().toString(), weight: '', reps: '', prev: '-', completed: false }],
     };
-    setCurrentWorkout({ ...currentWorkout, exercises: [...(currentWorkout.exercises || []), newExercise] });
+    setCurrentWorkout((w) => ({ ...w, exercises: [...(w.exercises || []), newExercise] }));
     setIsExerciseSelectorVisible(false);
     setExerciseQuery('');
     setMuscleFilter(null);
@@ -461,7 +481,16 @@ export default function WorkoutDetailScreen({ route, navigation }) {
     }
   };
 
+  /**
+   * True from the tap on Finish until the summary is up. Saving takes a few
+   * round trips, and a second tap in that window used to record the session
+   * twice — twice the XP, twice the energy, two rows in the history.
+   */
+  const finishing = useRef(false);
+  const [saving, setSaving] = useState(false);
+
   const handleFinishWorkout = async () => {
+    if (finishing.current) return;
     const allSets = currentWorkout.exercises.flatMap((ex) => ex.sets);
     const doneSets = allSets.filter((s) => s.completed);
 
@@ -505,6 +534,24 @@ export default function WorkoutDetailScreen({ route, navigation }) {
   };
 
   const processWorkoutCompletion = async (setsDone, setsTotal) => {
+    if (finishing.current) return;
+    finishing.current = true;
+    setSaving(true);
+    try {
+      await completeWorkout(setsDone, setsTotal);
+    } finally {
+      finishing.current = false;
+      setSaving(false);
+    }
+  };
+
+  const completeWorkout = async (setsDone, setsTotal) => {
+    // The rest period ends with the workout: a "rest over" alert arriving on
+    // the summary screen, or after the app is closed, would be for nothing.
+    cancelRestAlert(restAlertId.current);
+    restAlertId.current = null;
+    setRestEndsAt(null);
+    setEffortPrompt(null);
     setMode('idle');
 
     // A snapshot of what was actually lifted, sent with the completion.
@@ -614,26 +661,30 @@ export default function WorkoutDetailScreen({ route, navigation }) {
         ex.sets.map((set) => ({ name: ex.name, weight: set.weight, reps: set.reps }))
       );
 
-      if (completedSets.length > 0) {
-        const { data } = await supabase.rpc('submit_sets', { p_sets: completedSets });
-        newRecords = data || [];
-      }
+      // Three independent questions, asked at once rather than one after
+      // another: the summary waited for every round trip in turn.
+      const [recordsAndBadges, milestones, referral] = await Promise.all([
+        (async () => {
+          const records = completedSets.length > 0
+            ? (await supabase.rpc('submit_sets', { p_sets: completedSets })).data
+            : [];
+          // Achievements are evaluated after the sets are in, so this
+          // session's records count towards them.
+          const { data: unlocked } = await supabase.rpc('check_achievements');
+          return { records: records || [], unlocked: unlocked || [] };
+        })(),
+        // Only a day that grew the streak can cross a milestone. The server
+        // reads the streak it just wrote, so the payout does not depend on
+        // this client.
+        isFirstWorkoutToday ? supabase.rpc('claim_streak_milestones').then(({ data }) => data) : Promise.resolve(null),
+        // An invite pays out on this account's first real workout. The server
+        // decides whether this is it, so asking after every session is harmless.
+        supabase.rpc('claim_referral_reward').then(({ data }) => data),
+      ]);
 
-      // Achievements are evaluated after the workout is written, so this session
-      // counts towards the thresholds.
-      const { data: unlocked } = await supabase.rpc('check_achievements');
-      newAchievements = unlocked || [];
-
-      // Only a day that grew the streak can cross a milestone. The server reads
-      // the streak it just wrote, so the payout does not depend on this client.
-      if (isFirstWorkoutToday) {
-        const { data: milestones } = await supabase.rpc('claim_streak_milestones');
-        newMilestones = milestones?.claimed || [];
-      }
-
-      // An invite pays out on this account's first real workout. The server
-      // decides whether this is it, so asking after every session is harmless.
-      const { data: referral } = await supabase.rpc('claim_referral_reward');
+      newRecords = recordsAndBadges.records;
+      newAchievements = recordsAndBadges.unlocked;
+      newMilestones = milestones?.claimed || [];
       if (referral?.ok) inviteBonus = { energy: referral.energy, inviterName: referral.inviter_name };
     }
 
@@ -709,11 +760,14 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
     const finalWorkoutToSave = { ...currentWorkout, exercises: resetExercises };
 
+    // Not awaited: the session is saved, and this only resets the ticks on
+    // the routine for next time. The summary should not wait on it.
     if (user) {
-      await supabase.from('user_workouts').update({ exercises: resetExercises }).eq('id', currentWorkout.id);
+      supabase.from('user_workouts').update({ exercises: resetExercises }).eq('id', currentWorkout.id).then(() => {});
     }
 
     setCurrentWorkout(finalWorkoutToSave);
+    startedAt.current = null;
     setShowSummary(true);
   };
 
@@ -840,13 +894,17 @@ export default function WorkoutDetailScreen({ route, navigation }) {
           <Button
             label="Start workout"
             icon={<Play color={colors.onAccent} size={20} fill={colors.onAccent} />}
-            onPress={() => setMode('started')}
+            onPress={() => {
+              startedAt.current = Date.now();
+              setTimer(0);
+              setMode('started');
+            }}
             style={styles.startBigBtn}
           />
         )}
 
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 100 }}>
+        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 100 }} keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled">
           {currentWorkout?.exercises?.map((exercise, index) => (
             <View
               key={exercise.id}
@@ -897,10 +955,10 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
                 {mode === 'editing' && (
                   <View style={styles.exerciseActionRow}>
-                    <TouchableOpacity accessibilityLabel="Collapse" activeOpacity={0.7} onPress={() => moveExerciseUp(index)} disabled={index === 0} style={{ opacity: index === 0 ? 0.2 : 1, paddingHorizontal: 6 }}>
+                    <TouchableOpacity accessibilityLabel={`Move ${exercise.name} up`} activeOpacity={0.7} hitSlop={6} onPress={() => moveExercise(index, -1)} disabled={index === 0} style={{ opacity: index === 0 ? 0.2 : 1, paddingHorizontal: 6 }}>
                       <ChevronUp color={colors.accent} size={24} />
                     </TouchableOpacity>
-                    <TouchableOpacity accessibilityLabel="Expand" activeOpacity={0.7} onPress={() => moveExerciseDown(index)} disabled={index === currentWorkout.exercises.length - 1} style={{ opacity: index === currentWorkout.exercises.length - 1 ? 0.2 : 1, paddingHorizontal: 6, marginRight: 16 }}>
+                    <TouchableOpacity accessibilityLabel={`Move ${exercise.name} down`} activeOpacity={0.7} hitSlop={6} onPress={() => moveExercise(index, 1)} disabled={index === currentWorkout.exercises.length - 1} style={{ opacity: index === currentWorkout.exercises.length - 1 ? 0.2 : 1, paddingHorizontal: 6, marginRight: 16 }}>
                       <ChevronDown color={colors.accent} size={24} />
                     </TouchableOpacity>
                     <TouchableOpacity
@@ -923,7 +981,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
                         ? <Unlink2 color={colors.textFaint} size={20} />
                         : <Link2 color={colors.accent} size={20} />}
                     </TouchableOpacity>
-                    <TouchableOpacity accessibilityLabel="Delete" activeOpacity={0.7} onPress={() => confirmDeleteExercise(exercise.id)}>
+                    <TouchableOpacity accessibilityLabel={`Remove ${exercise.name}`} activeOpacity={0.7} hitSlop={6} onPress={() => confirmDeleteExercise(exercise.id)}>
                       <Trash2 color={colors.danger} size={22} />
                     </TouchableOpacity>
                   </View>
@@ -997,8 +1055,13 @@ export default function WorkoutDetailScreen({ route, navigation }) {
                     {set.prev || '-'}
                   </Text>
 
-                  <TextInput style={[styles.setInput, set.completed && {opacity: 0.5}]} keyboardType="numeric" value={set.weight} onChangeText={(v) => updateSetData(exercise.id, set.id, 'weight', v)} placeholder="0" placeholderTextColor={colors.textFaint} editable={!set.completed} />
-                  <TextInput style={[styles.setInput, set.completed && {opacity: 0.5}]} keyboardType="numeric" value={set.reps} onChangeText={(v) => updateSetData(exercise.id, set.id, 'reps', v)} placeholder="0" placeholderTextColor={colors.textFaint} editable={!set.completed} />
+                  {/* Weight takes a decimal point (a 2.5 kg plate), reps do
+                      not. Tapping a box selects what is in it, so correcting a
+                      number is one tap and the new digits, not a backspace run.
+                      A comma becomes a point: Romanian keyboards type a comma,
+                      and the database wants a point. */}
+                  <TextInput style={[styles.setInput, set.completed && {opacity: 0.5}]} keyboardType="decimal-pad" selectTextOnFocus value={set.weight} onChangeText={(v) => updateSetData(exercise.id, set.id, 'weight', v.replace(',', '.'))} placeholder="0" placeholderTextColor={colors.textFaint} editable={!set.completed} accessibilityLabel={`Set ${setIndex + 1} weight in ${weightLabel(units)}`} />
+                  <TextInput style={[styles.setInput, set.completed && {opacity: 0.5}]} keyboardType="number-pad" selectTextOnFocus value={set.reps} onChangeText={(v) => updateSetData(exercise.id, set.id, 'reps', v.replace(/[^0-9]/g, ''))} placeholder="0" placeholderTextColor={colors.textFaint} editable={!set.completed} accessibilityLabel={`Set ${setIndex + 1} reps`} />
 
                   {mode === 'started' && (
                     <TouchableOpacity
@@ -1022,7 +1085,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
                     </TouchableOpacity>
                   )}
                   {mode === 'editing' && (
-                    <TouchableOpacity accessibilityLabel="Close" activeOpacity={0.7} style={{ flex: 0.5, alignItems: 'center' }} onPress={() => confirmDeleteSet(exercise.id, set.id)}>
+                    <TouchableOpacity accessibilityLabel={`Remove set ${setIndex + 1}`} activeOpacity={0.7} hitSlop={6} style={{ flex: 0.5, alignItems: 'center' }} onPress={() => confirmDeleteSet(exercise.id, set.id)}>
                       <X color={colors.danger} size={20} />
                     </TouchableOpacity>
                   )}
@@ -1039,7 +1102,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
               {mode === 'editing' && (
                 <TouchableOpacity activeOpacity={0.7} style={styles.addSetBtn} onPress={() => addSetToExercise(exercise.id)}>
-                  <Text style={styles.addSetText}>+ Add Set</Text>
+                  <Text style={styles.addSetText}>+ Add set</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -1048,7 +1111,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
           {mode === 'editing' && (
             <TouchableOpacity activeOpacity={0.7} style={styles.addExerciseBtn} onPress={() => setIsExerciseSelectorVisible(true)}>
               <Plus color={colors.accent} size={24} />
-              <Text style={styles.addExerciseText}>Add Exercise</Text>
+              <Text style={styles.addExerciseText}>Add exercise</Text>
             </TouchableOpacity>
           )}
         </ScrollView>
@@ -1085,7 +1148,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
 
         {mode === 'started' && (
           <View style={styles.finishContainer}>
-            <Button label="Finish workout" onPress={handleFinishWorkout} />
+            <Button label={saving ? 'Saving…' : 'Finish workout'} onPress={handleFinishWorkout} loading={saving} disabled={saving} />
           </View>
         )}
 
@@ -1110,7 +1173,7 @@ export default function WorkoutDetailScreen({ route, navigation }) {
               </View>
               <TextInput
                 style={styles.searchInput}
-                placeholder="Search exercises..."
+                placeholder="Search exercises…"
                 placeholderTextColor={colors.textFaint}
                 value={exerciseQuery}
                 onChangeText={setExerciseQuery}
@@ -1235,7 +1298,7 @@ const styles = StyleSheet.create({
   headerSpacer: { width: 44 },
   detailTitle: { flex: 1, color: colors.text, fontSize: 18, fontWeight: '700', textAlign: 'center', letterSpacing: -0.3 },
   timerHeader: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(155, 157, 214, 0.1)', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24 },
-  timerText: { color: colors.accent, fontSize: 17, fontWeight: '700', marginLeft: 10 },
+  timerText: { color: colors.accent, fontSize: 17, fontWeight: '700', marginLeft: 10, fontVariant: ['tabular-nums'] },
   startBigBtn: { flexDirection: 'row', backgroundColor: colors.accent, margin: 20, padding: 20, borderRadius: 28, justifyContent: 'center', alignItems: 'center', shadowColor: colors.accent, shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
   startBigBtnText: { color: colors.onAccent, fontWeight: '700', fontSize: 17, marginLeft: 10 },
 

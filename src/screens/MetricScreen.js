@@ -43,7 +43,9 @@ export default function MetricScreen({ route, navigation }) {
     return config.load(user.id, profile, calorieTarget);
   }, [user, config, profile, calorieTarget]);
 
-  const { data, loading, error, reload, refreshControl } = useLoad(load);
+  // The loader follows the profile, which refreshes after XP or water
+  // changes; each refresh used to blank the screen back to a skeleton.
+  const { data, loading, error, reload, refreshControl } = useLoad(load, null, { keepData: true });
 
   if (!config) return null;
 
@@ -77,6 +79,16 @@ export default function MetricScreen({ route, navigation }) {
           <SkeletonMetric />
         ) : error ? (
           <ErrorState message={error} onRetry={reload} />
+        ) : !user ? (
+          // A guest saw a ring at zero and an empty week, as if nothing
+          // could be recorded.
+          <EmptyState
+            icon={<Icon color={colors.textFaint} size={34} />}
+            title={`Track your ${config.title.toLowerCase()}`}
+            message="Sign in to keep a daily record and see your week."
+            actionLabel="Sign in"
+            onAction={() => navigation.navigate('AuthScreen')}
+          />
         ) : (
           <ScrollView
             contentContainerStyle={styles.scroll}
@@ -166,7 +178,12 @@ export default function MetricScreen({ route, navigation }) {
                   const isToday = i === (data.series.length - 1);
                   const h = Math.max((point.value / peak) * 100, point.value > 0 ? 6 : 2);
                   return (
-                    <View key={point.key} style={styles.barSlot}>
+                    <View
+                      key={point.key}
+                      style={styles.barSlot}
+                      accessible
+                      accessibilityLabel={`${weekdayOf(point.key, 'long')}: ${point.value > 0 ? formatBar(point.value, metric) : 'nothing'}`}
+                    >
                       <View style={styles.barTrack}>
                         <View
                           style={[
@@ -240,9 +257,9 @@ function formatBar(value, metric) {
   return String(Math.round(value));
 }
 
-function weekdayOf(key) {
+function weekdayOf(key, style = 'narrow') {
   const [y, m, d] = key.split('-').map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString('en-GB', { weekday: 'narrow' });
+  return new Date(y, m - 1, d).toLocaleDateString('en-GB', { weekday: style });
 }
 
 const styles = StyleSheet.create({

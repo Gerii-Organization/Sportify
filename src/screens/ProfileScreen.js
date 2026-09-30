@@ -9,7 +9,7 @@ import {
 } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { inviteMessage, INVITE_BONUS } from '../lib/invites';
-import { unwrap } from '../lib/query';
+import { unwrap, writeErrorMessage } from '../lib/query';
 import { loadFriends } from '../lib/friends';
 import { colors, gradients } from '../theme';
 import { useAuth } from '../context/AuthContext';
@@ -149,7 +149,7 @@ export default function ProfileScreen({ navigation }) {
         refreshProfile();
       }
     } catch (e) {
-      Alert.alert(t('Could not set your photo'), e.message);
+      Alert.alert(t('Could not set your photo'), writeErrorMessage(e));
     }
 
     setUploading(false);

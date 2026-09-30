@@ -13,7 +13,7 @@ import { useAuth } from '../context/AuthContext';
 import { weeklyTarget } from '../lib/split';
 import useLoad from '../lib/useLoad';
 import { unwrap } from '../lib/query';
-import { formatVolume, formatDelta } from '../lib/units';
+import { formatVolume, formatDelta, formatWeight } from '../lib/units';
 import Press from '../components/Press';
 import FadeIn from '../components/FadeIn';
 import AmbientGlow from '../components/AmbientGlow';
@@ -94,11 +94,13 @@ export default function StatsScreen({ navigation, embedded = false }) {
           .eq('user_id', user.id)
           .gte('scanned_at', new Date(Date.now() - 29 * 86400000).toISOString())
       ),
+      // Newest 60, not oldest: ascending with a limit returned the first 60
+      // readings ever, so after two months the "current" weight stopped moving.
       unwrap(
         supabase.from('body_weight_log')
           .select('weight_kg, logged_on')
           .eq('user_id', user.id)
-          .order('logged_on', { ascending: true })
+          .order('logged_on', { ascending: false })
           .limit(60)
       ),
     ]);
@@ -110,14 +112,16 @@ export default function StatsScreen({ navigation, embedded = false }) {
         value: (steps || []).find((s) => s.record_date === key)?.step_count || 0,
       })),
       streak: me?.current_streak || 0,
-      weights: weights || [],
+      weights: (weights || []).slice().reverse(),
       // Distinct days, not sessions — two workouts on Monday is one day.
       trainedDays: [...new Set((thisWeek || []).map((w) => todayKey(new Date(w.completed_at))))],
       meals: meals || [],
     };
   }, [user, timeframe]);
 
-  const { data, loading, error, reload, refreshControl } = useLoad(load, EMPTY);
+  // Switching the timeframe keeps the numbers on screen, dimmed, rather than
+  // replacing the whole screen — toggle included — with a skeleton.
+  const { data, loading, fetching, error, reload, refreshControl } = useLoad(load, EMPTY, { keepData: true });
 
   const summary = useMemo(() => summarise(data.sessions), [data]);
   const muscles = useMemo(() => muscleSplit(data.sessions), [data]);
@@ -154,6 +158,8 @@ export default function StatsScreen({ navigation, embedded = false }) {
                   scale={0.97}
                   onPress={() => setTimeframe(value)}
                   style={[styles.toggleBtn, timeframe === value && styles.toggleBtnOn]}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: timeframe === value }}
                   accessibilityLabel={label}
                 >
                   <Text style={[styles.toggleText, timeframe === value && styles.toggleTextOn]}>
@@ -163,6 +169,7 @@ export default function StatsScreen({ navigation, embedded = false }) {
               ))}
             </FadeIn>
 
+            <View style={fetching && styles.stale}>
             <FadeIn index={1}>
               <WeeklyGoal
                 target={weeklyTarget(profile?.split, profile?.workouts_per_week)}
@@ -242,7 +249,8 @@ export default function StatsScreen({ navigation, embedded = false }) {
                 <View style={styles.cardHead}>
                   <Text style={styles.cardTitle}>Body weight</Text>
                   <Text style={styles.cardAside}>
-                    {trim(data.weights[data.weights.length - 1].weight_kg)}kg
+                    {/* Was "kg" whatever the unit setting, next to a change in pounds. */}
+                    {formatWeight(data.weights[data.weights.length - 1].weight_kg, units, { step: 0.1 })}
                     {' · '}
                     {formatChange(data.weights, units)}
                   </Text>
@@ -321,6 +329,7 @@ export default function StatsScreen({ navigation, embedded = false }) {
                 onPress={() => navigation.navigate('BodyScreen')}
               />
             </FadeIn>
+            </View>
           </ScrollView>
         )}
     </>
@@ -506,11 +515,6 @@ function formatChange(readings, units) {
 const formatHours = (minutes) => (minutes >= 60 ? `${Math.floor(minutes / 60)}h` : `${minutes}m`);
 
 
-const trim = (value) => {
-  const n = Number(value) || 0;
-  return n % 1 === 0 ? String(n) : n.toFixed(1);
-};
-
 function weekdayOf(key) {
   const [y, m, d] = key.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString('en-GB', { weekday: 'narrow' });
@@ -518,6 +522,7 @@ function weekdayOf(key) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  stale: { opacity: 0.55 },
   gradient: { flex: 1 },
   nav: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',

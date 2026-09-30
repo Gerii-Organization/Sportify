@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { supabase } from '../lib/supabase';
+import { writeErrorMessage } from '../lib/query';
 import { colors, radius, spacing, gradients } from '../theme';
 import { todayKey } from '../lib/date';
 import BottomSheet from './BottomSheet';
@@ -71,7 +72,7 @@ export default function WeightSheet({ visible, onClose, profile, onSaved }) {
 
     if (error) {
       setSaving(false);
-      return Alert.alert('Could not save', error.message);
+      return Alert.alert('Could not save', writeErrorMessage(error));
     }
 
     // Keep the profile in step, so the calorie target and suggested loads use

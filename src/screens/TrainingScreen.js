@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList, ScrollView, TextInput, Alert,
 } from 'react-native';
@@ -125,36 +125,47 @@ export default function TrainingScreen({ navigation }) {
     // session loads) and every later focus re-runs that stale copy — which is
     // why signing in left the screen empty until something forced a remount.
       fetchMyWorkouts();
-      generateSmartWorkouts();
     }, [user?.id])
   );
 
+  // The session comes from AuthContext. `supabase.auth.getUser()` checks the
+  // token with the server — a round trip on every focus, before the real
+  // queries could even start.
   const fetchMyWorkouts = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
+      setMyWorkouts([]);
       setLoadedViews((v) => ({ ...v, mine: true }));
       return;
     }
 
     setListError(null);
 
-    try {
-      const data = await unwrap(supabase
-        .from('user_workouts')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false }));
-      if (data) setMyWorkouts(data);
+    // Which plans you actually run. Started with the others but not part of
+    // them: without it the list still works, it just cannot rank by use.
+    const recentRequest = supabase
+      .from('workout_completions')
+      .select('workout_id')
+      .eq('user_id', user.id)
+      .gte('completed_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
 
+    try {
       // Distinct days, not sessions: two workouts on Monday is one day of the
       // weekly target, which is how anyone counts "four times a week".
       // The snapshots come back too: the advice card needs to know which
       // muscles the week actually contained, not just that a session happened.
-      const thisWeek = await unwrap(supabase
-        .from('workout_completions')
-        .select('completed_at, exercises')
-        .eq('user_id', user.id)
-        .gte('completed_at', startOfWeekIso()));
+      const [data, thisWeek] = await Promise.all([
+        unwrap(supabase
+          .from('user_workouts')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })),
+        unwrap(supabase
+          .from('workout_completions')
+          .select('completed_at, exercises')
+          .eq('user_id', user.id)
+          .gte('completed_at', startOfWeekIso())),
+      ]);
+      if (data) setMyWorkouts(data);
 
       setWeekSessions(thisWeek || []);
       setTrainedDays([...new Set((thisWeek || []).map((w) => todayKey(new Date(w.completed_at))))]);
@@ -166,13 +177,7 @@ export default function TrainingScreen({ navigation }) {
 
     setLoadedViews((v) => ({ ...v, mine: true }));
 
-    // Which plans you actually run. Not worth an error state: without it the
-    // list still works, it just cannot rank by use.
-    const { data: recent } = await supabase
-      .from('workout_completions')
-      .select('workout_id')
-      .eq('user_id', user.id)
-      .gte('completed_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
+    const { data: recent } = await recentRequest;
 
     const counts = {};
     for (const row of recent || []) {
@@ -181,7 +186,21 @@ export default function TrainingScreen({ navigation }) {
     setTimesTrained(counts);
   };
 
+  /**
+   * The search as sent: the box, once typing has paused. Sending every
+   * keystroke fired a request per letter, and the answers could arrive out of
+   * order — "che" landing after "chest" left the list showing the wrong search.
+   */
+  const [browseTerm, setBrowseTerm] = useState('');
+  useEffect(() => {
+    const id = setTimeout(() => setBrowseTerm(browseQuery.trim()), 300);
+    return () => clearTimeout(id);
+  }, [browseQuery]);
+  /** Numbers each browse request; only the newest may write the list. */
+  const browseSeq = useRef(0);
+
   const fetchPublicWorkouts = useCallback(async () => {
+    const seq = ++browseSeq.current;
     // browse_workouts is granted to signed-in users only, so a guest's call
     // came back as an error the screen swallowed into "no shared routines".
     if (!user) {
@@ -199,20 +218,27 @@ export default function TrainingScreen({ navigation }) {
     try {
       const data = await unwrap(supabase.rpc('browse_workouts', {
         p_limit: 30,
-        p_search: browseQuery.trim() || null,
+        p_search: browseTerm || null,
         p_muscle: browseMuscle,
         p_sort: browseSort,
       }));
-      setPublicWorkouts(data || []);
+      if (seq === browseSeq.current) setPublicWorkouts(data || []);
     } catch (e) {
-      setListError(e?.message || 'Something went wrong.');
+      if (seq === browseSeq.current) setListError(e?.message || 'Something went wrong.');
     } finally {
-      setBrowseLoading(false);
+      if (seq === browseSeq.current) setBrowseLoading(false);
     }
-  }, [browseMuscle, browseQuery, browseSort, user]);
+  }, [browseMuscle, browseTerm, browseSort, user]);
 
   const fetchSavedWorkouts = useCallback(async () => {
     setListError(null);
+    // get_saved_workouts is for signed-in users; a guest's call only ever
+    // came back "permission denied".
+    if (!user) {
+      setSavedWorkouts([]);
+      setLoadedViews((v) => ({ ...v, saved: true }));
+      return;
+    }
 
     try {
       setSavedWorkouts(await unwrap(supabase.rpc('get_saved_workouts')) || []);
@@ -221,11 +247,11 @@ export default function TrainingScreen({ navigation }) {
     } finally {
       setLoadedViews((v) => ({ ...v, saved: true }));
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (view === 'browse') fetchPublicWorkouts();
-  }, [view, browseMuscle, browseQuery, browseSort, fetchPublicWorkouts]);
+  }, [view, fetchPublicWorkouts]);
 
   useEffect(() => {
     if (view === 'saved') fetchSavedWorkouts();
@@ -244,7 +270,7 @@ export default function TrainingScreen({ navigation }) {
       p_workout_id: workoutId,
     });
 
-    if (error) return Alert.alert('Could not save this', error.message);
+    if (error) return Alert.alert('Could not save this', 'Check your connection and try again.');
 
     setPublicWorkouts((list) =>
       list.map((w) => (w.id === workoutId ? { ...w, is_saved: nowSaved } : w))
@@ -300,12 +326,19 @@ export default function TrainingScreen({ navigation }) {
     openWorkoutDetail(copy, true);
   };
 
-  const generateSmartWorkouts = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+  // Built from the profile AuthContext already holds; it used to be read from
+  // the server again on every visit to this tab.
+  useEffect(() => {
+    generateSmartWorkouts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, profile?.weight, profile?.birth_date, profile?.age, profile?.sex, profile?.goal, profile?.workouts_per_week]);
 
-    const { data: profile } = await supabase.from('profiles').select('weight, age, birth_date, sex, goal, workouts_per_week').eq('id', user.id).single();
-    
+  const generateSmartWorkouts = () => {
+    if (!user || !profile) {
+      setSuggestedWorkouts([]);
+      return;
+    }
+
     const weight = parseFloat(profile?.weight) || 70;
     const age = ageOf(profile) || 25;
     const sex = (profile?.sex || 'M').toUpperCase();
@@ -423,7 +456,7 @@ export default function TrainingScreen({ navigation }) {
         .update({ is_public: next })
         .eq('id', workout.id);
 
-      if (error) return Alert.alert('Could not change that', error.message);
+      if (error) return Alert.alert('Could not change that', 'Check your connection and try again.');
       setMyWorkouts((list) => list.map((w) => (w.id === workout.id ? { ...w, is_public: next } : w)));
     };
 
@@ -461,7 +494,7 @@ export default function TrainingScreen({ navigation }) {
       .update({ name })
       .eq('id', target.id);
 
-    if (error) return Alert.alert('Could not rename it', error.message);
+    if (error) return Alert.alert('Could not rename it', 'Check your connection and try again.');
     setMyWorkouts((list) => list.map((w) => (w.id === target.id ? { ...w, name } : w)));
   };
 
@@ -478,7 +511,7 @@ export default function TrainingScreen({ navigation }) {
     setMyWorkouts((list) => list.filter((w) => w.id !== workout.id));
     const { error } = await supabase.from('user_workouts').delete().eq('id', workout.id);
     if (error) {
-      Alert.alert('Could not delete it', error.message);
+      Alert.alert('Could not delete it', 'Check your connection and try again.');
       fetchMyWorkouts();
     }
   };
@@ -489,20 +522,26 @@ export default function TrainingScreen({ navigation }) {
   };
 
   const handleCreateNamedWorkout = async (typed) => {
-    const finalName = (typed || '').trim() || 'Custom Session';
+    const finalName = (typed || '').trim() || 'New routine';
     setMainMenuVisible(false);
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    // Routines are saved to an account. This used to return without a word,
+    // so a guest tapping Create saw nothing happen.
+    if (!user) {
+      navigation.navigate('AuthScreen');
+      return;
+    }
 
-    const { data } = await supabase.from('user_workouts').insert({
+    const { data, error } = await supabase.from('user_workouts').insert({
       user_id: user.id, name: finalName, exercises: []
     }).select().single();
 
-    if (data) {
-      setMyWorkouts((list) => [data, ...list]);
-      openWorkoutDetail(data);
+    if (error || !data) {
+      Alert.alert('Could not create the routine', 'Check your connection and try again.');
+      return;
     }
+    setMyWorkouts((list) => [data, ...list]);
+    openWorkoutDetail(data);
   };
 
   /**
@@ -510,8 +549,11 @@ export default function TrainingScreen({ navigation }) {
    * row is written, which is what turns its button into a tick.
    */
   const addPreset = async (item) => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return false;
+    if (!user) {
+      setMainMenuVisible(false);
+      navigation.navigate('AuthScreen');
+      return false;
+    }
 
     const { data, error } = await supabase.from('user_workouts').insert({
       user_id: user.id, name: item.name, duration: item.duration,
@@ -519,7 +561,7 @@ export default function TrainingScreen({ navigation }) {
     }).select().single();
 
     if (error || !data) {
-      Alert.alert('Could not add it', error?.message || 'Please try again.');
+      Alert.alert('Could not add it', 'Check your connection and try again.');
       return false;
     }
     setMyWorkouts((list) => [data, ...list]);
@@ -880,13 +922,23 @@ export default function TrainingScreen({ navigation }) {
               />
             )
           ) : (
-          <EmptyState
-            icon={<Dumbbell color={colors.textFaint} size={44} />}
-            title="No routines yet"
-            message="Create your own or add one of our suggestions."
-            actionLabel="Create a routine"
-            onAction={() => setMainMenuVisible(true)}
-          />
+          user ? (
+            <EmptyState
+              icon={<Dumbbell color={colors.textFaint} size={44} />}
+              title="No routines yet"
+              message="Create your own or add one of our suggestions."
+              actionLabel="Create a routine"
+              onAction={() => setMainMenuVisible(true)}
+            />
+          ) : (
+            <EmptyState
+              icon={<Dumbbell color={colors.textFaint} size={44} />}
+              title="Build your first routine"
+              message="Sign in to create routines, log your sets and keep your history."
+              actionLabel="Sign in"
+              onAction={() => navigation.navigate('AuthScreen')}
+            />
+          )
           )
         }
         renderItem={({ item, index }) => (
